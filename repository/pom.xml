@@ -1,0 +1,206 @@
+<?xml version="1.0"?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.loai</groupId>
+    <artifactId>inventory-system</artifactId>
+    <version>1.0-SNAPSHOT</version>
+  </parent>
+  <groupId>com.loai.inventory</groupId>
+  <artifactId>repository</artifactId>
+  <version>1.0-SNAPSHOT</version>
+  <name>repository</name>
+  <url>http://maven.apache.org</url>
+  <dependencies>
+
+    <dependency>
+      <groupId>com.loai.inventory</groupId>
+      <artifactId>domain</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>com.loai.inventory</groupId>
+      <artifactId>common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.jooq</groupId>
+      <artifactId>jooq</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+
+    <dependency>
+        <groupId>com.zaxxer</groupId>
+        <artifactId>HikariCP</artifactId>
+    </dependency>
+
+    <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+    </dependency>
+
+    <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>postgresql</artifactId>
+        <scope>test</scope>
+    </dependency>
+    <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <scope>test</scope>
+    </dependency>
+    <dependency>
+        <groupId>ch.qos.logback</groupId>
+        <artifactId>logback-classic</artifactId>
+        <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>3.8.1</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <!--
+      ════════════════════════════════════════════════════════════
+      CODEGEN PROFILE
+      Activated by:  mvn generate-sources -Pcodegen
+      Prerequisite:  docker-compose up -d  (see docker-compose.yml)
+
+      Two plugins run in generate-sources phase, in declaration order:
+        1. flyway:migrate   → creates/updates schema in Docker DB
+        2. jooq-codegen     → generates Java from that live schema
+
+      The generated package com.loai.inventory.repository.generated
+      is added to compile sources automatically by Maven.
+      ════════════════════════════════════════════════════════════
+  -->
+  <profiles>
+    <profile>
+      <id>codegen</id>
+      <build>
+        <plugins>
+
+          <!-- ── Step 1: Flyway ────────────────────────── -->
+          <plugin>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-maven-plugin</artifactId>
+            <version>${flyway.version}</version>
+            <configuration>
+              <url>${db.url}</url>
+              <user>${db.user}</user>
+              <password>${db.password}</password>
+              <schemas>${db.schema}</schemas>
+              <locations>
+                <location>filesystem:src/main/resources/db/migration</location>
+              </locations>
+              <!--
+                  cleanDisabled=false allows `flyway:clean` to wipe
+                  the schema before re-running migrations. Safe for
+                  dev/CI — never set to false in production.
+              -->
+              <cleanDisabled>false</cleanDisabled>
+            </configuration>
+            <dependencies>
+              <!-- Flyway 10+ needs a DB-specific module -->
+              <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-database-postgresql</artifactId>
+                <version>${flyway.version}</version>
+              </dependency>
+              <dependency>
+                <groupId>org.postgresql</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>${postgresql.version}</version>
+              </dependency>
+            </dependencies>
+            <executions>
+              <execution>
+                <id>flyway-migrate-codegen</id>
+                <phase>generate-sources</phase>
+                <goals><goal>migrate</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+
+          <!-- ── Step 2: jOOQ codegen ──────────────────── -->
+          <plugin>
+            <groupId>org.jooq</groupId>
+            <artifactId>jooq-codegen-maven</artifactId>
+            <version>${jooq.version}</version>
+            <executions>
+              <execution>
+                <id>jooq-generate</id>
+                <phase>generate-sources</phase>
+                <goals><goal>generate</goal></goals>
+              </execution>
+            </executions>
+            <configuration>
+              <jdbc>
+                <driver>org.postgresql.Driver</driver>
+                <url>${db.url}</url>
+                <user>${db.user}</user>
+                <password>${db.password}</password>
+              </jdbc>
+              <generator>
+                <database>
+                  <name>org.jooq.meta.postgres.PostgresDatabase</name>
+                  <inputSchema>${db.schema}</inputSchema>
+                  <excludes>flyway_schema_history</excludes>
+                  <!--
+                      Force types: override jOOQ's default Java mapping.
+                      E.g. map Postgres NUMERIC → BigDecimal explicitly.
+                  -->
+                  <forcedTypes>
+                    <forcedType>
+                      <userType>java.math.BigDecimal</userType>
+                      <includeTypes>NUMERIC</includeTypes>
+                    </forcedType>
+                  </forcedTypes>
+                </database>
+                <generate>
+                  <!--
+                      pojos=true: generates plain Java classes
+                      alongside jOOQ Records. Useful for mapping
+                      query results without dragging jOOQ types
+                      across module boundaries.
+                  -->
+                  <pojos>false</pojos>
+                  <!-- <pojosEqualsAndHashCode>true</pojosEqualsAndHashCode>
+                  <pojosToString>true</pojosToString> -->
+                  <!--
+                      daos=false: we write our own repository classes.
+                      jOOQ's generated DAOs are convenient but bypass
+                      our optimistic locking and transaction patterns.
+                  -->
+                  <daos>false</daos>
+                  <!-- Immutable records prevent accidental mutation -->
+                  <immutablePojos>false</immutablePojos>
+                  <fluentSetters>true</fluentSetters>
+                </generate>
+                <target>
+                  <packageName>com.loai.inventory.repository.generated</packageName>
+                  <directory>target/generated-sources/jooq</directory>
+                </target>
+              </generator>
+            </configuration>
+          </plugin>
+
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>

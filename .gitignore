@@ -1,0 +1,7 @@
+backendtask.pdf
+target/
+*/target/
+common/src/main/resources/db.properties
+CLAUDE.md
+GUIDE_*
+EMBEDDED_*
