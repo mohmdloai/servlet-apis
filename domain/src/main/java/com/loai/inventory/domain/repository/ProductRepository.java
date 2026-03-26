@@ -1,24 +1,24 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Product;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.List;
 
 public interface ProductRepository {
-    Optional<Product> findById(UUID id);
-    List<Product> findAll(int offset, int limit);
+  Optional<Product> findById(UUID id);
 
-    long count();
+  List<Product> findAll(int offset, int limit);
 
-    Product insert(Product product);
+  long count();
 
-    Product update(Product product);
+  Product insert(Product product);
 
-    void deleteById(UUID id);
+  Product update(Product product);
 
-    boolean existsBySku(String sku);
+  void deleteById(UUID id);
 
-    boolean existsBySkuAndIdNot(String sku, UUID excludeId);
+  boolean existsBySku(String sku);
 
+  boolean existsBySkuAndIdNot(String sku, UUID excludeId);
 }
