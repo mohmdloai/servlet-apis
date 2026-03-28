@@ -11,7 +11,7 @@ public interface CustomerRepository {
 
   List<Customer> findAll(int offset, int limit);
 
-  long count(DSLContext ctx);
+  long count();
 
   Customer insert(Customer customer);
 
@@ -20,4 +20,6 @@ public interface CustomerRepository {
   void deleteById(UUID id);
 
   boolean existsByEmail(String email);
+
+  boolean existsByEmailAndIdNot(String email, UUID excludeId);
 }
