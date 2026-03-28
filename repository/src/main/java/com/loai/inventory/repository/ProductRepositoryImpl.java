@@ -55,6 +55,12 @@ public class ProductRepositoryImpl implements ProductRepository {
         dsl.selectOne().from(PRODUCT).where(PRODUCT.SKU.eq(sku).and(PRODUCT.ID.ne(excludeId))));
   }
 
+  // for any transaction
+  // Repository CANNOT know this business rule:
+  // "insert customer + create billing + audit log = one atomic unit"
+
+  // Only the SERVICE knows what belongs in one transaction.
+  // So only the SERVICE should control the transaction boundary.
   @Override
   public Product insert(Product product) {
     /*
