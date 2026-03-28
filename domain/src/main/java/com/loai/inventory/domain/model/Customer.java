@@ -11,7 +11,7 @@ public class Customer {
   private OffsetDateTime updatedAt;
 
   public Customer() {}
-  ;
+
 
   public Customer(
       UUID id,
@@ -26,6 +26,10 @@ public class Customer {
     this.updatedAt = updatedAt;
   }
 
+  public UUID getId(){
+    return id ;
+  }
+
   public String getEmail() {
     return email;
   }
@@ -33,13 +37,30 @@ public class Customer {
   public String getPasswordHash() {
     return passwordHash;
   }
+  public OffsetDateTime getCreatedAt() {
+    return createdAt;
+  }
 
+  public OffsetDateTime getUpdatedAt() {
+    return updatedAt;
+  }
+
+  public void setId(UUID id){
+    this.id = id;
+  }
   public void setEmail(String email) {
     this.email = email;
   }
 
   public void setPasswordHash(String passwordHash) {
     this.passwordHash = passwordHash;
+  }
+    public void setCreatedAt(OffsetDateTime createdAt) {
+    this.createdAt = createdAt;
+  }
+
+  public void setUpdatedAt(OffsetDateTime updatedAt) {
+    this.updatedAt = updatedAt;
   }
 
   @Override
