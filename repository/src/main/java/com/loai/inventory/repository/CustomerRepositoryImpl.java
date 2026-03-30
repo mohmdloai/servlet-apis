@@ -91,9 +91,9 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
             .from(CUSTOMER)
             .where(CUSTOMER.EMAIL.eq(email).and(CUSTOMER.ID.ne(excludeId))));
   }
-  private Customer toCustomer(CustomerRecord r){
+
+  private Customer toCustomer(CustomerRecord r) {
     return new Customer(
-      r.getId(), r.getEmail(), r.getPasswordHash(),r.getCreatedAt(), r.getUpdatedAt()
-    );
+        r.getId(), r.getEmail(), r.getPasswordHash(), r.getCreatedAt(), r.getUpdatedAt());
   }
 }
