@@ -2,8 +2,11 @@ package com.loai.inventory.api.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.common.DataSourceFactory;
+import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
+import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
+import com.loai.inventory.service.CustomerService;
 import com.loai.inventory.service.ProductService;
 import com.zaxxer.hikari.HikariDataSource;
 import org.flywaydb.core.Flyway;
@@ -16,69 +19,66 @@ import org.slf4j.LoggerFactory;
 /**
  * Composition root — constructs and wires every singleton in the application.
  *
- * This is the ONLY place in the codebase that:
- *   - knows about both interfaces and their implementations
- *   - imports from both domain and repository modules simultaneously
- *   - wires ProductRepository (domain) → ProductRepositoryImpl (repository)
+ * <p>This is the ONLY place in the codebase that: - knows about both interfaces and their
+ * implementations - imports from both domain and repository modules simultaneously - wires
+ * ProductRepository (domain) → ProductRepositoryImpl (repository)
  *
- * Built once by AppBootstrap at Tomcat startup.
- * Held in ServletContext so servlets can retrieve what they need.
+ * <p>Built once by AppBootstrap at Tomcat startup. Held in ServletContext so servlets can retrieve
+ * what they need.
  *
- * No DI framework — plain constructor injection throughout.
- * If this wiring grows too large, split into per-domain factory methods.
+ * <p>No DI framework — plain constructor injection throughout. If this wiring grows too large,
+ * split into per-domain factory methods.
  */
 public class AppConfig {
 
-    private static final Logger log = LoggerFactory.getLogger(AppConfig.class);
+  private static final Logger log = LoggerFactory.getLogger(AppConfig.class);
 
-    // ── Infrastructure ────────────────────────────────────────────
-    public final HikariDataSource dataSource;
-    public final DSLContext       dsl;
-    public final ObjectMapper     objectMapper;
+  // ── Infrastructure ────────────────────────────────────────────
+  public final HikariDataSource dataSource;
+  public final DSLContext dsl;
+  public final ObjectMapper objectMapper;
 
-    // ── Repositories (domain interface type — not the impl) ───────
-    public final ProductRepository productRepository;
+  // ── Repositories (domain interface type — not the impl) ───────
+  public final ProductRepository productRepository;
+  public final CustomerRepositoryFactory customerRepositoryFactory;
 
-    // ── Services ──────────────────────────────────────────────────
-    public final ProductService productService;
+  // ── Services ──────────────────────────────────────────────────
+  public final ProductService productService;
+  public final CustomerService customerService;
 
-    public AppConfig() {
-        log.info("Initialising application context...");
+  public AppConfig() {
+    log.info("Initialising application context...");
 
-        // 1. Connection pool
-        this.dataSource = DataSourceFactory.build();
+    // 1. Connection pool
+    this.dataSource = DataSourceFactory.build();
 
-        // 2. Run Flyway migrations — schema is always up-to-date on startup
-        runMigrations();
+    // 2. Run Flyway migrations — schema is always up-to-date on startup
+    runMigrations();
 
-        // 3. jOOQ DSLContext wraps the pool
-        this.dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
+    // 3. jOOQ DSLContext wraps the pool
+    this.dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
 
-        // 4. Jackson
-        this.objectMapper = ObjectMapperProvider.build();
+    // 4. Jackson
+    this.objectMapper = ObjectMapperProvider.build();
 
-        // 5. Repositories — impl type assigned to interface variable
-        this.productRepository = new ProductRepositoryImpl(dsl);
+    // 5. Repositories — impl type assigned to interface variable
+    this.productRepository = new ProductRepositoryImpl(dsl);
+    this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
+    // 6. Services — receive only the interface, never the impl
+    this.productService = new ProductService(productRepository, dsl);
+    this.customerService = new CustomerService(dsl, customerRepositoryFactory);
+    log.info("Application context ready.");
+  }
 
-        // 6. Services — receive only the interface, never the impl
-        this.productService = new ProductService(productRepository, dsl);
+  /** Close the connection pool gracefully when Tomcat undeploys the WAR. */
+  public void shutdown() {
+    log.info("Shutting down application context...");
+    dataSource.close();
+  }
 
-        log.info("Application context ready.");
-    }
-
-    /** Close the connection pool gracefully when Tomcat undeploys the WAR. */
-    public void shutdown() {
-        log.info("Shutting down application context...");
-        dataSource.close();
-    }
-
-    private void runMigrations() {
-        log.info("Running Flyway migrations...");
-        Flyway.configure()
-              .dataSource(dataSource)
-              .locations("classpath:db/migration")
-              .load()
-              .migrate();
-        log.info("Flyway migrations complete.");
-    }
+  private void runMigrations() {
+    log.info("Running Flyway migrations...");
+    Flyway.configure().dataSource(dataSource).locations("classpath:db/migration").load().migrate();
+    log.info("Flyway migrations complete.");
+  }
 }
