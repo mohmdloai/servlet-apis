@@ -146,7 +146,6 @@
               <include>src/test/java/**/*.java</include>
             </includes>
             <googleJavaFormat>
-              <!-- google-java-format version; needs 1.34.0+ for Java 25 support -->
               <version>1.34.0</version>
             </googleJavaFormat>
           </java>
