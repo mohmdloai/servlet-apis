@@ -1,6 +1,7 @@
 package com.loai.inventory.api;
 
 import com.loai.inventory.api.config.AppConfig;
+import com.loai.inventory.api.servlet.CustomerServlet;
 import com.loai.inventory.api.servlet.ProductServlet;
 import java.io.File;
 import org.apache.catalina.Context;
@@ -38,6 +39,8 @@ public class EmbeddedTomcatLauncher {
       // Register servlets programmatically
       Tomcat.addServlet(ctx, "productServlet", new ProductServlet());
       ctx.addServletMappingDecoded("/api/products/*", "productServlet");
+      Tomcat.addServlet(ctx, "customerServlet", new CustomerServlet());
+      ctx.addServletMappingDecoded("/api/customers/*", "customerServlet");
 
       // Shut down the connection pool when Tomcat stops
       Runtime.getRuntime().addShutdownHook(new Thread(config::shutdown));
