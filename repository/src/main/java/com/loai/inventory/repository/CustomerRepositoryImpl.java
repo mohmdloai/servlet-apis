@@ -31,6 +31,7 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
     return dsl.selectFrom(CUSTOMER)
         .orderBy(CUSTOMER.CREATED_AT.desc())
         .offset(offset)
+        .limit(limit)
         .fetch()
         .map(this::toCustomer);
   }
