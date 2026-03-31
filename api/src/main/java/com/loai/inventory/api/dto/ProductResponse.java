@@ -3,7 +3,6 @@ package com.loai.inventory.api.dto;
 import com.loai.inventory.domain.model.Product;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -66,42 +65,5 @@ public class ProductResponse {
 
   public OffsetDateTime getUpdatedAt() {
     return updatedAt;
-  }
-
-  // ── Paged wrapper (inner class — lives with the response it wraps) ──
-
-  /**
-   * Envelope for paginated list responses.
-   *
-   * <p>JSON shape: { "data": [ { product }, ... ], "total": 42, "page": 0, "size": 10 }
-   */
-  public static class Page {
-    private final List<ProductResponse> data;
-    private final long total;
-    private final int page;
-    private final int size;
-
-    public Page(List<ProductResponse> data, long total, int page, int size) {
-      this.data = data;
-      this.total = total;
-      this.page = page;
-      this.size = size;
-    }
-
-    public List<ProductResponse> getData() {
-      return data;
-    }
-
-    public long getTotal() {
-      return total;
-    }
-
-    public int getPage() {
-      return page;
-    }
-
-    public int getSize() {
-      return size;
-    }
   }
 }

@@ -36,7 +36,7 @@ public class CustomerServlet extends HttpServlet {
         List<Customer> customers = customerService.getAll(page, size);
         long total = customerService.count();
         List<CustomerResponse> items = customers.stream().map(CustomerResponse::from).toList();
-        writeJson(resp, 200, new CustomerResponse.Page(items, total, page, size));
+        writeJson(resp, 200, new PageResponse<>(items, total, page, size));
       } else {
         Customer customer = customerService.getById(id);
         writeJson(resp, 200, CustomerResponse.from(customer));

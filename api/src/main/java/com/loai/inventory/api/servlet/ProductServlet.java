@@ -5,6 +5,7 @@ import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CreateProductRequest;
+import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.ProductResponse;
 import com.loai.inventory.api.dto.UpdateProductRequest;
 import com.loai.inventory.common.exception.AppException;
@@ -63,7 +64,7 @@ public class ProductServlet extends HttpServlet {
         List<ProductResponse> data =
             products.stream().map(ProductResponse::from).collect(Collectors.toList());
 
-        writeJson(res, 200, new ProductResponse.Page(data, total, page, size));
+        writeJson(res, 200, new PageResponse<>(data, total, page, size));
 
       } else {
         // GET /api/products/{id}
