@@ -3,10 +3,13 @@ package com.loai.inventory.api.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.common.DataSourceFactory;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
+import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
 import com.loai.inventory.service.CustomerService;
+import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.ProductService;
 import com.zaxxer.hikari.HikariDataSource;
 import org.flywaydb.core.Flyway;
@@ -41,10 +44,12 @@ public class AppConfig {
   // ── Repositories (domain interface type — not the impl) ───────
   public final ProductRepository productRepository;
   public final CustomerRepositoryFactory customerRepositoryFactory;
+  public final InventoryRepositoryFactory inventoryRepositoryFactory;
 
   // ── Services ──────────────────────────────────────────────────
   public final ProductService productService;
   public final CustomerService customerService;
+  public final InventoryService inventoryService;
 
   public AppConfig() {
     log.info("Initialising application context...");
@@ -64,9 +69,12 @@ public class AppConfig {
     // 5. Repositories — impl type assigned to interface variable
     this.productRepository = new ProductRepositoryImpl(dsl);
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
+    this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
+
     // 6. Services — receive only the interface, never the impl
     this.productService = new ProductService(productRepository, dsl);
     this.customerService = new CustomerService(dsl, customerRepositoryFactory);
+    this.inventoryService = new InventoryService(dsl, inventoryRepositoryFactory);
     log.info("Application context ready.");
   }
 

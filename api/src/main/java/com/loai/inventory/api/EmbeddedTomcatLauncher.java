@@ -2,6 +2,7 @@ package com.loai.inventory.api;
 
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.servlet.CustomerServlet;
+import com.loai.inventory.api.servlet.InventoryServlet;
 import com.loai.inventory.api.servlet.ProductServlet;
 import java.io.File;
 import org.apache.catalina.Context;
@@ -41,6 +42,8 @@ public class EmbeddedTomcatLauncher {
       ctx.addServletMappingDecoded("/api/products/*", "productServlet");
       Tomcat.addServlet(ctx, "customerServlet", new CustomerServlet());
       ctx.addServletMappingDecoded("/api/customers/*", "customerServlet");
+      Tomcat.addServlet(ctx, "inventoryServlet", new InventoryServlet());
+      ctx.addServletMappingDecoded("/api/inventory/*", "inventoryServlet");
 
       // Shut down the connection pool when Tomcat stops
       Runtime.getRuntime().addShutdownHook(new Thread(config::shutdown));
@@ -50,6 +53,7 @@ public class EmbeddedTomcatLauncher {
 
       System.out.println("Embedded Tomcat started at http://localhost:8080");
       System.out.println("   API endpoints: http://localhost:8080/api/products");
+      System.out.println("                  http://localhost:8080/api/inventory");
       System.out.println("   Press Ctrl+C to stop");
 
       tomcat.getServer().await();
