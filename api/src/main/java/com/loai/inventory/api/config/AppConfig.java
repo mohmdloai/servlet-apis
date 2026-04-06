@@ -3,9 +3,11 @@ package com.loai.inventory.api.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.common.DataSourceFactory;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
+import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
 import com.loai.inventory.service.CustomerService;
@@ -45,6 +47,7 @@ public class AppConfig {
   public final ProductRepository productRepository;
   public final CustomerRepositoryFactory customerRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
+  public final InventoryLogRepositoryFactory inventoryLogRepositoryFactory;
 
   // ── Services ──────────────────────────────────────────────────
   public final ProductService productService;
@@ -70,11 +73,13 @@ public class AppConfig {
     this.productRepository = new ProductRepositoryImpl(dsl);
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
+    this.inventoryLogRepositoryFactory = new InventoryLogRepositoryFactoryImpl();
 
     // 6. Services — receive only the interface, never the impl
     this.productService = new ProductService(productRepository, dsl);
     this.customerService = new CustomerService(dsl, customerRepositoryFactory);
-    this.inventoryService = new InventoryService(dsl, inventoryRepositoryFactory);
+    this.inventoryService =
+        new InventoryService(dsl, inventoryRepositoryFactory, inventoryLogRepositoryFactory);
     log.info("Application context ready.");
   }
 
