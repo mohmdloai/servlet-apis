@@ -9,6 +9,7 @@ import com.loai.inventory.api.dto.InventoryQtyRequest;
 import com.loai.inventory.api.dto.InventoryResponse;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Inventory;
 import com.loai.inventory.service.InventoryService;
 import jakarta.servlet.annotation.WebServlet;
@@ -16,6 +17,7 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.security.Principal;
 import java.util.UUID;
 
 /**
@@ -41,7 +43,7 @@ public class InventoryServlet extends HttpServlet {
     this.mapper = config.objectMapper;
   }
 
-  // ── GET
+  //  GET
 
   @Override
   protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
@@ -64,17 +66,19 @@ public class InventoryServlet extends HttpServlet {
     }
   }
 
-  // ── POST ──────────────────────────────────────────────────────
+  //  POST
 
   @Override
   protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     try {
       PathInfo path = parsePath(req);
+      ActorContext actor = extractActor(req);
 
       if (path.productId == null) {
         // POST /api/inventory — initialise
         InitInventoryRequest body = readBody(req, InitInventoryRequest.class);
-        Inventory created = inventoryService.initialise(body.getProductId(), body.getStockQty());
+        Inventory created =
+            inventoryService.initialise(body.getProductId(), body.getStockQty(), actor);
         writeJson(resp, 201, InventoryResponse.from(created));
         return;
       }
@@ -88,11 +92,12 @@ public class InventoryServlet extends HttpServlet {
       InventoryQtyRequest body = readBody(req, InventoryQtyRequest.class);
       Inventory result =
           switch (path.action) {
-            case "reserve" -> inventoryService.reserve(path.productId, body.getQty());
-            case "release" -> inventoryService.release(path.productId, body.getQty());
-            case "confirm-sale" -> inventoryService.confirmSale(path.productId, body.getQty());
-            case "restock" -> inventoryService.restock(path.productId, body.getQty());
-            case "adjust" -> inventoryService.adjust(path.productId, body.getQty());
+            case "reserve" -> inventoryService.reserve(path.productId, body.getQty(), actor);
+            case "release" -> inventoryService.release(path.productId, body.getQty(), actor);
+            case "confirm-sale" ->
+                inventoryService.confirmSale(path.productId, body.getQty(), actor);
+            case "restock" -> inventoryService.restock(path.productId, body.getQty(), actor);
+            case "adjust" -> inventoryService.adjust(path.productId, body.getQty(), actor);
             default -> throw new ValidationException("Unknown action: " + path.action);
           };
 
@@ -105,7 +110,7 @@ public class InventoryServlet extends HttpServlet {
     }
   }
 
-  // ── DELETE ────────────────────────────────────────────────────
+  //  DELETE
 
   @Override
   protected void doDelete(HttpServletRequest req, HttpServletResponse resp) throws IOException {
@@ -115,7 +120,8 @@ public class InventoryServlet extends HttpServlet {
         throw new ValidationException("DELETE requires /api/inventory/{productId}");
       }
 
-      inventoryService.delete(path.productId);
+      ActorContext actor = extractActor(req);
+      inventoryService.delete(path.productId, actor);
       resp.setStatus(204);
 
     } catch (AppException e) {
@@ -125,7 +131,34 @@ public class InventoryServlet extends HttpServlet {
     }
   }
 
-  // ── Path parsing ──────────────────────────────────────────────
+  //  Actor extraction
+
+  /**
+   * Extracts the actor context from the request. Uses the security principal if available,
+   * otherwise falls back to the X-Actor-Id / X-Actor-Type headers for service-to-service calls.
+   */
+  private ActorContext extractActor(HttpServletRequest req) {
+    Principal principal = req.getUserPrincipal();
+    if (principal != null) {
+      return ActorContext.user(principal.getName());
+    }
+
+    String actorId = req.getHeader("X-Actor-Id");
+    String actorType = req.getHeader("X-Actor-Type");
+    if (actorId != null && actorType != null) {
+      return switch (actorType.toUpperCase()) {
+        case "USER" -> ActorContext.user(actorId);
+        case "SERVICE" -> ActorContext.service(actorId);
+        case "SYSTEM" -> ActorContext.system(actorId);
+        case "MIGRATION" -> ActorContext.migration(actorId);
+        default -> ActorContext.service(actorId);
+      };
+    }
+
+    return null;
+  }
+
+  //  Path parsing
 
   /**
    * Parses pathInfo into productId and optional action.
