@@ -39,12 +39,12 @@ public class CorsFilter implements Filter {
       resp.setHeader(
           "Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
     }
-
+    // preflight request as short circuit
     if ("OPTIONS".equalsIgnoreCase(req.getMethod())) {
       resp.setStatus(200);
       return;
     }
-
+    // continue with the req and hit the next filter or (controllers/servlets)
     chain.doFilter(request, response);
   }
 
