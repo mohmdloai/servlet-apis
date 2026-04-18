@@ -9,6 +9,7 @@ import java.util.UUID;
 public interface InventoryLogRepository {
 
   InventoryLog insert(
+      UUID orgId,
       UUID productId,
       int stockDelta,
       int reservedDelta,
@@ -18,5 +19,5 @@ public interface InventoryLogRepository {
       UUID orderId,
       ActorContext actor);
 
-  List<InventoryLog> findByProductId(UUID productId);
+  List<InventoryLog> findByProductId(UUID orgId, UUID productId);
 }

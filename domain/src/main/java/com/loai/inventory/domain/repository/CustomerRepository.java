@@ -7,19 +7,19 @@ import java.util.UUID;
 
 public interface CustomerRepository {
 
-  Optional<Customer> findById(UUID id);
+  Optional<Customer> findById(UUID orgId, UUID id);
 
-  List<Customer> findAll(int offset, int limit);
+  List<Customer> findAll(UUID orgId, int offset, int limit);
 
-  long count();
+  long count(UUID orgId);
 
   Customer insert(Customer customer);
 
   Customer update(Customer customer);
 
-  void deleteById(UUID id);
+  void deleteById(UUID orgId, UUID id);
 
-  boolean existsByEmail(String email);
+  boolean existsByEmail(UUID orgId, String email);
 
-  boolean existsByEmailAndIdNot(String email, UUID excludeId);
+  boolean existsByEmailAndIdNot(UUID orgId, String email, UUID excludeId);
 }

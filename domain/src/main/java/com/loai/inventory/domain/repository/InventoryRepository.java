@@ -6,7 +6,7 @@ import java.util.UUID;
 
 public interface InventoryRepository {
 
-  Optional<Inventory> findByProductId(UUID productId);
+  Optional<Inventory> findByProductId(UUID orgId, UUID productId);
 
   Inventory insert(Inventory inventory);
 
@@ -16,17 +16,11 @@ public interface InventoryRepository {
    * <p>The update only succeeds if the current version matches {@code expectedVersion}. On success
    * the version is bumped and the updated row is returned. On version mismatch (0 rows updated) a
    * {@code ConflictException} is thrown.
-   *
-   * @param productId the product whose inventory to adjust
-   * @param stockDelta amount to add to stock_qty (negative to decrease)
-   * @param reservedDelta amount to add to reserved_qty (negative to decrease)
-   * @param expectedVersion the version the caller last read
-   * @return the updated Inventory
    */
   Inventory adjustQuantities(
-      UUID productId, int stockDelta, int reservedDelta, long expectedVersion);
+      UUID orgId, UUID productId, int stockDelta, int reservedDelta, long expectedVersion);
 
-  void deleteByProductId(UUID productId);
+  void deleteByProductId(UUID orgId, UUID productId);
 
-  boolean existsByProductId(UUID productId);
+  boolean existsByProductId(UUID orgId, UUID productId);
 }
