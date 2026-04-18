@@ -6,6 +6,7 @@ import java.util.UUID;
 
 public class InventoryResponse {
 
+  private UUID orgId;
   private UUID productId;
   private int stockQty;
   private int reservedQty;
@@ -17,6 +18,7 @@ public class InventoryResponse {
 
   public static InventoryResponse from(Inventory inv) {
     InventoryResponse r = new InventoryResponse();
+    r.orgId = inv.getOrgId();
     r.productId = inv.getProductId();
     r.stockQty = inv.getStockQty();
     r.reservedQty = inv.getReservedQty();
@@ -24,6 +26,10 @@ public class InventoryResponse {
     r.version = inv.getVersion();
     r.updatedAt = inv.getUpdatedAt();
     return r;
+  }
+
+  public UUID getOrgId() {
+    return orgId;
   }
 
   public UUID getProductId() {

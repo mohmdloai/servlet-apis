@@ -5,16 +5,10 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
-/**
- * JSON response for a single product.
- *
- * <p>Constructed from the domain Product — the mapping is a deliberate translation step, not a
- * pass-through. If the domain model changes, you update this mapping, and the API contract is
- * unaffected.
- */
 public class ProductResponse {
 
   private UUID id;
+  private UUID orgId;
   private String name;
   private String description;
   private BigDecimal basePrice;
@@ -24,10 +18,10 @@ public class ProductResponse {
 
   private ProductResponse() {}
 
-  /** Factory method — the only way to create a ProductResponse. */
   public static ProductResponse from(Product p) {
     ProductResponse r = new ProductResponse();
     r.id = p.getId();
+    r.orgId = p.getOrgId();
     r.name = p.getName();
     r.description = p.getDescription();
     r.basePrice = p.getBasePrice();
@@ -37,10 +31,12 @@ public class ProductResponse {
     return r;
   }
 
-  // Getters — Jackson serializes via getters by default
-
   public UUID getId() {
     return id;
+  }
+
+  public UUID getOrgId() {
+    return orgId;
   }
 
   public String getName() {
