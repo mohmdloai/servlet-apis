@@ -4,6 +4,7 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 public class Inventory {
+  private UUID orgId;
   private UUID productId;
   private int stockQty;
   private int reservedQty;
@@ -13,12 +14,26 @@ public class Inventory {
   public Inventory() {}
 
   public Inventory(
-      UUID productId, int stockQty, int reservedQty, long version, OffsetDateTime updatedAt) {
+      UUID orgId,
+      UUID productId,
+      int stockQty,
+      int reservedQty,
+      long version,
+      OffsetDateTime updatedAt) {
+    this.orgId = orgId;
     this.productId = productId;
     this.stockQty = stockQty;
     this.reservedQty = reservedQty;
     this.version = version;
     this.updatedAt = updatedAt;
+  }
+
+  public UUID getOrgId() {
+    return orgId;
+  }
+
+  public void setOrgId(UUID orgId) {
+    this.orgId = orgId;
   }
 
   public UUID getProductId() {
@@ -67,7 +82,9 @@ public class Inventory {
 
   @Override
   public String toString() {
-    return "Inventory{productId="
+    return "Inventory{orgId="
+        + orgId
+        + ", productId="
         + productId
         + ", stock="
         + stockQty
