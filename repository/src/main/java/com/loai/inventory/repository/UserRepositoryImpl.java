@@ -1,17 +1,17 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.APP_USER;
+import static com.loai.inventory.repository.generated.Tables.USER_ORG_ROLE;
 import static com.loai.inventory.repository.generated.Tables.USER_SYSTEM_ROLE;
-import static com.loai.inventory.repository.generated.Tables.USER_TENANT_ROLE;
 
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.AppUser;
+import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SystemRole;
-import com.loai.inventory.domain.model.TenantRole;
-import com.loai.inventory.domain.model.UserTenantRole;
+import com.loai.inventory.domain.model.UserOrgRole;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.repository.generated.tables.records.AppUserRecord;
-import com.loai.inventory.repository.generated.tables.records.UserTenantRoleRecord;
+import com.loai.inventory.repository.generated.tables.records.UserOrgRoleRecord;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -116,11 +116,11 @@ public final class UserRepositoryImpl implements UserRepository {
   }
 
   @Override
-  public List<UserTenantRole> findTenantRoles(UUID userId) {
-    return dsl.selectFrom(USER_TENANT_ROLE)
-        .where(USER_TENANT_ROLE.USER_ID.eq(userId))
+  public List<UserOrgRole> findOrgRoles(UUID userId) {
+    return dsl.selectFrom(USER_ORG_ROLE)
+        .where(USER_ORG_ROLE.USER_ID.eq(userId))
         .fetch()
-        .map(this::toUserTenantRole);
+        .map(this::toUserOrgRole);
   }
 
   @Override
@@ -128,6 +128,18 @@ public final class UserRepositoryImpl implements UserRepository {
     return dsl.selectFrom(USER_SYSTEM_ROLE)
         .where(USER_SYSTEM_ROLE.USER_ID.eq(userId))
         .fetchSet(r -> SystemRole.valueOf(r.getRole().getLiteral()));
+  }
+
+  @Override
+  public void insertOrgRole(UUID userId, UUID orgId, OrgRole role) {
+    dsl.insertInto(USER_ORG_ROLE)
+        .set(USER_ORG_ROLE.USER_ID, userId)
+        .set(USER_ORG_ROLE.ORG_ID, orgId)
+        .set(
+            USER_ORG_ROLE.ROLE,
+            com.loai.inventory.repository.generated.enums.OrgRole.lookupLiteral(role.name()))
+        .onConflictDoNothing()
+        .execute();
   }
 
   private AppUser toAppUser(AppUserRecord r) {
@@ -142,8 +154,7 @@ public final class UserRepositoryImpl implements UserRepository {
         r.getUpdatedAt());
   }
 
-  private UserTenantRole toUserTenantRole(UserTenantRoleRecord r) {
-    return new UserTenantRole(
-        r.getUserId(), r.getTenantId(), TenantRole.valueOf(r.getRole().getLiteral()));
+  private UserOrgRole toUserOrgRole(UserOrgRoleRecord r) {
+    return new UserOrgRole(r.getUserId(), r.getOrgId(), OrgRole.valueOf(r.getRole().getLiteral()));
   }
 }

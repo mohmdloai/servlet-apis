@@ -24,6 +24,7 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
 
   @Override
   public InventoryLog insert(
+      UUID orgId,
       UUID productId,
       int stockDelta,
       int reservedDelta,
@@ -35,6 +36,7 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
 
     InventoryLogRecord record =
         dsl.insertInto(INVENTORY_LOG)
+            .set(INVENTORY_LOG.ORG_ID, orgId)
             .set(INVENTORY_LOG.PRODUCT_ID, productId)
             .set(INVENTORY_LOG.STOCK_DELTA, stockDelta)
             .set(INVENTORY_LOG.RESERVED_DELTA, reservedDelta)
@@ -60,7 +62,8 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
     }
 
     log.debug(
-        "Logged inventory change productId={} reason={} stockDelta={} reservedDelta={}",
+        "Logged inventory change orgId={} productId={} reason={} stockDelta={} reservedDelta={}",
+        orgId,
         productId,
         reason,
         stockDelta,
@@ -69,9 +72,9 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
   }
 
   @Override
-  public List<InventoryLog> findByProductId(UUID productId) {
+  public List<InventoryLog> findByProductId(UUID orgId, UUID productId) {
     return dsl.selectFrom(INVENTORY_LOG)
-        .where(INVENTORY_LOG.PRODUCT_ID.eq(productId))
+        .where(INVENTORY_LOG.ORG_ID.eq(orgId).and(INVENTORY_LOG.PRODUCT_ID.eq(productId)))
         .orderBy(INVENTORY_LOG.CREATED_AT.desc())
         .fetch(this::toInventoryLog);
   }
@@ -79,6 +82,7 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
   private InventoryLog toInventoryLog(InventoryLogRecord r) {
     InventoryLog l = new InventoryLog();
     l.setId(r.getId());
+    l.setOrgId(r.getOrgId());
     l.setProductId(r.getProductId());
     l.setStockDelta(r.getStockDelta());
     l.setReservedDelta(r.getReservedDelta());
