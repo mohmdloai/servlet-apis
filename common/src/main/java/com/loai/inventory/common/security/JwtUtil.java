@@ -33,7 +33,7 @@ public class JwtUtil {
   public String generateAccessToken(
       UUID userId,
       String actorType,
-      Map<UUID, Set<String>> tenantRoles,
+      Map<UUID, Set<String>> orgRoles,
       Set<String> systemRoles,
       Set<String> allowedActions,
       int tokenVersion) {
@@ -50,8 +50,8 @@ public class JwtUtil {
     if (systemRoles != null && !systemRoles.isEmpty()) {
       builder.claim("system_roles", List.copyOf(systemRoles));
     }
-    if (tenantRoles != null && !tenantRoles.isEmpty()) {
-      builder.claim("tenant_roles", tenantRoles);
+    if (orgRoles != null && !orgRoles.isEmpty()) {
+      builder.claim("org_roles", orgRoles);
     }
     if (allowedActions != null && !allowedActions.isEmpty()) {
       builder.claim("allowed_actions", List.copyOf(allowedActions));
