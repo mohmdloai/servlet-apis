@@ -6,6 +6,7 @@ import java.util.UUID;
 
 public class CustomerResponse {
   private UUID id;
+  private UUID orgId;
   private String email;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
@@ -15,15 +16,19 @@ public class CustomerResponse {
   public static CustomerResponse from(Customer c) {
     CustomerResponse r = new CustomerResponse();
     r.id = c.getId();
+    r.orgId = c.getOrgId();
     r.email = c.getEmail();
     r.createdAt = c.getCreatedAt();
     r.updatedAt = c.getUpdatedAt();
     return r;
   }
 
-  // Getters for Jackson serialization
   public UUID getId() {
     return id;
+  }
+
+  public UUID getOrgId() {
+    return orgId;
   }
 
   public String getEmail() {

@@ -13,6 +13,7 @@ import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/** CRM-only customer: pure data record, no authentication. Org-scoped, email unique per org. */
 public class CustomerService {
   private static final Logger log = LoggerFactory.getLogger(CustomerService.class);
 
@@ -24,48 +25,51 @@ public class CustomerService {
     this.repoFactory = repoFactory;
   }
 
-  public Customer getById(UUID id) {
+  public Customer getById(UUID orgId, UUID id) {
     CustomerRepository repo = repoFactory.create(rootDsl);
-    return repo.findById(id).orElseThrow(() -> new NotFoundException("Customer", id));
+    return repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Customer", id));
   }
 
-  public List<Customer> getAll(int page, int size) {
+  public List<Customer> getAll(UUID orgId, int page, int size) {
     if (page < 0) throw new ValidationException("page must be >= 0");
     if (size < 1 || size > 100) throw new ValidationException("size must be 1-100");
     CustomerRepository repo = repoFactory.create(rootDsl);
-    return repo.findAll(page * size, size);
+    return repo.findAll(orgId, page * size, size);
   }
 
-  public long count() {
+  public long count(UUID orgId) {
     CustomerRepository repo = repoFactory.create(rootDsl);
-    return repo.count();
+    return repo.count(orgId);
   }
 
-  // Transactional commands:
-  public Customer create(String email, String passwordHash) {
-    validateCreate(email, passwordHash);
+  public Customer create(UUID orgId, String email) {
+    validateEmail(email);
 
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           CustomerRepository repo = repoFactory.create(txDsl);
 
-          if (repo.existsByEmail(email)) {
-            throw new ConflictException("Email already registered: " + email);
+          if (repo.existsByEmail(orgId, email)) {
+            throw new ConflictException("Email already registered in this org: " + email);
           }
 
           Customer customer = new Customer();
+          customer.setOrgId(orgId);
           customer.setEmail(email);
-          customer.setPasswordHash(passwordHash);
 
           Customer saved = repo.insert(customer);
-          log.info("Created customer id={} email={}", saved.getId(), saved.getEmail());
+          log.info(
+              "Created customer id={} orgId={} email={}",
+              saved.getId(),
+              saved.getOrgId(),
+              saved.getEmail());
           return saved;
         });
   }
 
-  public Customer update(UUID id, String email, String passwordHash) {
-    validateCreate(email, passwordHash);
+  public Customer update(UUID orgId, UUID id, String email) {
+    validateEmail(email);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -73,40 +77,36 @@ public class CustomerService {
           CustomerRepository repo = repoFactory.create(txDsl);
 
           Customer existing =
-              repo.findById(id).orElseThrow(() -> new NotFoundException("Customer", id));
+              repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Customer", id));
 
-          if (repo.existsByEmailAndIdNot(email, id)) {
-            throw new ConflictException("Email already used by another customer: " + email);
+          if (repo.existsByEmailAndIdNot(orgId, email, id)) {
+            throw new ConflictException(
+                "Email already used by another customer in this org: " + email);
           }
 
           existing.setEmail(email);
-          existing.setPasswordHash(passwordHash);
 
           Customer updated = repo.update(existing);
-          log.info("Updated customer id={}", id);
+          log.info("Updated customer id={} orgId={}", id, orgId);
           return updated;
         });
   }
 
-  public void delete(UUID id) {
+  public void delete(UUID orgId, UUID id) {
     rootDsl.transaction(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           CustomerRepository repo = repoFactory.create(txDsl);
 
-          repo.findById(id).orElseThrow(() -> new NotFoundException("Customer", id));
-          repo.deleteById(id);
-          log.info("Deleted customer id={}", id);
+          repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Customer", id));
+          repo.deleteById(orgId, id);
+          log.info("Deleted customer id={} orgId={}", id, orgId);
         });
   }
 
-  // Validate
-  private void validateCreate(String email, String passwordHash) {
+  private void validateEmail(String email) {
     if (email == null || email.isBlank()) {
       throw new ValidationException("email is required");
-    }
-    if (passwordHash == null || passwordHash.isBlank()) {
-      throw new ValidationException("passwordHash is required");
     }
   }
 }

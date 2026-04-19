@@ -13,12 +13,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Owns business rules and transaction boundaries for Product.
- *
- * <p>Dependency imports: ✓ domain (Product, ProductRepository interface) ✓ common (exceptions) ✓
- * jOOQ (DSLContext — only for .transaction(), never for SQL) ✗ repository impl
- * (ProductRepositoryImpl never imported here) ✗ api / DTOs (CreateProductRequest etc. never
- * imported here)
+ * Owns business rules and transaction boundaries for Product. Every method takes {@code orgId}
+ * explicitly so the type system enforces org scoping.
  */
 public class ProductService {
 
@@ -34,57 +30,55 @@ public class ProductService {
 
   // ── Queries
 
-  public Product getById(UUID id) {
-    return repo.findById(id).orElseThrow(() -> new NotFoundException("Product", id));
+  public Product getById(UUID orgId, UUID id) {
+    return repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Product", id));
   }
 
-  public List<Product> getAll(int page, int size) {
+  public List<Product> getAll(UUID orgId, int page, int size) {
     if (page < 0) throw new ValidationException("page must be >= 0");
     if (size < 1 || size > 100) throw new ValidationException("size must be 1-100");
-    return repo.findAll(page * size, size);
+    return repo.findAll(orgId, page * size, size);
   }
 
-  public long count() {
-    return repo.count();
+  public long count(UUID orgId) {
+    return repo.count(orgId);
   }
 
   // ── Commands
 
-  public Product create(String name, String description, BigDecimal basePrice, String sku) {
+  public Product create(
+      UUID orgId, String name, String description, BigDecimal basePrice, String sku) {
     validateProductFields(name, basePrice, sku);
 
-    // Transactional: the SKU uniqueness check + insert must be atomic
     return dsl.transactionResult(
         config -> {
-          if (repo.existsBySku(sku)) {
+          if (repo.existsBySku(orgId, sku)) {
             throw new ConflictException("SKU already exists: " + sku);
           }
 
           Product product = new Product();
+          product.setOrgId(orgId);
           product.setName(name);
           product.setDescription(description);
           product.setBasePrice(basePrice);
           product.setSku(sku);
-          // id, createdAt, updatedAt are set by the DB (DEFAULT in migration)
 
           Product saved = repo.insert(product);
-          log.info("Created product id={} sku={}", saved.getId(), saved.getSku());
+          log.info("Created product id={} orgId={} sku={}", saved.getId(), orgId, saved.getSku());
           return saved;
         });
   }
 
   public Product update(
-      UUID id, String name, String description, BigDecimal basePrice, String sku) {
+      UUID orgId, UUID id, String name, String description, BigDecimal basePrice, String sku) {
     validateProductFields(name, basePrice, sku);
 
     return dsl.transactionResult(
         config -> {
-          // Ensure product exists first
           Product existing =
-              repo.findById(id).orElseThrow(() -> new NotFoundException("Product", id));
+              repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Product", id));
 
-          // SKU uniqueness: another product must not already use this SKU
-          if (repo.existsBySkuAndIdNot(sku, id)) {
+          if (repo.existsBySkuAndIdNot(orgId, sku, id)) {
             throw new ConflictException("SKU already used by another product: " + sku);
           }
 
@@ -94,21 +88,19 @@ public class ProductService {
           existing.setSku(sku);
 
           Product updated = repo.update(existing);
-          log.info("Updated product id={}", id);
+          log.info("Updated product id={} orgId={}", id, orgId);
           return updated;
         });
   }
 
-  public void delete(UUID id) {
+  public void delete(UUID orgId, UUID id) {
     dsl.transaction(
         config -> {
-          repo.findById(id).orElseThrow(() -> new NotFoundException("Product", id));
-          repo.deleteById(id);
-          log.info("Deleted product id={}", id);
+          repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Product", id));
+          repo.deleteById(orgId, id);
+          log.info("Deleted product id={} orgId={}", id, orgId);
         });
   }
-
-  // ── Validation
 
   private void validateProductFields(String name, BigDecimal basePrice, String sku) {
     if (name == null || name.isBlank()) {

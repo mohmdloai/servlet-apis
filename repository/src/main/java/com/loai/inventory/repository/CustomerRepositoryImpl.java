@@ -2,6 +2,7 @@ package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 
+import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.repository.generated.tables.records.CustomerRecord;
@@ -22,13 +23,17 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
   }
 
   @Override
-  public Optional<Customer> findById(UUID id) {
-    return dsl.selectFrom(CUSTOMER).where(CUSTOMER.ID.eq(id)).fetchOptional().map(this::toCustomer);
+  public Optional<Customer> findById(UUID orgId, UUID id) {
+    return dsl.selectFrom(CUSTOMER)
+        .where(CUSTOMER.ORG_ID.eq(orgId).and(CUSTOMER.ID.eq(id)))
+        .fetchOptional()
+        .map(this::toCustomer);
   }
 
   @Override
-  public List<Customer> findAll(int offset, int limit) {
+  public List<Customer> findAll(UUID orgId, int offset, int limit) {
     return dsl.selectFrom(CUSTOMER)
+        .where(CUSTOMER.ORG_ID.eq(orgId))
         .orderBy(CUSTOMER.CREATED_AT.desc())
         .offset(offset)
         .limit(limit)
@@ -37,23 +42,27 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
   }
 
   @Override
-  public long count() {
-    return dsl.fetchCount(CUSTOMER);
+  public long count(UUID orgId) {
+    return dsl.fetchCount(dsl.selectFrom(CUSTOMER).where(CUSTOMER.ORG_ID.eq(orgId)));
   }
 
   @Override
   public Customer insert(Customer customer) {
     CustomerRecord record =
         dsl.insertInto(CUSTOMER)
+            .set(CUSTOMER.ORG_ID, customer.getOrgId())
             .set(CUSTOMER.EMAIL, customer.getEmail())
-            .set(CUSTOMER.PASSWORD_HASH, customer.getPasswordHash())
             .returning()
             .fetchOne();
     if (record == null) {
       throw new IllegalStateException("INSERT into customer returned no record");
     }
 
-    log.debug("Inserted customer id={} email={}", record.getId(), record.getEmail());
+    log.debug(
+        "Inserted customer id={} orgId={} email={}",
+        record.getId(),
+        record.getOrgId(),
+        record.getEmail());
     return toCustomer(record);
   }
 
@@ -62,13 +71,12 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
     CustomerRecord record =
         dsl.update(CUSTOMER)
             .set(CUSTOMER.EMAIL, customer.getEmail())
-            .set(CUSTOMER.PASSWORD_HASH, customer.getPasswordHash())
             .set(CUSTOMER.UPDATED_AT, OffsetDateTime.now())
-            .where(CUSTOMER.ID.eq(customer.getId()))
+            .where(CUSTOMER.ORG_ID.eq(customer.getOrgId()).and(CUSTOMER.ID.eq(customer.getId())))
             .returning()
             .fetchOne();
     if (record == null) {
-      throw new IllegalStateException("UPDATE customer returned no record");
+      throw new NotFoundException("Customer", customer.getId());
     }
 
     log.debug("Updated customer id={}", record.getId());
@@ -76,25 +84,36 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
   }
 
   @Override
-  public void deleteById(UUID id) {
-    dsl.deleteFrom(CUSTOMER).where(CUSTOMER.ID.eq(id)).execute();
+  public void deleteById(UUID orgId, UUID id) {
+    int deleted =
+        dsl.deleteFrom(CUSTOMER).where(CUSTOMER.ORG_ID.eq(orgId).and(CUSTOMER.ID.eq(id))).execute();
+    if (deleted == 0) {
+      throw new NotFoundException("Customer", id);
+    }
   }
 
   @Override
-  public boolean existsByEmail(String email) {
-    return dsl.fetchExists(dsl.selectOne().from(CUSTOMER).where(CUSTOMER.EMAIL.eq(email)));
-  }
-
-  @Override
-  public boolean existsByEmailAndIdNot(String email, UUID excludeId) {
+  public boolean existsByEmail(UUID orgId, String email) {
     return dsl.fetchExists(
         dsl.selectOne()
             .from(CUSTOMER)
-            .where(CUSTOMER.EMAIL.eq(email).and(CUSTOMER.ID.ne(excludeId))));
+            .where(CUSTOMER.ORG_ID.eq(orgId).and(CUSTOMER.EMAIL.eq(email))));
+  }
+
+  @Override
+  public boolean existsByEmailAndIdNot(UUID orgId, String email, UUID excludeId) {
+    return dsl.fetchExists(
+        dsl.selectOne()
+            .from(CUSTOMER)
+            .where(
+                CUSTOMER
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(CUSTOMER.EMAIL.eq(email))
+                    .and(CUSTOMER.ID.ne(excludeId))));
   }
 
   private Customer toCustomer(CustomerRecord r) {
-    return new Customer(
-        r.getId(), r.getEmail(), r.getPasswordHash(), r.getCreatedAt(), r.getUpdatedAt());
+    return new Customer(r.getId(), r.getOrgId(), r.getEmail(), r.getCreatedAt(), r.getUpdatedAt());
   }
 }

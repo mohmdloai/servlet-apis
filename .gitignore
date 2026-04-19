@@ -6,3 +6,6 @@ CLAUDE.md
 GUIDE_*
 EMBEDDED_*
 GUIDES
+.idea/
+.vscode/
+.github/

@@ -23,9 +23,9 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
   }
 
   @Override
-  public Optional<Inventory> findByProductId(UUID productId) {
+  public Optional<Inventory> findByProductId(UUID orgId, UUID productId) {
     return dsl.selectFrom(INVENTORY)
-        .where(INVENTORY.PRODUCT_ID.eq(productId))
+        .where(INVENTORY.ORG_ID.eq(orgId).and(INVENTORY.PRODUCT_ID.eq(productId)))
         .fetchOptional()
         .map(this::toInventory);
   }
@@ -34,6 +34,7 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
   public Inventory insert(Inventory inventory) {
     InventoryRecord record =
         dsl.insertInto(INVENTORY)
+            .set(INVENTORY.ORG_ID, inventory.getOrgId())
             .set(INVENTORY.PRODUCT_ID, inventory.getProductId())
             .set(INVENTORY.STOCK_QTY, inventory.getStockQty())
             .set(INVENTORY.RESERVED_QTY, inventory.getReservedQty())
@@ -44,27 +45,30 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
       throw new IllegalStateException("INSERT into inventory returned no record");
     }
 
-    log.debug("Inserted inventory for productId={}", record.getProductId());
+    log.debug("Inserted inventory orgId={} productId={}", record.getOrgId(), record.getProductId());
     return toInventory(record);
   }
 
   @Override
   public Inventory adjustQuantities(
-      UUID productId, int stockDelta, int reservedDelta, long expectedVersion) {
+      UUID orgId, UUID productId, int stockDelta, int reservedDelta, long expectedVersion) {
     InventoryRecord record =
         dsl.update(INVENTORY)
             .set(INVENTORY.STOCK_QTY, INVENTORY.STOCK_QTY.plus(stockDelta))
             .set(INVENTORY.RESERVED_QTY, INVENTORY.RESERVED_QTY.plus(reservedDelta))
             .set(INVENTORY.VERSION, INVENTORY.VERSION.plus(1))
             .set(INVENTORY.UPDATED_AT, OffsetDateTime.now())
-            .where(INVENTORY.PRODUCT_ID.eq(productId))
+            .where(INVENTORY.ORG_ID.eq(orgId))
+            .and(INVENTORY.PRODUCT_ID.eq(productId))
             .and(INVENTORY.VERSION.eq(expectedVersion))
             .returning()
             .fetchOne();
 
     if (record == null) {
       throw new ConflictException(
-          "Inventory version conflict for productId="
+          "Inventory version conflict for orgId="
+              + orgId
+              + " productId="
               + productId
               + " (expected version "
               + expectedVersion
@@ -72,7 +76,8 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
     }
 
     log.debug(
-        "Adjusted inventory productId={} stockDelta={} reservedDelta={} newVersion={}",
+        "Adjusted inventory orgId={} productId={} stockDelta={} reservedDelta={} newVersion={}",
+        orgId,
         productId,
         stockDelta,
         reservedDelta,
@@ -81,8 +86,11 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
   }
 
   @Override
-  public void deleteByProductId(UUID productId) {
-    int deleted = dsl.deleteFrom(INVENTORY).where(INVENTORY.PRODUCT_ID.eq(productId)).execute();
+  public void deleteByProductId(UUID orgId, UUID productId) {
+    int deleted =
+        dsl.deleteFrom(INVENTORY)
+            .where(INVENTORY.ORG_ID.eq(orgId).and(INVENTORY.PRODUCT_ID.eq(productId)))
+            .execute();
 
     if (deleted == 0) {
       throw new NotFoundException("Inventory", productId);
@@ -90,13 +98,20 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
   }
 
   @Override
-  public boolean existsByProductId(UUID productId) {
+  public boolean existsByProductId(UUID orgId, UUID productId) {
     return dsl.fetchExists(
-        dsl.selectOne().from(INVENTORY).where(INVENTORY.PRODUCT_ID.eq(productId)));
+        dsl.selectOne()
+            .from(INVENTORY)
+            .where(INVENTORY.ORG_ID.eq(orgId).and(INVENTORY.PRODUCT_ID.eq(productId))));
   }
 
   private Inventory toInventory(InventoryRecord r) {
     return new Inventory(
-        r.getProductId(), r.getStockQty(), r.getReservedQty(), r.getVersion(), r.getUpdatedAt());
+        r.getOrgId(),
+        r.getProductId(),
+        r.getStockQty(),
+        r.getReservedQty(),
+        r.getVersion(),
+        r.getUpdatedAt());
   }
 }

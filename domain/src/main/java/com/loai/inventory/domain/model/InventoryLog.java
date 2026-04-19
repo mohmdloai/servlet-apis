@@ -5,6 +5,7 @@ import java.util.UUID;
 
 public class InventoryLog {
   private Long id;
+  private UUID orgId;
   private UUID productId;
   private int stockDelta;
   private int reservedDelta;
@@ -24,6 +25,14 @@ public class InventoryLog {
 
   public void setId(Long id) {
     this.id = id;
+  }
+
+  public UUID getOrgId() {
+    return orgId;
+  }
+
+  public void setOrgId(UUID orgId) {
+    this.orgId = orgId;
   }
 
   public UUID getProductId() {
@@ -110,6 +119,8 @@ public class InventoryLog {
   public String toString() {
     return "InventoryLog{id="
         + id
+        + ", orgId="
+        + orgId
         + ", productId="
         + productId
         + ", stockDelta="

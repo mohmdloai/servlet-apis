@@ -32,17 +32,13 @@ public class InventoryService {
     this.logRepoFactory = logRepoFactory;
   }
 
-  // ── Queries
-
-  public Inventory getByProductId(UUID productId) {
+  public Inventory getByProductId(UUID orgId, UUID productId) {
     InventoryRepository repo = repoFactory.create(rootDsl);
-    return repo.findByProductId(productId)
+    return repo.findByProductId(orgId, productId)
         .orElseThrow(() -> new NotFoundException("Inventory", productId));
   }
 
-  //  Commands
-
-  public Inventory initialise(UUID productId, int stockQty, ActorContext actor) {
+  public Inventory initialise(UUID orgId, UUID productId, int stockQty, ActorContext actor) {
     if (stockQty < 0) throw new ValidationException("stockQty must be >= 0");
 
     return rootDsl.transactionResult(
@@ -51,17 +47,19 @@ public class InventoryService {
           InventoryRepository repo = repoFactory.create(txDsl);
           InventoryLogRepository logRepo = logRepoFactory.create(txDsl);
 
-          if (repo.existsByProductId(productId)) {
+          if (repo.existsByProductId(orgId, productId)) {
             throw new ConflictException("Inventory already exists for product: " + productId);
           }
 
           Inventory inventory = new Inventory();
+          inventory.setOrgId(orgId);
           inventory.setProductId(productId);
           inventory.setStockQty(stockQty);
 
           Inventory saved = repo.insert(inventory);
 
           logRepo.insert(
+              orgId,
               productId,
               stockQty,
               0,
@@ -71,16 +69,17 @@ public class InventoryService {
               null,
               actor);
 
-          log.info("Initialised inventory productId={} stock={}", productId, stockQty);
+          log.info(
+              "Initialised inventory orgId={} productId={} stock={}", orgId, productId, stockQty);
           return saved;
         });
   }
 
-  public Inventory reserve(UUID productId, int qty, ActorContext actor) {
-    return reserve(productId, qty, null, actor);
+  public Inventory reserve(UUID orgId, UUID productId, int qty, ActorContext actor) {
+    return reserve(orgId, productId, qty, null, actor);
   }
 
-  public Inventory reserve(UUID productId, int qty, UUID orderId, ActorContext actor) {
+  public Inventory reserve(UUID orgId, UUID productId, int qty, UUID orderId, ActorContext actor) {
     validateQty(qty, "reserve");
     validateOrderId(StockReason.RESERVED, orderId);
 
@@ -90,7 +89,7 @@ public class InventoryService {
           InventoryRepository repo = repoFactory.create(txDsl);
           InventoryLogRepository logRepo = logRepoFactory.create(txDsl);
 
-          Inventory current = findOrThrow(repo, productId);
+          Inventory current = findOrThrow(repo, orgId, productId);
 
           if (current.getAvailableQty() < qty) {
             throw new ValidationException(
@@ -100,9 +99,10 @@ public class InventoryService {
                     + qty);
           }
 
-          Inventory updated = repo.adjustQuantities(productId, 0, qty, current.getVersion());
+          Inventory updated = repo.adjustQuantities(orgId, productId, 0, qty, current.getVersion());
 
           logRepo.insert(
+              orgId,
               productId,
               0,
               qty,
@@ -116,11 +116,11 @@ public class InventoryService {
         });
   }
 
-  public Inventory release(UUID productId, int qty, ActorContext actor) {
-    return release(productId, qty, null, actor);
+  public Inventory release(UUID orgId, UUID productId, int qty, ActorContext actor) {
+    return release(orgId, productId, qty, null, actor);
   }
 
-  public Inventory release(UUID productId, int qty, UUID orderId, ActorContext actor) {
+  public Inventory release(UUID orgId, UUID productId, int qty, UUID orderId, ActorContext actor) {
     validateQty(qty, "release");
     validateOrderId(StockReason.RELEASED, orderId);
 
@@ -130,7 +130,7 @@ public class InventoryService {
           InventoryRepository repo = repoFactory.create(txDsl);
           InventoryLogRepository logRepo = logRepoFactory.create(txDsl);
 
-          Inventory current = findOrThrow(repo, productId);
+          Inventory current = findOrThrow(repo, orgId, productId);
 
           if (current.getReservedQty() < qty) {
             throw new ValidationException(
@@ -140,9 +140,11 @@ public class InventoryService {
                     + qty);
           }
 
-          Inventory updated = repo.adjustQuantities(productId, 0, -qty, current.getVersion());
+          Inventory updated =
+              repo.adjustQuantities(orgId, productId, 0, -qty, current.getVersion());
 
           logRepo.insert(
+              orgId,
               productId,
               0,
               -qty,
@@ -156,11 +158,12 @@ public class InventoryService {
         });
   }
 
-  public Inventory confirmSale(UUID productId, int qty, ActorContext actor) {
-    return confirmSale(productId, qty, null, actor);
+  public Inventory confirmSale(UUID orgId, UUID productId, int qty, ActorContext actor) {
+    return confirmSale(orgId, productId, qty, null, actor);
   }
 
-  public Inventory confirmSale(UUID productId, int qty, UUID orderId, ActorContext actor) {
+  public Inventory confirmSale(
+      UUID orgId, UUID productId, int qty, UUID orderId, ActorContext actor) {
     validateQty(qty, "confirmSale");
     validateOrderId(StockReason.SOLD, orderId);
 
@@ -170,7 +173,7 @@ public class InventoryService {
           InventoryRepository repo = repoFactory.create(txDsl);
           InventoryLogRepository logRepo = logRepoFactory.create(txDsl);
 
-          Inventory current = findOrThrow(repo, productId);
+          Inventory current = findOrThrow(repo, orgId, productId);
 
           if (current.getReservedQty() < qty) {
             throw new ValidationException(
@@ -180,9 +183,11 @@ public class InventoryService {
                     + qty);
           }
 
-          Inventory updated = repo.adjustQuantities(productId, -qty, -qty, current.getVersion());
+          Inventory updated =
+              repo.adjustQuantities(orgId, productId, -qty, -qty, current.getVersion());
 
           logRepo.insert(
+              orgId,
               productId,
               -qty,
               -qty,
@@ -196,7 +201,7 @@ public class InventoryService {
         });
   }
 
-  public Inventory restock(UUID productId, int qty, ActorContext actor) {
+  public Inventory restock(UUID orgId, UUID productId, int qty, ActorContext actor) {
     validateQty(qty, "restock");
 
     return rootDsl.transactionResult(
@@ -205,10 +210,11 @@ public class InventoryService {
           InventoryRepository repo = repoFactory.create(txDsl);
           InventoryLogRepository logRepo = logRepoFactory.create(txDsl);
 
-          Inventory current = findOrThrow(repo, productId);
-          Inventory updated = repo.adjustQuantities(productId, qty, 0, current.getVersion());
+          Inventory current = findOrThrow(repo, orgId, productId);
+          Inventory updated = repo.adjustQuantities(orgId, productId, qty, 0, current.getVersion());
 
           logRepo.insert(
+              orgId,
               productId,
               qty,
               0,
@@ -222,17 +228,19 @@ public class InventoryService {
         });
   }
 
-  public Inventory adjust(UUID productId, int stockDelta, ActorContext actor) {
+  public Inventory adjust(UUID orgId, UUID productId, int stockDelta, ActorContext actor) {
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           InventoryRepository repo = repoFactory.create(txDsl);
           InventoryLogRepository logRepo = logRepoFactory.create(txDsl);
 
-          Inventory current = findOrThrow(repo, productId);
-          Inventory updated = repo.adjustQuantities(productId, stockDelta, 0, current.getVersion());
+          Inventory current = findOrThrow(repo, orgId, productId);
+          Inventory updated =
+              repo.adjustQuantities(orgId, productId, stockDelta, 0, current.getVersion());
 
           logRepo.insert(
+              orgId,
               productId,
               stockDelta,
               0,
@@ -246,21 +254,19 @@ public class InventoryService {
         });
   }
 
-  public void delete(UUID productId, ActorContext actor) {
+  public void delete(UUID orgId, UUID productId, ActorContext actor) {
     rootDsl.transaction(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           InventoryRepository repo = repoFactory.create(txDsl);
 
-          repo.deleteByProductId(productId);
-          log.info("Deleted inventory productId={}", productId);
+          repo.deleteByProductId(orgId, productId);
+          log.info("Deleted inventory orgId={} productId={}", orgId, productId);
         });
   }
 
-  // ── Helpers
-
-  private Inventory findOrThrow(InventoryRepository repo, UUID productId) {
-    return repo.findByProductId(productId)
+  private Inventory findOrThrow(InventoryRepository repo, UUID orgId, UUID productId) {
+    return repo.findByProductId(orgId, productId)
         .orElseThrow(() -> new NotFoundException("Inventory", productId));
   }
 

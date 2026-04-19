@@ -6,6 +6,7 @@ import java.util.UUID;
 
 public class Product {
   private UUID id;
+  private UUID orgId;
   private String name;
   private String description;
   private BigDecimal basePrice;
@@ -17,6 +18,7 @@ public class Product {
 
   public Product(
       UUID id,
+      UUID orgId,
       String name,
       String description,
       BigDecimal basePrice,
@@ -24,6 +26,7 @@ public class Product {
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {
     this.id = id;
+    this.orgId = orgId;
     this.name = name;
     this.description = description;
     this.basePrice = basePrice;
@@ -36,52 +39,60 @@ public class Product {
     return id;
   }
 
-  public String getName() {
-    return name;
-  }
-
-  public String getDescription() {
-    return description;
-  }
-
-  public BigDecimal getBasePrice() {
-    return basePrice;
-  }
-
-  public String getSku() {
-    return sku;
-  }
-
-  public OffsetDateTime getCreatedAt() {
-    return createdAt;
-  }
-
-  public OffsetDateTime getUpdatedAt() {
-    return updatedAt;
-  }
-
   public void setId(UUID id) {
     this.id = id;
+  }
+
+  public UUID getOrgId() {
+    return orgId;
+  }
+
+  public void setOrgId(UUID orgId) {
+    this.orgId = orgId;
+  }
+
+  public String getName() {
+    return name;
   }
 
   public void setName(String name) {
     this.name = name;
   }
 
+  public String getDescription() {
+    return description;
+  }
+
   public void setDescription(String description) {
     this.description = description;
+  }
+
+  public BigDecimal getBasePrice() {
+    return basePrice;
   }
 
   public void setBasePrice(BigDecimal basePrice) {
     this.basePrice = basePrice;
   }
 
+  public String getSku() {
+    return sku;
+  }
+
   public void setSku(String sku) {
     this.sku = sku;
   }
 
+  public OffsetDateTime getCreatedAt() {
+    return createdAt;
+  }
+
   public void setCreatedAt(OffsetDateTime createdAt) {
     this.createdAt = createdAt;
+  }
+
+  public OffsetDateTime getUpdatedAt() {
+    return updatedAt;
   }
 
   public void setUpdatedAt(OffsetDateTime updatedAt) {
@@ -90,6 +101,6 @@ public class Product {
 
   @Override
   public String toString() {
-    return "Product{id=" + id + ", sku='" + sku + "', name='" + name + "'}";
+    return "Product{id=" + id + ", orgId=" + orgId + ", sku='" + sku + "', name='" + name + "'}";
   }
 }

@@ -23,15 +23,17 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   @Override
-  public Optional<Product> findById(UUID id) {
-
-    return dsl.selectFrom(PRODUCT).where(PRODUCT.ID.eq(id)).fetchOptional().map(this::toProduct);
+  public Optional<Product> findById(UUID orgId, UUID id) {
+    return dsl.selectFrom(PRODUCT)
+        .where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.ID.eq(id)))
+        .fetchOptional()
+        .map(this::toProduct);
   }
 
   @Override
-  public List<Product> findAll(int offset, int limit) {
-    /* TODO */
+  public List<Product> findAll(UUID orgId, int offset, int limit) {
     return dsl.selectFrom(PRODUCT)
+        .where(PRODUCT.ORG_ID.eq(orgId))
         .orderBy(PRODUCT.CREATED_AT.desc())
         .offset(offset)
         .limit(limit)
@@ -40,56 +42,51 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   @Override
-  public long count() {
-    return dsl.fetchCount(PRODUCT);
+  public long count(UUID orgId) {
+    return dsl.fetchCount(dsl.selectFrom(PRODUCT).where(PRODUCT.ORG_ID.eq(orgId)));
   }
 
   @Override
-  public boolean existsBySku(String sku) {
-    return dsl.fetchExists(dsl.selectOne().from(PRODUCT).where(PRODUCT.SKU.eq(sku)));
-  }
-
-  @Override
-  public boolean existsBySkuAndIdNot(String sku, UUID excludeId) {
+  public boolean existsBySku(UUID orgId, String sku) {
     return dsl.fetchExists(
-        dsl.selectOne().from(PRODUCT).where(PRODUCT.SKU.eq(sku).and(PRODUCT.ID.ne(excludeId))));
+        dsl.selectOne().from(PRODUCT).where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.SKU.eq(sku))));
   }
 
-  // for any transaction
-  // Repository CANNOT know this business rule:
-  // "insert customer + create billing + audit log = one atomic unit"
+  @Override
+  public boolean existsBySkuAndIdNot(UUID orgId, String sku, UUID excludeId) {
+    return dsl.fetchExists(
+        dsl.selectOne()
+            .from(PRODUCT)
+            .where(
+                PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.SKU.eq(sku)).and(PRODUCT.ID.ne(excludeId))));
+  }
 
-  // Only the SERVICE knows what belongs in one transaction.
-  // So only the SERVICE should control the transaction boundary.
   @Override
   public Product insert(Product product) {
-    /*
-     * Use RETURNING to get the DB-generated id, created_at, updated_at
-     * back in a single round-trip — no second SELECT needed.
-     */
     ProductRecord record =
         dsl.insertInto(PRODUCT)
+            .set(PRODUCT.ORG_ID, product.getOrgId())
             .set(PRODUCT.NAME, product.getName())
             .set(PRODUCT.DESCRIPTION, product.getDescription())
             .set(PRODUCT.BASE_PRICE, product.getBasePrice())
             .set(PRODUCT.SKU, product.getSku())
-            .returning() // return all columns
+            .returning()
             .fetchOne();
 
     if (record == null) {
       throw new IllegalStateException("INSERT into product returned no record");
     }
 
-    log.debug("Inserted product id={} sku={}", record.getId(), record.getSku());
+    log.debug(
+        "Inserted product id={} sku={} orgId={}",
+        record.getId(),
+        record.getSku(),
+        record.getOrgId());
     return toProduct(record);
   }
 
   @Override
   public Product update(Product product) {
-    /*
-     * Use RETURNING to get the updated row with fresh updated_at
-     * back in a single round-trip — no second SELECT needed.
-     */
     ProductRecord record =
         dsl.update(PRODUCT)
             .set(PRODUCT.NAME, product.getName())
@@ -97,7 +94,7 @@ public class ProductRepositoryImpl implements ProductRepository {
             .set(PRODUCT.BASE_PRICE, product.getBasePrice())
             .set(PRODUCT.SKU, product.getSku())
             .set(PRODUCT.UPDATED_AT, OffsetDateTime.now())
-            .where(PRODUCT.ID.eq(product.getId()))
+            .where(PRODUCT.ORG_ID.eq(product.getOrgId()).and(PRODUCT.ID.eq(product.getId())))
             .returning()
             .fetchOne();
 
@@ -110,21 +107,19 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   @Override
-  public void deleteById(UUID id) {
-    int deleted = dsl.deleteFrom(PRODUCT).where(PRODUCT.ID.eq(id)).execute();
+  public void deleteById(UUID orgId, UUID id) {
+    int deleted =
+        dsl.deleteFrom(PRODUCT).where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.ID.eq(id))).execute();
 
     if (deleted == 0) {
       throw new NotFoundException("Product", id);
     }
   }
 
-  /**
-   * Maps a jOOQ ProductRecord to the domain Product. This is the only place in the system that
-   * knows about both types. service and api never see ProductRecord.
-   */
   private Product toProduct(ProductRecord r) {
     return new Product(
         r.getId(),
+        r.getOrgId(),
         r.getName(),
         r.getDescription(),
         r.getBasePrice(),

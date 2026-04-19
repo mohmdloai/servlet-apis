@@ -1,11 +1,6 @@
 package com.loai.inventory.api.dto;
 
-/**
- * Uniform error response body for all non-2xx responses.
- *
- * <p>JSON shape: { "status": 404, "error": "Not Found", "message": "Product not found:
- * 3fa85f64-..." }
- */
+/** Uniform error response body for all non-2xx responses. */
 public class ApiError {
 
   private int status;
@@ -37,9 +32,12 @@ public class ApiError {
   private static String httpPhrase(int code) {
     return switch (code) {
       case 400 -> "Bad Request";
+      case 401 -> "Unauthorized";
+      case 403 -> "Forbidden";
       case 404 -> "Not Found";
       case 409 -> "Conflict";
       case 422 -> "Unprocessable Entity";
+      case 429 -> "Too Many Requests";
       case 500 -> "Internal Server Error";
       default -> "Error";
     };
