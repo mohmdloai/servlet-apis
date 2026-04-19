@@ -1,19 +1,18 @@
 package com.loai.inventory.api;
 
 import com.loai.inventory.api.config.AppConfig;
-import com.loai.inventory.api.servlet.CustomerServlet;
-import com.loai.inventory.api.servlet.InventoryServlet;
-import com.loai.inventory.api.servlet.ProductServlet;
+import com.loai.inventory.api.filter.CorsFilter;
+import com.loai.inventory.api.filter.JwtAuthFilter;
+import com.loai.inventory.api.filter.RateLimitFilter;
+import com.loai.inventory.api.servlet.AuthServlet;
+import com.loai.inventory.api.servlet.OrgServlet;
 import java.io.File;
 import org.apache.catalina.Context;
 import org.apache.catalina.startup.Tomcat;
+import org.apache.tomcat.util.descriptor.web.FilterDef;
+import org.apache.tomcat.util.descriptor.web.FilterMap;
 
-/**
- * Embedded Tomcat launcher for running via {@code mvn exec:java}.
- *
- * <p>Uses addContext (not addWebapp) to avoid WAR-extraction and classloader isolation issues that
- * arise when exec:java shares a single classpath.
- */
+/** Embedded Tomcat launcher for running via {@code mvn exec:java}. */
 public class EmbeddedTomcatLauncher {
   public static void main(String[] args) throws Exception {
     try {
@@ -28,32 +27,30 @@ public class EmbeddedTomcatLauncher {
       docBase.mkdirs();
       Context ctx = tomcat.addContext("", docBase.getAbsolutePath());
 
-      // Let the context delegate to the system classloader so Tomcat
-      // can find our application classes loaded by exec:java.
       ctx.setParentClassLoader(Thread.currentThread().getContextClassLoader());
 
-      // Build application config (pool, migrations, jOOQ, services)
-      // and store it in the servlet context for servlets to pick up.
       AppConfig config = new AppConfig();
       ctx.getServletContext().setAttribute(AppBootstrap.CONFIG_KEY, config);
 
-      // Register servlets programmatically
-      Tomcat.addServlet(ctx, "productServlet", new ProductServlet());
-      ctx.addServletMappingDecoded("/api/products/*", "productServlet");
-      Tomcat.addServlet(ctx, "customerServlet", new CustomerServlet());
-      ctx.addServletMappingDecoded("/api/customers/*", "customerServlet");
-      Tomcat.addServlet(ctx, "inventoryServlet", new InventoryServlet());
-      ctx.addServletMappingDecoded("/api/inventory/*", "inventoryServlet");
+      // Filters: CORS → RateLimit (auth only) → JwtAuth (skips /api/auth/login + /api/auth/refresh)
+      addFilter(ctx, "corsFilter", CorsFilter.class.getName(), "/api/*");
+      addFilter(ctx, "rateLimitFilter", RateLimitFilter.class.getName(), "/api/auth/*");
+      addFilter(ctx, "jwtAuthFilter", JwtAuthFilter.class.getName(), "/api/*");
 
-      // Shut down the connection pool when Tomcat stops
+      // Servlets
+      Tomcat.addServlet(ctx, "authServlet", new AuthServlet());
+      ctx.addServletMappingDecoded("/api/auth/*", "authServlet");
+      Tomcat.addServlet(ctx, "orgServlet", new OrgServlet());
+      ctx.addServletMappingDecoded("/api/orgs/*", "orgServlet");
+
       Runtime.getRuntime().addShutdownHook(new Thread(config::shutdown));
 
       tomcat.getConnector();
       tomcat.start();
 
       System.out.println("Embedded Tomcat started at http://localhost:8080");
-      System.out.println("   API endpoints: http://localhost:8080/api/products");
-      System.out.println("                  http://localhost:8080/api/inventory");
+      System.out.println("   Auth:    http://localhost:8080/api/auth/login");
+      System.out.println("   Orgs:    http://localhost:8080/api/orgs");
       System.out.println("   Press Ctrl+C to stop");
 
       tomcat.getServer().await();
@@ -63,5 +60,17 @@ public class EmbeddedTomcatLauncher {
       e.printStackTrace();
       System.exit(1);
     }
+  }
+
+  private static void addFilter(Context ctx, String name, String className, String urlPattern) {
+    FilterDef def = new FilterDef();
+    def.setFilterName(name);
+    def.setFilterClass(className);
+    ctx.addFilterDef(def);
+
+    FilterMap map = new FilterMap();
+    map.setFilterName(name);
+    map.addURLPattern(urlPattern);
+    ctx.addFilterMap(map);
   }
 }
