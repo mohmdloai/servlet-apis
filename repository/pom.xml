@@ -74,6 +74,34 @@
     </dependency>
   </dependencies>
 
+  <build>
+    <plugins>
+      <!--
+          Register jOOQ generated sources as a compile source root
+          unconditionally so JDT LS / IDEs see them even when the
+          `codegen` profile is not active. The codegen profile itself
+          produces these files; this just exposes them to the build.
+      -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <id>add-jooq-generated</id>
+            <phase>generate-sources</phase>
+            <goals><goal>add-source</goal></goals>
+            <configuration>
+              <sources>
+                <source>${project.build.directory}/generated-sources/jooq</source>
+              </sources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
   <!--
       ════════════════════════════════════════════════════════════
       CODEGEN PROFILE
