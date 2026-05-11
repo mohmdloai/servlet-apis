@@ -1,6 +1,8 @@
 CREATE TYPE payment_status AS ENUM (
-    'PENDING',
-    'PAID',
-    'FAILED',
-    'REFUNDED'
+    'RECEIVED',
+    'PARTIALLY_ALLOCATED',
+    'ALLOCATED',
+    'PARTIALLY_REFUNDED',
+    'REFUNDED',
+    'DISPUTED'
 );
