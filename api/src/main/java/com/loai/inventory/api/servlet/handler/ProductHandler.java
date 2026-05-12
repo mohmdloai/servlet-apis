@@ -26,7 +26,7 @@ import org.slf4j.LoggerFactory;
  * <p>{@code remainingPath} is the path after {@code /api/orgs/{orgId}/products}, so it is empty
  * (list/create) or "/{productId}" (single resource).
  */
-public class ProductHandler {
+public class ProductHandler implements OrgResourceHandler {
 
   private static final Logger log = LoggerFactory.getLogger(ProductHandler.class);
 
@@ -38,6 +38,7 @@ public class ProductHandler {
     this.mapper = mapper;
   }
 
+  @Override
   public void handle(
       String method,
       HttpServletRequest req,

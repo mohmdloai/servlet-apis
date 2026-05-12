@@ -20,8 +20,12 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class AuthServlet extends HttpServlet {
+
+  private static final Logger log = LoggerFactory.getLogger(AuthServlet.class);
 
   private AuthService authService;
   private ObjectMapper mapper;
@@ -54,6 +58,7 @@ public class AuthServlet extends HttpServlet {
     } catch (AppException e) {
       writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
     } catch (Exception e) {
+      log.error("Unhandled exception in AuthServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));
     }
   }
@@ -71,6 +76,7 @@ public class AuthServlet extends HttpServlet {
     } catch (AppException e) {
       writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
     } catch (Exception e) {
+      log.error("Unhandled exception in AuthServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));
     }
   }
@@ -97,6 +103,7 @@ public class AuthServlet extends HttpServlet {
     } catch (AppException e) {
       writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
     } catch (Exception e) {
+      log.error("Unhandled exception in AuthServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));
     }
   }

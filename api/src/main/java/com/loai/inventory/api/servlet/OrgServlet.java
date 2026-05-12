@@ -7,6 +7,7 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
 import com.loai.inventory.api.servlet.handler.InventoryHandler;
 import com.loai.inventory.api.servlet.handler.OrgHandler;
+import com.loai.inventory.api.servlet.handler.OrgResourceHandler;
 import com.loai.inventory.api.servlet.handler.ProductHandler;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -14,6 +15,7 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -29,13 +31,14 @@ import java.util.UUID;
  *   <li>{@code /{orgId}/customers[/{customerId}]}
  *   <li>{@code /{orgId}/inventory[/{productId}[/{action}]]}
  * </ul>
+ *
+ * <p>To add a new org-scoped resource, implement {@link OrgResourceHandler} and register it in
+ * {@link #init()}. The dispatcher does not need to change.
  */
 public class OrgServlet extends HttpServlet {
 
   private OrgHandler orgHandler;
-  private ProductHandler productHandler;
-  private CustomerHandler customerHandler;
-  private InventoryHandler inventoryHandler;
+  private Map<String, OrgResourceHandler> subResources;
   private ObjectMapper mapper;
 
   @Override
@@ -43,24 +46,29 @@ public class OrgServlet extends HttpServlet {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.mapper = config.objectMapper;
     this.orgHandler = new OrgHandler(config.orgService, mapper);
-    this.productHandler = new ProductHandler(config.productService, mapper);
-    this.customerHandler = new CustomerHandler(config.customerService, mapper);
-    this.inventoryHandler = new InventoryHandler(config.inventoryService, mapper);
+    this.subResources =
+        Map.of(
+            "products", new ProductHandler(config.productService, mapper),
+            "customers", new CustomerHandler(config.customerService, mapper),
+            "inventory", new InventoryHandler(config.inventoryService, mapper));
   }
 
   @Override
   protected void service(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     try {
-      String pathInfo = req.getPathInfo();
-      Route route = parseRoute(pathInfo);
+      Route route = parseRoute(req.getPathInfo());
       String method = req.getMethod();
 
-      switch (route.kind) {
-        case ORG -> orgHandler.handle(method, req, resp, route.orgId);
-        case PRODUCTS -> productHandler.handle(method, req, resp, route.orgId, route.remaining);
-        case CUSTOMERS -> customerHandler.handle(method, req, resp, route.orgId, route.remaining);
-        case INVENTORY -> inventoryHandler.handle(method, req, resp, route.orgId, route.remaining);
+      if (route.subResource() == null) {
+        orgHandler.handle(method, req, resp, route.orgId());
+        return;
       }
+
+      OrgResourceHandler handler = subResources.get(route.subResource());
+      if (handler == null) {
+        throw new ValidationException("Unknown resource: " + route.subResource());
+      }
+      handler.handle(method, req, resp, route.orgId(), route.remaining());
     } catch (AppException e) {
       writeError(resp, e);
     } catch (Exception e) {
@@ -68,28 +76,16 @@ public class OrgServlet extends HttpServlet {
     }
   }
 
-  private enum Kind {
-    ORG,
-    PRODUCTS,
-    CUSTOMERS,
-    INVENTORY
-  }
-
-  private static final class Route {
-    final Kind kind;
-    final UUID orgId;
-    final String remaining;
-
-    Route(Kind kind, UUID orgId, String remaining) {
-      this.kind = kind;
-      this.orgId = orgId;
-      this.remaining = remaining;
-    }
-  }
+  /**
+   * @param orgId null for collection-level requests ({@code GET /api/orgs}, {@code POST /api/orgs})
+   * @param subResource null for org-itself routes; otherwise the segment after {@code /{orgId}/}
+   * @param remaining path tail after the sub-resource segment, with leading slash or empty
+   */
+  private record Route(UUID orgId, String subResource, String remaining) {}
 
   private Route parseRoute(String pathInfo) {
     if (pathInfo == null || pathInfo.isEmpty() || pathInfo.equals("/")) {
-      return new Route(Kind.ORG, null, "");
+      return new Route(null, null, "");
     }
 
     String raw = pathInfo.startsWith("/") ? pathInfo.substring(1) : pathInfo;
@@ -103,18 +99,11 @@ public class OrgServlet extends HttpServlet {
     }
 
     if (segments.length < 2 || segments[1].isEmpty()) {
-      return new Route(Kind.ORG, orgId, "");
+      return new Route(orgId, null, "");
     }
 
-    String resource = segments[1];
     String remaining = segments.length > 2 ? "/" + segments[2] : "";
-
-    return switch (resource) {
-      case "products" -> new Route(Kind.PRODUCTS, orgId, remaining);
-      case "customers" -> new Route(Kind.CUSTOMERS, orgId, remaining);
-      case "inventory" -> new Route(Kind.INVENTORY, orgId, remaining);
-      default -> throw new ValidationException("Unknown resource: " + resource);
-    };
+    return new Route(orgId, segments[1], remaining);
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {

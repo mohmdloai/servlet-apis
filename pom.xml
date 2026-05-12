@@ -156,13 +156,6 @@
         <version>2.43.0</version>
         <executions>
           <execution>
-            <id>spotless-apply</id>
-            <phase>validate</phase>
-            <goals>
-              <goal>apply</goal>
-            </goals>
-          </execution>
-          <execution>
             <id>spotless-check</id>
             <phase>verify</phase>
             <goals>
