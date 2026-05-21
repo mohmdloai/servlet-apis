@@ -20,7 +20,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class CustomerHandler {
+public class CustomerHandler implements OrgResourceHandler {
 
   private static final Logger log = LoggerFactory.getLogger(CustomerHandler.class);
 
@@ -32,6 +32,7 @@ public class CustomerHandler {
     this.mapper = mapper;
   }
 
+  @Override
   public void handle(
       String method,
       HttpServletRequest req,

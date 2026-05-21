@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Actor for inventory_log is derived from SecurityContext, never from request headers.
  */
-public class InventoryHandler {
+public class InventoryHandler implements OrgResourceHandler {
 
   private static final Logger log = LoggerFactory.getLogger(InventoryHandler.class);
 
@@ -37,6 +37,7 @@ public class InventoryHandler {
     this.mapper = mapper;
   }
 
+  @Override
   public void handle(
       String method,
       HttpServletRequest req,
