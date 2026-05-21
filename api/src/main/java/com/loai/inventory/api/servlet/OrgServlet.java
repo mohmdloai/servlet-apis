@@ -9,6 +9,7 @@ import com.loai.inventory.api.servlet.handler.InventoryHandler;
 import com.loai.inventory.api.servlet.handler.OrgHandler;
 import com.loai.inventory.api.servlet.handler.OrgResourceHandler;
 import com.loai.inventory.api.servlet.handler.ProductHandler;
+import com.loai.inventory.api.servlet.handler.SalesOrderHandler;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import jakarta.servlet.http.HttpServlet;
@@ -47,10 +48,11 @@ public class OrgServlet extends HttpServlet {
     this.mapper = config.objectMapper;
     this.orgHandler = new OrgHandler(config.orgService, mapper);
     this.subResources =
-        Map.of(
-            "products", new ProductHandler(config.productService, mapper),
-            "customers", new CustomerHandler(config.customerService, mapper),
-            "inventory", new InventoryHandler(config.inventoryService, mapper));
+        Map.ofEntries(
+            Map.entry("products", new ProductHandler(config.productService, mapper)),
+            Map.entry("customers", new CustomerHandler(config.customerService, mapper)),
+            Map.entry("inventory", new InventoryHandler(config.inventoryService, mapper)),
+            Map.entry("sales-orders", new SalesOrderHandler(config.salesOrderService, mapper)));
   }
 
   @Override

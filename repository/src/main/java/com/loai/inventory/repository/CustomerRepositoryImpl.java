@@ -52,6 +52,9 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
         dsl.insertInto(CUSTOMER)
             .set(CUSTOMER.ORG_ID, customer.getOrgId())
             .set(CUSTOMER.EMAIL, customer.getEmail())
+            .set(CUSTOMER.NAME, customer.getName())
+            .set(CUSTOMER.PHONE, customer.getPhone())
+            .set(CUSTOMER.ADDRESS, customer.getAddress())
             .returning()
             .fetchOne();
     if (record == null) {
@@ -71,6 +74,9 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
     CustomerRecord record =
         dsl.update(CUSTOMER)
             .set(CUSTOMER.EMAIL, customer.getEmail())
+            .set(CUSTOMER.NAME, customer.getName())
+            .set(CUSTOMER.PHONE, customer.getPhone())
+            .set(CUSTOMER.ADDRESS, customer.getAddress())
             .set(CUSTOMER.UPDATED_AT, OffsetDateTime.now())
             .where(CUSTOMER.ORG_ID.eq(customer.getOrgId()).and(CUSTOMER.ID.eq(customer.getId())))
             .returning()
@@ -114,6 +120,14 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
   }
 
   private Customer toCustomer(CustomerRecord r) {
-    return new Customer(r.getId(), r.getOrgId(), r.getEmail(), r.getCreatedAt(), r.getUpdatedAt());
+    return new Customer(
+        r.getId(),
+        r.getOrgId(),
+        r.getEmail(),
+        r.getName(),
+        r.getPhone(),
+        r.getAddress(),
+        r.getCreatedAt(),
+        r.getUpdatedAt());
   }
 }

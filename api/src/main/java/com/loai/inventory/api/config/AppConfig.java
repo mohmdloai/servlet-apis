@@ -9,6 +9,7 @@ import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
+import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
@@ -16,12 +17,14 @@ import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
+import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CustomerService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.ProductService;
+import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.zaxxer.hikari.HikariDataSource;
@@ -45,7 +48,7 @@ public class AppConfig {
   private static final Logger log = LoggerFactory.getLogger(AppConfig.class);
   private static final long DEFAULT_ACCESS_TTL_MILLIS = 15 * 60 * 1000L;
 
-  // ── Infrastructure ────────────────────────────────────────────
+  // Infrastructure
   public final HikariDataSource dataSource;
   public final JedisPool jedisPool;
   public final DSLContext dsl;
@@ -53,7 +56,7 @@ public class AppConfig {
   public final JwtUtil jwtUtil;
   public final boolean secureCookies;
 
-  // ── Repositories (domain interface type, not the impl) ────────
+  // Repositories (domain interface type, not the impl)
   public final ProductRepository productRepository;
   public final UserRepository userRepository;
   public final CustomerRepositoryFactory customerRepositoryFactory;
@@ -61,14 +64,16 @@ public class AppConfig {
   public final InventoryLogRepositoryFactory inventoryLogRepositoryFactory;
   public final UserRepositoryFactory userRepositoryFactory;
   public final OrgRepositoryFactory orgRepositoryFactory;
+  public final SalesOrderRepositoryFactory salesOrderRepositoryFactory;
 
-  // ── Services ──────────────────────────────────────────────────
+  // Services 
   public final RefreshTokenStore refreshTokenStore;
   public final AuthService authService;
   public final OrgService orgService;
   public final ProductService productService;
   public final CustomerService customerService;
   public final InventoryService inventoryService;
+  public final SalesOrderService salesOrderService;
 
   public AppConfig() {
     log.info("Initialising application context...");
@@ -96,6 +101,7 @@ public class AppConfig {
     this.inventoryLogRepositoryFactory = new InventoryLogRepositoryFactoryImpl();
     this.userRepositoryFactory = new UserRepositoryFactoryImpl();
     this.orgRepositoryFactory = new OrgRepositoryFactoryImpl();
+    this.salesOrderRepositoryFactory = new SalesOrderRepositoryFactoryImpl();
 
     this.refreshTokenStore = new RefreshTokenStore(jedisPool);
     this.authService = new AuthService(userRepository, refreshTokenStore, jwtUtil);
@@ -104,6 +110,7 @@ public class AppConfig {
     this.customerService = new CustomerService(dsl, customerRepositoryFactory);
     this.inventoryService =
         new InventoryService(dsl, inventoryRepositoryFactory, inventoryLogRepositoryFactory);
+    this.salesOrderService = new SalesOrderService(dsl, salesOrderRepositoryFactory);
     log.info("Application context ready.");
   }
 
