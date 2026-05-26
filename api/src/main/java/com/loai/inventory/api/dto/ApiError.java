@@ -1,11 +1,18 @@
 package com.loai.inventory.api.dto;
 
+import java.util.List;
+import java.util.UUID;
+
 /** Uniform error response body for all non-2xx responses. */
 public class ApiError {
 
   private int status;
   private String error;
   private String message;
+
+  // Optional, only populated for 409 InsufficientStockException. Jackson is configured to omit
+  // null fields globally, so callers see this only when it actually carries data.
+  private List<Shortage> shortages;
 
   public ApiError(int status, String error, String message) {
     this.status = status;
@@ -15,6 +22,12 @@ public class ApiError {
 
   public static ApiError of(int status, String message) {
     return new ApiError(status, httpPhrase(status), message);
+  }
+
+  public static ApiError ofShortages(int status, String message, List<Shortage> shortages) {
+    ApiError e = new ApiError(status, httpPhrase(status), message);
+    e.shortages = shortages;
+    return e;
   }
 
   public int getStatus() {
@@ -28,6 +41,12 @@ public class ApiError {
   public String getMessage() {
     return message;
   }
+
+  public List<Shortage> getShortages() {
+    return shortages;
+  }
+
+  public record Shortage(UUID productId, int requested, int available) {}
 
   private static String httpPhrase(int code) {
     return switch (code) {
