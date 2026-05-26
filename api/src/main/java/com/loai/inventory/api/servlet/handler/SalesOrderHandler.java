@@ -7,8 +7,11 @@ import com.loai.inventory.api.dto.SalesOrderResponse;
 import com.loai.inventory.api.mapper.SalesOrderMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
+import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.SalesOrderService.Placed;
 import jakarta.servlet.http.HttpServletRequest;
@@ -66,7 +69,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
 
   private void doPost(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
       throws IOException {
-    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
 
     PlaceOnlineOrderRequest body = readBody(req, PlaceOnlineOrderRequest.class);
     String idempotencyKey = req.getHeader(IDEMPOTENCY_HEADER);
@@ -76,13 +79,16 @@ public class SalesOrderHandler implements OrgResourceHandler {
       throw new ValidationException(IDEMPOTENCY_HEADER + " header is required");
     }
 
+    ActorContext actor = sc.toActorContext();
+
     Placed placed =
         service.placeOnlineOrder(
             orgId,
             SalesOrderMapper.toCustomerInput(body),
             SalesOrderMapper.toLineInputs(body),
             idempotencyKey,
-            body.getNotes());
+            body.getNotes(),
+            actor);
 
     SalesOrderResponse out = SalesOrderMapper.toResponse(placed);
     writeJson(resp, 201, out);
@@ -100,6 +106,17 @@ public class SalesOrderHandler implements OrgResourceHandler {
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {
+    if (e instanceof InsufficientStockException ise) {
+      var shortages =
+          ise.getShortages().stream()
+              .map(s -> new ApiError.Shortage(s.productId(), s.requested(), s.available()))
+              .toList();
+      writeJson(
+          resp,
+          e.getStatusCode(),
+          ApiError.ofShortages(e.getStatusCode(), e.getMessage(), shortages));
+      return;
+    }
     writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
   }
 
