@@ -8,6 +8,9 @@ import com.loai.inventory.domain.model.Inventory;
 import com.loai.inventory.domain.repository.InventoryRepository;
 import com.loai.inventory.repository.generated.tables.records.InventoryRecord;
 import java.time.OffsetDateTime;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -83,6 +86,24 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
         reservedDelta,
         record.getVersion());
     return toInventory(record);
+  }
+
+  @Override
+  public Map<UUID, Inventory> lockForUpdate(UUID orgId, Collection<UUID> productIds) {
+    if (productIds == null || productIds.isEmpty()) {
+      return Map.of();
+    }
+    // Stable ascending lock order: sort distinct ids; LinkedHashMap preserves the iteration order
+    // so callers can rely on it for logging / per-product follow-up writes if they want to.
+    var sortedIds = productIds.stream().distinct().sorted().toList();
+    Map<UUID, Inventory> out = new LinkedHashMap<>(sortedIds.size());
+    dsl.selectFrom(INVENTORY)
+        .where(INVENTORY.ORG_ID.eq(orgId).and(INVENTORY.PRODUCT_ID.in(sortedIds)))
+        .orderBy(INVENTORY.PRODUCT_ID.asc())
+        .forUpdate()
+        .fetch()
+        .forEach(r -> out.put(r.getProductId(), toInventory(r)));
+    return out;
   }
 
   @Override
