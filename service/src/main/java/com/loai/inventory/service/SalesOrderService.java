@@ -2,6 +2,7 @@ package com.loai.inventory.service;
 
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -37,10 +38,15 @@ public class SalesOrderService {
 
   private final DSLContext rootDsl;
   private final SalesOrderRepositoryFactory repoFactory;
+  private final ReservationService reservationService;
 
-  public SalesOrderService(DSLContext rootDsl, SalesOrderRepositoryFactory repoFactory) {
+  public SalesOrderService(
+      DSLContext rootDsl,
+      SalesOrderRepositoryFactory repoFactory,
+      ReservationService reservationService) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
+    this.reservationService = reservationService;
   }
 
   /** Input contact info; {@code name} required, others optional. */
@@ -57,7 +63,8 @@ public class SalesOrderService {
       CustomerInput customer,
       List<OrderLineInput> lines,
       String idempotencyKey,
-      String notes) {
+      String notes,
+      ActorContext actor) {
 
     validateInputs(customer, lines);
 
@@ -148,6 +155,11 @@ public class SalesOrderService {
 
           // 7. Insert order + lines in the same txn.
           repo.insert(order, orderLines);
+
+          // 8. Reserve stock atomically. Throws InsufficientStockException → rolls back the whole
+          //    placement (no order, no lines, no customer write persisted). The idempotent-replay
+          //    branch above skips this entirely — reservations were created at original placement.
+          reservationService.reserveForOrder(txDsl, orgId, order, orderLines, actor);
 
           log.info(
               "Placed online order id={} orgId={} number={} customerId={} grandTotal={} lines={}",

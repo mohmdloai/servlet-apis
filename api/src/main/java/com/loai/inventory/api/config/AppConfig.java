@@ -7,6 +7,7 @@ import com.loai.inventory.common.security.JwtUtil;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
+import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
@@ -15,6 +16,7 @@ import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
+import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
@@ -24,6 +26,7 @@ import com.loai.inventory.service.CustomerService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.ProductService;
+import com.loai.inventory.service.ReservationService;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
@@ -65,14 +68,16 @@ public class AppConfig {
   public final UserRepositoryFactory userRepositoryFactory;
   public final OrgRepositoryFactory orgRepositoryFactory;
   public final SalesOrderRepositoryFactory salesOrderRepositoryFactory;
+  public final InventoryReservationRepositoryFactory inventoryReservationRepositoryFactory;
 
-  // Services 
+  // Services
   public final RefreshTokenStore refreshTokenStore;
   public final AuthService authService;
   public final OrgService orgService;
   public final ProductService productService;
   public final CustomerService customerService;
   public final InventoryService inventoryService;
+  public final ReservationService reservationService;
   public final SalesOrderService salesOrderService;
 
   public AppConfig() {
@@ -102,6 +107,7 @@ public class AppConfig {
     this.userRepositoryFactory = new UserRepositoryFactoryImpl();
     this.orgRepositoryFactory = new OrgRepositoryFactoryImpl();
     this.salesOrderRepositoryFactory = new SalesOrderRepositoryFactoryImpl();
+    this.inventoryReservationRepositoryFactory = new InventoryReservationRepositoryFactoryImpl();
 
     this.refreshTokenStore = new RefreshTokenStore(jedisPool);
     this.authService = new AuthService(userRepository, refreshTokenStore, jwtUtil);
@@ -110,7 +116,13 @@ public class AppConfig {
     this.customerService = new CustomerService(dsl, customerRepositoryFactory);
     this.inventoryService =
         new InventoryService(dsl, inventoryRepositoryFactory, inventoryLogRepositoryFactory);
-    this.salesOrderService = new SalesOrderService(dsl, salesOrderRepositoryFactory);
+    this.reservationService =
+        new ReservationService(
+            inventoryRepositoryFactory,
+            inventoryReservationRepositoryFactory,
+            inventoryLogRepositoryFactory);
+    this.salesOrderService =
+        new SalesOrderService(dsl, salesOrderRepositoryFactory, reservationService);
     log.info("Application context ready.");
   }
 
