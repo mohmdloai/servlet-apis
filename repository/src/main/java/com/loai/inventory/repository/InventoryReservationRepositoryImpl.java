@@ -7,7 +7,9 @@ import com.loai.inventory.domain.model.InventoryReservation;
 import com.loai.inventory.domain.model.ReservationStatus;
 import com.loai.inventory.domain.repository.InventoryReservationRepository;
 import com.loai.inventory.repository.generated.tables.records.InventoryReservationRecord;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -57,6 +59,48 @@ public final class InventoryReservationRepositoryImpl implements InventoryReserv
         .where(SALES_ORDER_LINE.SALES_ORDER_ID.eq(salesOrderId))
         .fetchInto(INVENTORY_RESERVATION)
         .map(this::toReservation);
+  }
+
+  @Override
+  public List<InventoryReservation> findActiveByOrderId(UUID orderId) {
+    // Reservations reference sales_order_line, not the order — join through the line. ORDER BY
+    // product_id ASC matches the inventory FOR UPDATE lock order for deadlock safety.
+    return dsl.select(INVENTORY_RESERVATION.fields())
+        .from(INVENTORY_RESERVATION)
+        .join(SALES_ORDER_LINE)
+        .on(SALES_ORDER_LINE.ID.eq(INVENTORY_RESERVATION.SALES_ORDER_LINE_ID))
+        .where(
+            SALES_ORDER_LINE
+                .SALES_ORDER_ID
+                .eq(orderId)
+                .and(
+                    INVENTORY_RESERVATION.STATUS.eq(
+                        com.loai.inventory.repository.generated.enums.ReservationStatus.ACTIVE)))
+        .orderBy(INVENTORY_RESERVATION.PRODUCT_ID.asc())
+        .fetchInto(INVENTORY_RESERVATION)
+        .map(this::toReservation);
+  }
+
+  @Override
+  public int markReleased(Collection<UUID> ids, String reason, OffsetDateTime now) {
+    if (ids == null || ids.isEmpty()) {
+      return 0;
+    }
+    // Filter on status='ACTIVE' so a concurrently-CONSUMED row is never re-released (Race C).
+    return dsl.update(INVENTORY_RESERVATION)
+        .set(
+            INVENTORY_RESERVATION.STATUS,
+            com.loai.inventory.repository.generated.enums.ReservationStatus.RELEASED)
+        .set(INVENTORY_RESERVATION.RELEASED_AT, now)
+        .set(INVENTORY_RESERVATION.RELEASED_REASON, reason)
+        .where(
+            INVENTORY_RESERVATION
+                .ID
+                .in(ids)
+                .and(
+                    INVENTORY_RESERVATION.STATUS.eq(
+                        com.loai.inventory.repository.generated.enums.ReservationStatus.ACTIVE)))
+        .execute();
   }
 
   private InventoryReservation toReservation(InventoryReservationRecord r) {

@@ -15,6 +15,7 @@ import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.repository.generated.tables.records.CustomerRecord;
 import com.loai.inventory.repository.generated.tables.records.SalesOrderLineRecord;
 import com.loai.inventory.repository.generated.tables.records.SalesOrderRecord;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -210,6 +211,40 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
         order.getOrderNumber(),
         order.getStatus(),
         lines.size());
+  }
+
+  @Override
+  public List<UUID> findExpiredPendingIds(int limit) {
+    // IDs only; index-ordered scan on idx_so_pending_global (expires_at WHERE PENDING_PAYMENT).
+    // Read-only — runs on the caller's autocommit connection, no surrounding transaction.
+    return dsl.select(SALES_ORDER.ID)
+        .from(SALES_ORDER)
+        .where(
+            SALES_ORDER
+                .STATUS
+                .eq(com.loai.inventory.repository.generated.enums.OrderStatus.PENDING_PAYMENT)
+                .and(SALES_ORDER.EXPIRES_AT.lt(DSL.currentOffsetDateTime())))
+        .orderBy(SALES_ORDER.EXPIRES_AT.asc())
+        .limit(limit)
+        .fetchInto(UUID.class);
+  }
+
+  @Override
+  public int markExpiredIfPending(UUID orderId, OffsetDateTime now) {
+    // The WHERE status='PENDING_PAYMENT' clause IS the concurrency guard — atomic, DB-enforced.
+    // 0 rows ⇒ a sibling sweeper or a payment already moved the order off PENDING_PAYMENT.
+    return dsl.update(SALES_ORDER)
+        .set(SALES_ORDER.STATUS, com.loai.inventory.repository.generated.enums.OrderStatus.EXPIRED)
+        .set(SALES_ORDER.EXPIRED_AT, now)
+        .set(SALES_ORDER.UPDATED_AT, now)
+        .where(
+            SALES_ORDER
+                .ID
+                .eq(orderId)
+                .and(
+                    SALES_ORDER.STATUS.eq(
+                        com.loai.inventory.repository.generated.enums.OrderStatus.PENDING_PAYMENT)))
+        .execute();
   }
 
   // Mapping
