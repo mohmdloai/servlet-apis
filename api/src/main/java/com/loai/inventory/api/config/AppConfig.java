@@ -1,6 +1,7 @@
 package com.loai.inventory.api.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.loai.inventory.api.job.OrderTtlSweeperJob;
 import com.loai.inventory.common.DataSourceFactory;
 import com.loai.inventory.common.RedisFactory;
 import com.loai.inventory.common.security.JwtUtil;
@@ -24,6 +25,7 @@ import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CustomerService;
 import com.loai.inventory.service.InventoryService;
+import com.loai.inventory.service.OrderExpiryService;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.ProductService;
 import com.loai.inventory.service.ReservationService;
@@ -32,6 +34,11 @@ import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.zaxxer.hikari.HikariDataSource;
 import org.flywaydb.core.Flyway;
+import org.jobrunr.configuration.JobRunr;
+import org.jobrunr.scheduling.JobScheduler;
+import org.jobrunr.server.JobActivator;
+import org.jobrunr.storage.StorageProviderUtils.DatabaseOptions;
+import org.jobrunr.storage.sql.common.SqlStorageProviderFactory;
 import org.jooq.DSLContext;
 import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
@@ -79,6 +86,11 @@ public class AppConfig {
   public final InventoryService inventoryService;
   public final ReservationService reservationService;
   public final SalesOrderService salesOrderService;
+  public final OrderExpiryService orderExpiryService;
+
+  // Order-TTL sweeper job + its JobRunr lifecycle flag.
+  public final OrderTtlSweeperJob orderTtlSweeperJob;
+  private final boolean jobRunrStarted;
 
   public AppConfig() {
     log.info("Initialising application context...");
@@ -123,13 +135,78 @@ public class AppConfig {
             inventoryLogRepositoryFactory);
     this.salesOrderService =
         new SalesOrderService(dsl, salesOrderRepositoryFactory, reservationService);
+    this.orderExpiryService =
+        new OrderExpiryService(
+            dsl,
+            salesOrderRepositoryFactory,
+            inventoryRepositoryFactory,
+            inventoryReservationRepositoryFactory,
+            inventoryLogRepositoryFactory);
+
+    int batchLimit = (int) parseLong(System.getenv("ORDER_SWEEPER_BATCH_LIMIT"), 200L);
+    this.orderTtlSweeperJob = new OrderTtlSweeperJob(orderExpiryService, batchLimit);
+
+    // The background scheduler is gated so tests (and any deployment that wants to drive expiry
+    // only through POST /api/admin/sweep) can keep expiry deterministic. Default: enabled.
+    boolean enableSweeper =
+        !"false".equalsIgnoreCase(System.getenv("ORDER_SWEEPER_BACKGROUND_ENABLED"));
+    this.jobRunrStarted = enableSweeper && startSweeperScheduler();
+
     log.info("Application context ready.");
+  }
+
+  /**
+   * Configure JobRunr against the shared datasource ({@link DatabaseOptions#SKIP_CREATE} — the
+   * jobrunr_* tables are owned by Flyway V29, not auto-created), start its {@code
+   * BackgroundJobServer}, and register the recurring {@code order-ttl-sweeper}. The custom {@link
+   * JobActivator} hands JobRunr our pre-wired {@link OrderTtlSweeperJob} so it keeps its injected
+   * service. Returns {@code true} if the scheduler started.
+   */
+  private boolean startSweeperScheduler() {
+    String cron = getenvOrDefault("ORDER_SWEEPER_INTERVAL", "*/30 * * * * *");
+    JobActivator activator =
+        new JobActivator() {
+          @Override
+          public <T> T activateJob(Class<T> type) {
+            if (type.isInstance(orderTtlSweeperJob)) {
+              return type.cast(orderTtlSweeperJob);
+            }
+            throw new IllegalArgumentException("No JobRunr bean for " + type.getName());
+          }
+        };
+
+    JobScheduler scheduler =
+        JobRunr.configure()
+            .useJobActivator(activator)
+            .useStorageProvider(
+                SqlStorageProviderFactory.using(dataSource, null, DatabaseOptions.SKIP_CREATE))
+            .useBackgroundJobServer()
+            .initialize()
+            .getJobScheduler();
+
+    scheduler.<OrderTtlSweeperJob>scheduleRecurrently(
+        "order-ttl-sweeper", cron, OrderTtlSweeperJob::run);
+    log.info("Order-TTL sweeper scheduled (cron='{}')", cron);
+    return true;
   }
 
   public void shutdown() {
     log.info("Shutting down application context...");
+    // Stop JobRunr BEFORE the connection pool closes — it holds DB connections for its leases.
+    if (jobRunrStarted) {
+      try {
+        JobRunr.destroy();
+      } catch (RuntimeException e) {
+        log.warn("Error stopping JobRunr scheduler", e);
+      }
+    }
     if (jedisPool != null) jedisPool.close();
     if (dataSource != null) dataSource.close();
+  }
+
+  private static String getenvOrDefault(String key, String defaultValue) {
+    String v = System.getenv(key);
+    return (v == null || v.isBlank()) ? defaultValue : v;
   }
 
   private void runMigrations() {

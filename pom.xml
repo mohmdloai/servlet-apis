@@ -27,6 +27,8 @@
         <jedis.version>5.1.0</jedis.version>
         <jjwt.version>0.12.6</jjwt.version>
         <jbcrypt.version>0.4</jbcrypt.version>
+        <!-- Pinned: the V29 JobRunr DDL is generated from this exact version. Bump in lockstep. -->
+        <jobrunr.version>7.2.2</jobrunr.version>
 
         <!-- DB connection – used by Flyway & jOOQ Maven plugins.
              Keep in sync with common/src/main/resources/db.properties -->
@@ -144,6 +146,12 @@
         <groupId>org.mindrot</groupId>
         <artifactId>jbcrypt</artifactId>
         <version>${jbcrypt.version}</version>
+      </dependency>
+      <!-- Background scheduler for the order-TTL sweeper -->
+      <dependency>
+        <groupId>org.jobrunr</groupId>
+        <artifactId>jobrunr</artifactId>
+        <version>${jobrunr.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

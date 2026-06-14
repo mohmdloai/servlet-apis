@@ -4,6 +4,7 @@ import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
 import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -56,4 +57,26 @@ public interface SalesOrderRepository {
 
   /** Insert the order + its lines in one go. Both rows are written inside the caller's txn. */
   void insert(SalesOrder order, List<SalesOrderLine> lines);
+
+  /**
+   * Find the ids of orders eligible for TTL expiry — {@code status='PENDING_PAYMENT' AND expires_at
+   * < now()} — across all orgs, ordered by {@code expires_at ASC}, capped at {@code limit}. Hits
+   * the V29 partial index {@code idx_so_pending_global} for an index-ordered scan with no sort
+   * step.
+   *
+   * <p>Returns <b>ids only</b>, never entities: the sweeper re-reads each order under lock anyway,
+   * and any richer snapshot would be stale the moment it's read (a payment could land in the same
+   * millisecond). This is a read-only projection — the caller runs it on an autocommit connection,
+   * never inside a transaction.
+   */
+  List<UUID> findExpiredPendingIds(int limit);
+
+  /**
+   * Atomically flip a single order {@code PENDING_PAYMENT → EXPIRED}, stamping {@code expired_at}
+   * and {@code updated_at} with {@code now}. The {@code WHERE status='PENDING_PAYMENT'} clause is
+   * the concurrency guard: returns the affected row count — {@code 1} if this call won the flip,
+   * {@code 0} if a sibling/payment beat it (the order is no longer PENDING_PAYMENT). No exception
+   * in the 0 case — losing the race is normal.
+   */
+  int markExpiredIfPending(UUID orderId, OffsetDateTime now);
 }

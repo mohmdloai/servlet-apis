@@ -1,5 +1,6 @@
 package com.loai.inventory.domain.model;
 
+import com.loai.inventory.common.exception.InvalidReservationTransitionException;
 import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
@@ -105,6 +106,26 @@ public final class InventoryReservation {
     this.consumedAt = consumedAt;
     this.releasedAt = releasedAt;
     this.releasedReason = releasedReason;
+  }
+
+  /**
+   * Release an ACTIVE reservation — the cancel/expire path. Guards the {@code ACTIVE} precondition
+   * (a reservation already CONSUMED or RELEASED must not be touched), then records the release.
+   *
+   * @param reason free-text release reason ({@code 'EXPIRED' | 'CANCELLED' | 'ADMIN'}); the expiry
+   *     slice only ever passes {@code "EXPIRED"}.
+   * @param now release instant; written to {@code released_at}.
+   */
+  public void release(String reason, OffsetDateTime now) {
+    if (this.status != ReservationStatus.ACTIVE) {
+      throw new InvalidReservationTransitionException(
+          "cannot release reservation " + id + " in status " + status);
+    }
+    Objects.requireNonNull(reason, "reason");
+    Objects.requireNonNull(now, "now");
+    this.status = ReservationStatus.RELEASED;
+    this.releasedAt = now;
+    this.releasedReason = reason;
   }
 
   public UUID getId() {

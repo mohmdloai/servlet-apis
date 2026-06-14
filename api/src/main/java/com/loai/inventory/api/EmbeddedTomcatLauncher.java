@@ -4,6 +4,7 @@ import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.filter.CorsFilter;
 import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.api.filter.RateLimitFilter;
+import com.loai.inventory.api.servlet.AdminSweepServlet;
 import com.loai.inventory.api.servlet.AuthServlet;
 import com.loai.inventory.api.servlet.OrgServlet;
 import java.io.File;
@@ -42,6 +43,8 @@ public class EmbeddedTomcatLauncher {
       ctx.addServletMappingDecoded("/api/auth/*", "authServlet");
       Tomcat.addServlet(ctx, "orgServlet", new OrgServlet());
       ctx.addServletMappingDecoded("/api/orgs/*", "orgServlet");
+      Tomcat.addServlet(ctx, "adminSweepServlet", new AdminSweepServlet());
+      ctx.addServletMappingDecoded("/api/admin/*", "adminSweepServlet");
 
       Runtime.getRuntime().addShutdownHook(new Thread(config::shutdown));
 
