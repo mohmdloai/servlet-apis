@@ -49,6 +49,51 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   }
 
   @Override
+  public Optional<SalesOrder> findByIdForUpdate(UUID orgId, UUID id) {
+    return dsl.selectFrom(SALES_ORDER)
+        .where(SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.ID.eq(id)))
+        .forUpdate()
+        .fetchOptional()
+        .map(this::toSalesOrder);
+  }
+
+  @Override
+  public Optional<SalesOrder> findByOrderNumberForUpdate(UUID orgId, String orderNumber) {
+    if (orderNumber == null || orderNumber.isBlank()) {
+      return Optional.empty();
+    }
+    return dsl.selectFrom(SALES_ORDER)
+        .where(SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.ORDER_NUMBER.eq(orderNumber)))
+        .forUpdate()
+        .fetchOptional()
+        .map(this::toSalesOrder);
+  }
+
+  @Override
+  public Optional<SalesOrder> findByOrderNumber(UUID orgId, String orderNumber) {
+    if (orderNumber == null || orderNumber.isBlank()) {
+      return Optional.empty();
+    }
+    return dsl.selectFrom(SALES_ORDER)
+        .where(SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.ORDER_NUMBER.eq(orderNumber)))
+        .fetchOptional()
+        .map(this::toSalesOrder);
+  }
+
+  @Override
+  public void updatePaymentState(SalesOrder order) {
+    dsl.update(SALES_ORDER)
+        .set(
+            SALES_ORDER.STATUS,
+            com.loai.inventory.repository.generated.enums.OrderStatus.valueOf(
+                order.getStatus().name()))
+        .set(SALES_ORDER.PREPAID_AMOUNT, order.getPrepaidAmount())
+        .set(SALES_ORDER.UPDATED_AT, order.getUpdatedAt())
+        .where(SALES_ORDER.ID.eq(order.getId()).and(SALES_ORDER.ORG_ID.eq(order.getOrgId())))
+        .execute();
+  }
+
+  @Override
   public Optional<SalesOrder> findByIdempotencyKey(UUID orgId, String idempotencyKey) {
     if (idempotencyKey == null || idempotencyKey.isBlank()) {
       return Optional.empty();

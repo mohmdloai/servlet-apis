@@ -27,6 +27,27 @@ public interface SalesOrderRepository {
 
   Optional<SalesOrder> findById(UUID orgId, UUID id);
 
+  /**
+   * Load an order by id with a row-level write lock ({@code SELECT … FOR UPDATE}). Used by payment
+   * reconciliation to serialize against the TTL sweeper's {@code markExpiredIfPending} — whichever
+   * transaction grabs the lock first wins, and the loser observes the committed status.
+   */
+  Optional<SalesOrder> findByIdForUpdate(UUID orgId, UUID id);
+
+  /** Same as {@link #findByIdForUpdate} but keyed by the human-readable {@code order_number}. */
+  Optional<SalesOrder> findByOrderNumberForUpdate(UUID orgId, String orderNumber);
+
+  /**
+   * Non-locking read by {@code order_number} (e.g. for assembling an idempotent-replay response).
+   */
+  Optional<SalesOrder> findByOrderNumber(UUID orgId, String orderNumber);
+
+  /**
+   * Persist the payment-related mutable state of an order: {@code status}, {@code prepaid_amount},
+   * {@code updated_at}. Scoped by {@code (org_id, id)}.
+   */
+  void updatePaymentState(SalesOrder order);
+
   /** Idempotency short-circuit: returns the prior order if this key has already been used. */
   Optional<SalesOrder> findByIdempotencyKey(UUID orgId, String idempotencyKey);
 
