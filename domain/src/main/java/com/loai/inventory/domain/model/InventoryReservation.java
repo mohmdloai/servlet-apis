@@ -109,6 +109,24 @@ public final class InventoryReservation {
   }
 
   /**
+   * Consume an ACTIVE reservation — the fulfillment SHIPPED path. Guards the {@code ACTIVE}
+   * precondition (a reservation already CONSUMED or RELEASED must not be touched), then records the
+   * consumption. The caller decrements {@code inventory.reserved} by this reservation's quantity in
+   * the same transaction.
+   *
+   * @param now consumption instant; written to {@code consumed_at}.
+   */
+  public void consume(OffsetDateTime now) {
+    if (this.status != ReservationStatus.ACTIVE) {
+      throw new InvalidReservationTransitionException(
+          "cannot consume reservation " + id + " in status " + status);
+    }
+    Objects.requireNonNull(now, "now");
+    this.status = ReservationStatus.CONSUMED;
+    this.consumedAt = now;
+  }
+
+  /**
    * Release an ACTIVE reservation — the cancel/expire path. Guards the {@code ACTIVE} precondition
    * (a reservation already CONSUMED or RELEASED must not be touched), then records the release.
    *

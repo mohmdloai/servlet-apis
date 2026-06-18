@@ -82,6 +82,18 @@ public final class InventoryReservationRepositoryImpl implements InventoryReserv
   }
 
   @Override
+  public List<InventoryReservation> findByIds(Collection<UUID> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    return dsl.selectFrom(INVENTORY_RESERVATION)
+        .where(INVENTORY_RESERVATION.ID.in(ids))
+        .orderBy(INVENTORY_RESERVATION.PRODUCT_ID.asc())
+        .fetch()
+        .map(this::toReservation);
+  }
+
+  @Override
   public int markReleased(Collection<UUID> ids, String reason, OffsetDateTime now) {
     if (ids == null || ids.isEmpty()) {
       return 0;
@@ -93,6 +105,27 @@ public final class InventoryReservationRepositoryImpl implements InventoryReserv
             com.loai.inventory.repository.generated.enums.ReservationStatus.RELEASED)
         .set(INVENTORY_RESERVATION.RELEASED_AT, now)
         .set(INVENTORY_RESERVATION.RELEASED_REASON, reason)
+        .where(
+            INVENTORY_RESERVATION
+                .ID
+                .in(ids)
+                .and(
+                    INVENTORY_RESERVATION.STATUS.eq(
+                        com.loai.inventory.repository.generated.enums.ReservationStatus.ACTIVE)))
+        .execute();
+  }
+
+  @Override
+  public int markConsumed(Collection<UUID> ids, OffsetDateTime now) {
+    if (ids == null || ids.isEmpty()) {
+      return 0;
+    }
+    // Filter on status='ACTIVE' so a concurrently-RELEASED row is never consumed.
+    return dsl.update(INVENTORY_RESERVATION)
+        .set(
+            INVENTORY_RESERVATION.STATUS,
+            com.loai.inventory.repository.generated.enums.ReservationStatus.CONSUMED)
+        .set(INVENTORY_RESERVATION.CONSUMED_AT, now)
         .where(
             INVENTORY_RESERVATION
                 .ID

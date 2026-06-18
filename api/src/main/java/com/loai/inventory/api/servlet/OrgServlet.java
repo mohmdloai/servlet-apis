@@ -5,6 +5,7 @@ import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
+import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
 import com.loai.inventory.api.servlet.handler.InventoryHandler;
 import com.loai.inventory.api.servlet.handler.OrgHandler;
 import com.loai.inventory.api.servlet.handler.OrgResourceHandler;
@@ -56,7 +57,8 @@ public class OrgServlet extends HttpServlet {
             Map.entry("sales-orders", new SalesOrderHandler(config.salesOrderService, mapper)),
             Map.entry(
                 "payment-transactions",
-                new PaymentTransactionHandler(config.paymentTransactionService, mapper)));
+                new PaymentTransactionHandler(config.paymentTransactionService, mapper)),
+            Map.entry("fulfillments", new FulfillmentHandler(config.fulfillmentService, mapper)));
   }
 
   @Override

@@ -6,6 +6,7 @@ import com.loai.inventory.common.DataSourceFactory;
 import com.loai.inventory.common.RedisFactory;
 import com.loai.inventory.common.security.JwtUtil;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
@@ -17,6 +18,7 @@ import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
+import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
@@ -28,6 +30,7 @@ import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CustomerService;
+import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.OrderExpiryService;
 import com.loai.inventory.service.OrgService;
@@ -84,6 +87,7 @@ public class AppConfig {
   public final InventoryReservationRepositoryFactory inventoryReservationRepositoryFactory;
   public final PaymentTransactionRepositoryFactory paymentTransactionRepositoryFactory;
   public final PaymentRepositoryFactory paymentRepositoryFactory;
+  public final FulfillmentRepositoryFactory fulfillmentRepositoryFactory;
 
   // Services
   public final RefreshTokenStore refreshTokenStore;
@@ -97,6 +101,7 @@ public class AppConfig {
   public final OrderExpiryService orderExpiryService;
   public final PaymentService paymentService;
   public final PaymentTransactionService paymentTransactionService;
+  public final FulfillmentService fulfillmentService;
 
   // Order-TTL sweeper job + its JobRunr lifecycle flag.
   public final OrderTtlSweeperJob orderTtlSweeperJob;
@@ -132,6 +137,7 @@ public class AppConfig {
     this.inventoryReservationRepositoryFactory = new InventoryReservationRepositoryFactoryImpl();
     this.paymentTransactionRepositoryFactory = new PaymentTransactionRepositoryFactoryImpl();
     this.paymentRepositoryFactory = new PaymentRepositoryFactoryImpl();
+    this.fulfillmentRepositoryFactory = new FulfillmentRepositoryFactoryImpl();
 
     this.refreshTokenStore = new RefreshTokenStore(jedisPool);
     this.authService = new AuthService(userRepository, refreshTokenStore, jwtUtil);
@@ -158,6 +164,14 @@ public class AppConfig {
     this.paymentTransactionService =
         new PaymentTransactionService(
             dsl, paymentTransactionRepositoryFactory, paymentRepositoryFactory, paymentService);
+    this.fulfillmentService =
+        new FulfillmentService(
+            dsl,
+            fulfillmentRepositoryFactory,
+            salesOrderRepositoryFactory,
+            inventoryRepositoryFactory,
+            inventoryReservationRepositoryFactory,
+            inventoryLogRepositoryFactory);
 
     int batchLimit = (int) parseLong(System.getenv("ORDER_SWEEPER_BATCH_LIMIT"), 200L);
     this.orderTtlSweeperJob = new OrderTtlSweeperJob(orderExpiryService, batchLimit);
