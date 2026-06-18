@@ -166,9 +166,20 @@ class OrderExpiryServiceIT extends ExpiryIntegrationTestBase {
             }
 
             @Override
+            public List<com.loai.inventory.domain.model.InventoryReservation> findByIds(
+                java.util.Collection<UUID> ids) {
+              return real.findByIds(ids);
+            }
+
+            @Override
             public int markReleased(
                 java.util.Collection<UUID> ids, String reason, OffsetDateTime now) {
               return real.markReleased(ids, reason, now);
+            }
+
+            @Override
+            public int markConsumed(java.util.Collection<UUID> ids, OffsetDateTime now) {
+              return real.markConsumed(ids, now);
             }
           };
         };
