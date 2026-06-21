@@ -129,6 +129,40 @@ public class Payment {
     this.updatedAt = updatedAt;
   }
 
+  /**
+   * Apply {@code amount} of this payment to an invoice. Decrements {@code unallocatedAmount} and
+   * advances {@code status}: RECEIVED → PARTIALLY_ALLOCATED while a remainder is left, → ALLOCATED
+   * once fully consumed. Rejects over-allocation and payments whose money is gone (REFUNDED /
+   * DISPUTED). Caller persists the resulting state and inserts the matching PaymentAllocation row
+   * in the same transaction.
+   */
+  public void allocate(BigDecimal amount, OffsetDateTime now) {
+    Objects.requireNonNull(amount, "amount required");
+    Objects.requireNonNull(now, "now required");
+    if (status == PaymentStatus.REFUNDED || status == PaymentStatus.DISPUTED) {
+      throw new IllegalStateException("cannot allocate a " + status + " payment " + id);
+    }
+    if (amount.signum() <= 0) {
+      throw new IllegalArgumentException("allocation amount must be > 0");
+    }
+    if (amount.compareTo(unallocatedAmount) > 0) {
+      throw new IllegalStateException(
+          "over-allocation of payment "
+              + id
+              + ": "
+              + amount
+              + " > unallocated "
+              + unallocatedAmount);
+    }
+    this.unallocatedAmount =
+        unallocatedAmount.subtract(amount).setScale(MONEY_SCALE, MONEY_ROUNDING);
+    this.status =
+        unallocatedAmount.signum() == 0
+            ? PaymentStatus.ALLOCATED
+            : PaymentStatus.PARTIALLY_ALLOCATED;
+    this.updatedAt = now;
+  }
+
   public UUID getId() {
     return id;
   }

@@ -1,8 +1,10 @@
 package com.loai.inventory.api.mapper;
 
 import com.loai.inventory.api.dto.CreateFulfillmentRequest;
+import com.loai.inventory.api.dto.DeliverFulfillmentResponse;
 import com.loai.inventory.api.dto.FulfillmentResponse;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.service.FulfillmentService.DeliveredView;
 import com.loai.inventory.service.FulfillmentService.FulfillmentView;
 import com.loai.inventory.service.FulfillmentService.LineInput;
 import java.util.List;
@@ -23,5 +25,9 @@ public final class FulfillmentMapper {
 
   public static FulfillmentResponse toResponse(FulfillmentView view) {
     return FulfillmentResponse.from(view.fulfillment(), view.lines());
+  }
+
+  public static DeliverFulfillmentResponse toDeliverResponse(DeliveredView view) {
+    return DeliverFulfillmentResponse.from(view);
   }
 }

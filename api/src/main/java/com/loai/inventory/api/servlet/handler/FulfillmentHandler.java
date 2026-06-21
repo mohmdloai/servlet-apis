@@ -10,6 +10,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.FulfillmentService;
+import com.loai.inventory.service.FulfillmentService.DeliveredView;
 import com.loai.inventory.service.FulfillmentService.FulfillmentView;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -24,10 +25,12 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li>{@code POST /fulfillments} — create a PENDING fulfillment from a paid order's lines (201)
  *   <li>{@code POST /fulfillments/{id}/ship} — mark it SHIPPED, decrementing stock (200)
+ *   <li>{@code POST /fulfillments/{id}/deliver} — mark it DELIVERED: issue the SalesInvoice and
+ *       auto-allocate prepayment (200)
  * </ul>
  *
- * <p>Both require STAFF in the org (system ADMIN bypasses); shipping is the most consequential
- * action in the outbound flow.
+ * <p>All require STAFF in the org (system ADMIN bypasses); shipping and delivery are the most
+ * consequential actions in the outbound flow.
  */
 public class FulfillmentHandler implements OrgResourceHandler {
 
@@ -64,6 +67,10 @@ public class FulfillmentHandler implements OrgResourceHandler {
       String[] parts = tail.split("/");
       if (parts.length == 2 && "ship".equals(parts[1])) {
         doShip(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
+      if (parts.length == 2 && "deliver".equals(parts[1])) {
+        doDeliver(req, resp, orgId, parseId(parts[0]));
         return;
       }
       throw new ValidationException("Unknown route: POST /fulfillments/" + tail);
@@ -104,6 +111,15 @@ public class FulfillmentHandler implements OrgResourceHandler {
     FulfillmentView view = service.ship(orgId, id, sc.toActorContext());
 
     writeJson(resp, 200, FulfillmentMapper.toResponse(view));
+  }
+
+  private void doDeliver(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+
+    DeliveredView view = service.markDelivered(orgId, id, sc.toActorContext());
+
+    writeJson(resp, 200, FulfillmentMapper.toDeliverResponse(view));
   }
 
   private static String normalize(String remainingPath) {

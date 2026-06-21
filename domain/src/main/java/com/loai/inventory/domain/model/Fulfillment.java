@@ -142,6 +142,22 @@ public final class Fulfillment {
     this.updatedAt = now;
   }
 
+  /**
+   * Mark the fulfillment DELIVERED. Guards the SHIPPED precondition — delivery is the online-flow
+   * invoice-issuance trigger and must fire exactly once. The caller issues the SalesInvoice and
+   * auto-allocates prepayment in the same transaction. No stock effect: that happened at SHIPPED.
+   */
+  public void markDelivered(OffsetDateTime now) {
+    if (this.status != FulfillmentStatus.SHIPPED) {
+      throw new InvalidOrderTransitionException(
+          "cannot deliver fulfillment " + id + " in status " + status + "; expected SHIPPED");
+    }
+    Objects.requireNonNull(now, "now required");
+    this.status = FulfillmentStatus.DELIVERED;
+    this.deliveredAt = now;
+    this.updatedAt = now;
+  }
+
   public UUID getId() {
     return id;
   }

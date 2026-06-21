@@ -40,4 +40,12 @@ public interface FulfillmentRepository {
    * nothing fulfilled yet.
    */
   Map<UUID, Integer> sumFulfilledQtyByOrderLine(UUID salesOrderId);
+
+  /**
+   * Sum of delivered quantity per {@code sales_order_line_id} across all <b>DELIVERED</b>
+   * fulfillments of {@code salesOrderId}. Drives the order's FULFILLED roll-up at delivery: the
+   * order is FULFILLED only when every line's delivered quantity equals its ordered quantity. Lines
+   * absent from the map have nothing delivered yet.
+   */
+  Map<UUID, Integer> sumDeliveredQtyByOrderLine(UUID salesOrderId);
 }

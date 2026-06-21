@@ -94,6 +94,20 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   }
 
   @Override
+  public void updateFulfillmentState(SalesOrder order) {
+    dsl.update(SALES_ORDER)
+        .set(
+            SALES_ORDER.STATUS,
+            com.loai.inventory.repository.generated.enums.OrderStatus.valueOf(
+                order.getStatus().name()))
+        .set(SALES_ORDER.FULFILLED_AT, order.getFulfilledAt())
+        .set(SALES_ORDER.CLOSED_AT, order.getClosedAt())
+        .set(SALES_ORDER.UPDATED_AT, order.getUpdatedAt())
+        .where(SALES_ORDER.ID.eq(order.getId()).and(SALES_ORDER.ORG_ID.eq(order.getOrgId())))
+        .execute();
+  }
+
+  @Override
   public Optional<SalesOrder> findByIdempotencyKey(UUID orgId, String idempotencyKey) {
     if (idempotencyKey == null || idempotencyKey.isBlank()) {
       return Optional.empty();
