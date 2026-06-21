@@ -6,6 +6,7 @@ import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentStatus;
 import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.repository.generated.tables.records.PaymentRecord;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -55,6 +56,39 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
             PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.PAYMENT_TRANSACTION_ID.eq(paymentTransactionId)))
         .fetchOptional()
         .map(this::toPayment);
+  }
+
+  @Override
+  public List<Payment> findUnallocatedByOrderForUpdate(UUID orgId, UUID salesOrderId) {
+    return dsl.selectFrom(PAYMENT)
+        .where(
+            PAYMENT
+                .ORG_ID
+                .eq(orgId)
+                .and(PAYMENT.SALES_ORDER_ID.eq(salesOrderId))
+                .and(PAYMENT.UNALLOCATED_AMOUNT.gt(java.math.BigDecimal.ZERO))
+                .and(
+                    PAYMENT.STATUS.notIn(
+                        com.loai.inventory.repository.generated.enums.PaymentStatus.REFUNDED,
+                        com.loai.inventory.repository.generated.enums.PaymentStatus.DISPUTED)))
+        // id is the stable tiebreaker when two payments share a received_at millisecond.
+        .orderBy(PAYMENT.RECEIVED_AT.asc(), PAYMENT.ID.asc())
+        .forUpdate()
+        .fetch()
+        .map(this::toPayment);
+  }
+
+  @Override
+  public void updateAllocationState(Payment payment) {
+    dsl.update(PAYMENT)
+        .set(PAYMENT.UNALLOCATED_AMOUNT, payment.getUnallocatedAmount())
+        .set(
+            PAYMENT.STATUS,
+            com.loai.inventory.repository.generated.enums.PaymentStatus.valueOf(
+                payment.getStatus().name()))
+        .set(PAYMENT.UPDATED_AT, payment.getUpdatedAt())
+        .where(PAYMENT.ID.eq(payment.getId()).and(PAYMENT.ORG_ID.eq(payment.getOrgId())))
+        .execute();
   }
 
   private Payment toPayment(PaymentRecord r) {

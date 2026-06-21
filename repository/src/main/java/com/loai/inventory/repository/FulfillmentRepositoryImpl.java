@@ -139,6 +139,29 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
     return out;
   }
 
+  @Override
+  public Map<UUID, Integer> sumDeliveredQtyByOrderLine(UUID salesOrderId) {
+    // Only DELIVERED fulfillments count toward the order's FULFILLED roll-up: SHIPPED-but-not-yet-
+    // delivered lines are still in transit, and CANCELLED ones never shipped.
+    Map<UUID, Integer> out = new HashMap<>();
+    dsl.select(
+            FULFILLMENT_LINE.SALES_ORDER_LINE_ID, org.jooq.impl.DSL.sum(FULFILLMENT_LINE.QUANTITY))
+        .from(FULFILLMENT_LINE)
+        .join(FULFILLMENT)
+        .on(FULFILLMENT.ID.eq(FULFILLMENT_LINE.FULFILLMENT_ID))
+        .where(
+            FULFILLMENT
+                .SALES_ORDER_ID
+                .eq(salesOrderId)
+                .and(
+                    FULFILLMENT.STATUS.eq(
+                        com.loai.inventory.repository.generated.enums.FulfillmentStatus.DELIVERED)))
+        .groupBy(FULFILLMENT_LINE.SALES_ORDER_LINE_ID)
+        .fetch()
+        .forEach(r -> out.put(r.value1(), r.value2() == null ? 0 : r.value2().intValue()));
+    return out;
+  }
+
   private Fulfillment toFulfillment(FulfillmentRecord r) {
     return Fulfillment.rehydrate(
         r.getId(),

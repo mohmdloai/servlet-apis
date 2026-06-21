@@ -11,9 +11,11 @@ import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
+import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
+import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
@@ -23,9 +25,11 @@ import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
+import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
+import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
@@ -88,6 +92,8 @@ public class AppConfig {
   public final PaymentTransactionRepositoryFactory paymentTransactionRepositoryFactory;
   public final PaymentRepositoryFactory paymentRepositoryFactory;
   public final FulfillmentRepositoryFactory fulfillmentRepositoryFactory;
+  public final SalesInvoiceRepositoryFactory salesInvoiceRepositoryFactory;
+  public final PaymentAllocationRepositoryFactory paymentAllocationRepositoryFactory;
 
   // Services
   public final RefreshTokenStore refreshTokenStore;
@@ -138,6 +144,8 @@ public class AppConfig {
     this.paymentTransactionRepositoryFactory = new PaymentTransactionRepositoryFactoryImpl();
     this.paymentRepositoryFactory = new PaymentRepositoryFactoryImpl();
     this.fulfillmentRepositoryFactory = new FulfillmentRepositoryFactoryImpl();
+    this.salesInvoiceRepositoryFactory = new SalesInvoiceRepositoryFactoryImpl();
+    this.paymentAllocationRepositoryFactory = new PaymentAllocationRepositoryFactoryImpl();
 
     this.refreshTokenStore = new RefreshTokenStore(jedisPool);
     this.authService = new AuthService(userRepository, refreshTokenStore, jwtUtil);
@@ -171,7 +179,10 @@ public class AppConfig {
             salesOrderRepositoryFactory,
             inventoryRepositoryFactory,
             inventoryReservationRepositoryFactory,
-            inventoryLogRepositoryFactory);
+            inventoryLogRepositoryFactory,
+            salesInvoiceRepositoryFactory,
+            paymentRepositoryFactory,
+            paymentAllocationRepositoryFactory);
 
     int batchLimit = (int) parseLong(System.getenv("ORDER_SWEEPER_BATCH_LIMIT"), 200L);
     this.orderTtlSweeperJob = new OrderTtlSweeperJob(orderExpiryService, batchLimit);

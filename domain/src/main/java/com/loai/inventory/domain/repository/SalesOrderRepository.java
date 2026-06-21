@@ -48,6 +48,13 @@ public interface SalesOrderRepository {
    */
   void updatePaymentState(SalesOrder order);
 
+  /**
+   * Persist the fulfillment-aggregate lifecycle state of an order: {@code status} plus the {@code
+   * fulfilled_at} / {@code closed_at} timestamps and {@code updated_at}. Used at delivery when the
+   * order rolls up FULFILLING → FULFILLED → CLOSED. Scoped by {@code (org_id, id)}.
+   */
+  void updateFulfillmentState(SalesOrder order);
+
   /** Idempotency short-circuit: returns the prior order if this key has already been used. */
   Optional<SalesOrder> findByIdempotencyKey(UUID orgId, String idempotencyKey);
 
