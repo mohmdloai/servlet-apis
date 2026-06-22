@@ -96,9 +96,10 @@ class FulfillmentShipIT {
             new InventoryRepositoryFactoryImpl(),
             new InventoryReservationRepositoryFactoryImpl(),
             new InventoryLogRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl());
+            new com.loai.inventory.service.InvoiceService(
+                new com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl()));
   }
 
   @AfterAll

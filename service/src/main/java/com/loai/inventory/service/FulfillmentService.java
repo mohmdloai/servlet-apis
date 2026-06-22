@@ -1,6 +1,8 @@
 package com.loai.inventory.service;
 
 import com.loai.inventory.common.exception.ConflictException;
+import com.loai.inventory.common.exception.InsufficientStockException;
+import com.loai.inventory.common.exception.InsufficientStockException.Shortage;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
@@ -10,7 +12,6 @@ import com.loai.inventory.domain.model.FulfillmentLine;
 import com.loai.inventory.domain.model.Inventory;
 import com.loai.inventory.domain.model.InventoryReservation;
 import com.loai.inventory.domain.model.OrderStatus;
-import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
 import com.loai.inventory.domain.model.ReservationStatus;
 import com.loai.inventory.domain.model.SalesInvoice;
@@ -26,15 +27,8 @@ import com.loai.inventory.domain.repository.InventoryRepository;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepository;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
-import com.loai.inventory.domain.repository.PaymentAllocationRepository;
-import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
-import com.loai.inventory.domain.repository.PaymentRepository;
-import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
-import com.loai.inventory.domain.repository.SalesInvoiceRepository;
-import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
-import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -48,10 +42,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Outbound flow: ship and deliver part of a paid order. Slice specs {@code
- * stories/ship_fulfillment.md} and {@code stories/deliver_issue_invoice.md}.
+ * Outbound flow: ship and deliver part of a paid order, plus the in-store direct-DELIVERED move.
+ * Slice specs {@code stories/ship_fulfillment.md}, {@code stories/deliver_issue_invoice.md} and
+ * {@code stories/in_store_sale.md}.
  *
- * <p>Three steps, each its own DB transaction:
+ * <p>Two public transaction entry points ({@link #create}, {@link #ship}, {@link #markDelivered})
+ * own their own DB transaction; {@link #createDelivered} is a collaborator that runs inside a
+ * caller-supplied {@code txDsl} (the in-store checkout txn).
  *
  * <ol>
  *   <li>{@link #create} — build a PENDING {@link Fulfillment} with a subset of the order's lines.
@@ -61,9 +58,10 @@ import org.slf4j.LoggerFactory;
  *       -stock} {@code inventory_log} row, mark the linked reservation CONSUMED, and decrement
  *       {@code inventory.on_hand} and {@code reserved} by the same amount (so {@code available} is
  *       unchanged). The order flips PAID → FULFILLING on its first shipment.
- *   <li>{@link #markDelivered} — SHIPPED → DELIVERED. Issues a {@link SalesInvoice} for the
- *       delivered lines, auto-allocates the order's prepayment FIFO, and rolls the order up to
- *       FULFILLED / CLOSED — the one transaction that ties the outbound flow together.
+ *   <li>{@link #markDelivered} — SHIPPED → DELIVERED. Delegates invoice issuance + prepayment
+ *       allocation to {@link InvoiceService}, then rolls the order up to FULFILLED / CLOSED.
+ *   <li>{@link #createDelivered} — in-store: a fulfillment created directly DELIVERED, decrementing
+ *       {@code stock_qty} on the spot (no reservation to consume).
  * </ol>
  *
  * <p>v1 ships whole lines: each fulfillment line consumes one line's single ACTIVE reservation in
@@ -81,9 +79,7 @@ public final class FulfillmentService {
   private final InventoryRepositoryFactory inventoryRepoFactory;
   private final InventoryReservationRepositoryFactory reservationRepoFactory;
   private final InventoryLogRepositoryFactory inventoryLogRepoFactory;
-  private final SalesInvoiceRepositoryFactory salesInvoiceRepoFactory;
-  private final PaymentRepositoryFactory paymentRepoFactory;
-  private final PaymentAllocationRepositoryFactory paymentAllocationRepoFactory;
+  private final InvoiceService invoiceService;
 
   public FulfillmentService(
       DSLContext rootDsl,
@@ -92,22 +88,21 @@ public final class FulfillmentService {
       InventoryRepositoryFactory inventoryRepoFactory,
       InventoryReservationRepositoryFactory reservationRepoFactory,
       InventoryLogRepositoryFactory inventoryLogRepoFactory,
-      SalesInvoiceRepositoryFactory salesInvoiceRepoFactory,
-      PaymentRepositoryFactory paymentRepoFactory,
-      PaymentAllocationRepositoryFactory paymentAllocationRepoFactory) {
+      InvoiceService invoiceService) {
     this.rootDsl = rootDsl;
     this.fulfillmentRepoFactory = fulfillmentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.inventoryRepoFactory = inventoryRepoFactory;
     this.reservationRepoFactory = reservationRepoFactory;
     this.inventoryLogRepoFactory = inventoryLogRepoFactory;
-    this.salesInvoiceRepoFactory = salesInvoiceRepoFactory;
-    this.paymentRepoFactory = paymentRepoFactory;
-    this.paymentAllocationRepoFactory = paymentAllocationRepoFactory;
+    this.invoiceService = invoiceService;
   }
 
   /** Which order line to ship; quantity is derived from that line's ACTIVE reservation (v1). */
   public record LineInput(UUID salesOrderLineId) {}
+
+  /** A line to fulfill in-store: order line + its product + quantity (no reservation involved). */
+  public record DeliveredLineInput(UUID salesOrderLineId, UUID productId, int quantity) {}
 
   /** Carries a fulfillment + its lines for response mapping. */
   public record FulfillmentView(Fulfillment fulfillment, List<FulfillmentLine> lines) {}
@@ -360,22 +355,12 @@ public final class FulfillmentService {
   }
 
   /**
-   * Mark a SHIPPED fulfillment DELIVERED — the one transaction that ties the outbound flow
-   * together. In a single DB transaction:
+   * Mark a SHIPPED fulfillment DELIVERED — the one transaction that ties the online flow together.
+   * Guards SHIPPED → DELIVERED, then delegates invoice issuance + prepayment auto-allocation to
+   * {@link InvoiceService#issueForFulfillment} and rolls the order up: FULFILLED once every line is
+   * delivered, then CLOSED once all its invoices are PAID.
    *
-   * <ol>
-   *   <li>Fulfillment SHIPPED → DELIVERED.
-   *   <li>A SalesInvoice DRAFT is built mirroring the delivered FulfillmentLines (snapshot prices,
-   *       tax and customer data), then ISSUED with a gapless per-org per-year invoice number.
-   *   <li>The order's prepayment Payment(s) are auto-allocated FIFO (by {@code received_at ASC, id
-   *       ASC}, {@code FOR UPDATE}) up to the invoice's grand total — PaymentAllocation rows
-   *       inserted, payment {@code unallocated_amount}/status and invoice {@code
-   *       paid_amount}/status updated.
-   *   <li>The order rolls up: FULFILLED once every line is delivered, then CLOSED once all its
-   *       invoices are PAID.
-   * </ol>
-   *
-   * The fulfillment and order rows are locked {@code FOR UPDATE}, so a double deliver fails the
+   * <p>The fulfillment and order rows are locked {@code FOR UPDATE}, so a double deliver fails the
    * SHIPPED guard (409) and concurrent deliveries of the same order serialize.
    */
   public DeliveredView markDelivered(UUID orgId, UUID fulfillmentId, ActorContext actor) {
@@ -391,9 +376,6 @@ public final class FulfillmentService {
           DSLContext txDsl = DSL.using(cfg);
           FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
           SalesOrderRepository orderRepo = salesOrderRepoFactory.create(txDsl);
-          SalesInvoiceRepository invoiceRepo = salesInvoiceRepoFactory.create(txDsl);
-          PaymentRepository paymentRepo = paymentRepoFactory.create(txDsl);
-          PaymentAllocationRepository allocationRepo = paymentAllocationRepoFactory.create(txDsl);
 
           Fulfillment fulfillment =
               fulfillmentRepo
@@ -428,119 +410,161 @@ public final class FulfillmentService {
           fulfillment.markDelivered(now);
           fulfillmentRepo.updateStatus(fulfillment);
 
-          // (b) Build + issue the invoice mirroring the delivered lines.
+          // (b) Build the billed-line specs from the delivered fulfillment lines.
           Map<UUID, SalesOrderLine> orderLines = new LinkedHashMap<>();
           for (SalesOrderLine l : orderRepo.findLinesByOrderId(order.getId())) {
             orderLines.put(l.getId(), l);
           }
-
-          UUID invoiceId = UUID.randomUUID();
-          List<SalesInvoiceLine> invoiceLines = new ArrayList<>(lines.size());
-          BigDecimal subtotal = BigDecimal.ZERO;
-          BigDecimal taxTotal = BigDecimal.ZERO;
+          List<InvoiceService.LineSpec> specs = new ArrayList<>(lines.size());
           for (FulfillmentLine fl : lines) {
             SalesOrderLine ol = orderLines.get(fl.getSalesOrderLineId());
             if (ol == null) {
               throw new IllegalStateException(
                   "fulfillment line " + fl.getId() + " references unknown order line");
             }
-            SalesInvoiceLine il =
-                SalesInvoiceLine.create(
-                    UUID.randomUUID(),
-                    invoiceId,
+            specs.add(
+                new InvoiceService.LineSpec(
                     ol.getProductId(),
                     ol.getDescription(),
                     fl.getQuantity(),
                     ol.getUnitPrice(),
-                    ol.getTaxRate());
-            invoiceLines.add(il);
-            subtotal = subtotal.add(il.getLineSubtotal());
-            taxTotal = taxTotal.add(il.getLineTax());
+                    ol.getTaxRate()));
           }
 
           Customer customer =
               order.getCustomerId() == null
                   ? null
                   : orderRepo.findCustomerById(orgId, order.getCustomerId()).orElse(null);
-          String customerName = invoiceCustomerName(customer);
 
-          SalesInvoice invoice =
-              SalesInvoice.createDraft(
-                  invoiceId,
-                  orgId,
-                  order.getCustomerId(),
-                  order.getId(),
-                  fulfillmentId,
-                  subtotal,
-                  taxTotal,
-                  BigDecimal.ZERO, // v1: no per-fulfillment discount proration
-                  order.getCurrency(),
-                  customerName,
-                  customer == null ? null : customer.getEmail(),
-                  customer == null ? null : customer.getPhone(),
-                  customer == null ? null : customer.getAddress(),
-                  now);
+          // (c) Issue the invoice + auto-allocate prepayment FIFO (shared with the in-store sale).
+          InvoiceService.Issued issued =
+              invoiceService.issueForFulfillment(
+                  txDsl, orgId, order, fulfillmentId, customer, specs, now);
 
-          int year = now.getYear();
-          long seq = invoiceRepo.claimInvoiceNumber(orgId, year);
-          invoice.issue(String.format("INV-%d-%04d", year, seq), now);
-          invoiceRepo.insert(invoice, invoiceLines);
-
-          // (c)+(d)+(e) Auto-allocate prepayment FIFO up to the invoice grand total.
-          List<PaymentAllocation> allocations = new ArrayList<>();
-          BigDecimal remaining = invoice.getGrandTotal();
-          for (Payment payment :
-              paymentRepo.findUnallocatedByOrderForUpdate(orgId, order.getId())) {
-            if (remaining.signum() <= 0) {
-              break;
-            }
-            BigDecimal amount = payment.getUnallocatedAmount().min(remaining);
-            if (amount.signum() <= 0) {
-              continue;
-            }
-            payment.allocate(amount, now);
-            paymentRepo.updateAllocationState(payment);
-
-            PaymentAllocation allocation =
-                PaymentAllocation.create(
-                    UUID.randomUUID(), orgId, payment.getId(), invoiceId, amount, now);
-            allocationRepo.insert(allocation);
-            allocations.add(allocation);
-
-            invoice.recordAllocation(amount, now);
-            remaining = remaining.subtract(amount);
-          }
-          invoiceRepo.updatePaymentState(invoice);
-
-          // (f) Order roll-up: FULFILLED when every line is delivered; CLOSED when all invoices
+          // (d) Order roll-up: FULFILLED when every line is delivered; CLOSED when all invoices
           // PAID.
-          maybeRollUpOrder(orgId, order, orderLines, invoiceRepo, fulfillmentRepo, orderRepo, now);
+          maybeRollUpOrder(txDsl, orgId, order, orderLines, fulfillmentRepo, orderRepo, now);
 
           log.info(
-              "Delivered fulfillment id={} orgId={} order={} invoice={} grandTotal={} allocated={} "
-                  + "invoiceStatus={} orderStatus={}",
+              "Delivered fulfillment id={} orgId={} order={} invoice={} allocated={} orderStatus={}",
               fulfillmentId,
               orgId,
               order.getOrderNumber(),
-              invoice.getInvoiceNumber(),
-              invoice.getGrandTotal(),
-              allocations.size(),
-              invoice.getStatus(),
+              issued.invoice().getInvoiceNumber(),
+              issued.allocations().size(),
               order.getStatus());
-          return new DeliveredView(fulfillment, invoice, invoiceLines, allocations, order);
+          return new DeliveredView(
+              fulfillment, issued.invoice(), issued.lines(), issued.allocations(), order);
         });
   }
 
   /**
-   * Roll the order forward after a delivery: FULFILLING → FULFILLED once every order line's
+   * Create a fulfillment directly in DELIVERED state inside the caller's {@code txDsl} — the
+   * in-store checkout path. There is no PENDING/SHIPPED phase and no reservation to consume: per
+   * product the stock must be {@code available}, then {@code stock_qty} is decremented (a {@code
+   * -stock} SOLD log row) while {@code reserved_qty} stays untouched. Throws {@link
+   * InsufficientStockException} (409) listing every short product, which rolls back the surrounding
+   * checkout txn.
+   */
+  public FulfillmentView createDelivered(
+      DSLContext txDsl,
+      UUID orgId,
+      SalesOrder order,
+      List<DeliveredLineInput> lines,
+      String carrier,
+      String trackingNumber,
+      String notes,
+      ActorContext actor,
+      OffsetDateTime now) {
+
+    FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
+    InventoryRepository inventoryRepo = inventoryRepoFactory.create(txDsl);
+    InventoryLogRepository inventoryLogRepo = inventoryLogRepoFactory.create(txDsl);
+
+    // Aggregate demand per product so the same SKU on two lines locks once and is checked against
+    // the sum (mirrors ReservationService); lock in product_id ASC order for deadlock safety.
+    Map<UUID, Integer> demandByProduct = new LinkedHashMap<>();
+    for (DeliveredLineInput in : lines) {
+      demandByProduct.merge(in.productId(), in.quantity(), Integer::sum);
+    }
+    List<UUID> sortedProductIds = demandByProduct.keySet().stream().sorted().toList();
+    Map<UUID, Inventory> locked = inventoryRepo.lockForUpdate(orgId, sortedProductIds);
+
+    // Availability check — collect every shortage (a missing inventory row is available = 0).
+    List<Shortage> shortages = new ArrayList<>();
+    for (UUID pid : sortedProductIds) {
+      int requested = demandByProduct.get(pid);
+      Inventory inv = locked.get(pid);
+      int available = (inv == null) ? 0 : inv.getAvailableQty();
+      if (available < requested) {
+        shortages.add(new Shortage(pid, requested, available));
+      }
+    }
+    if (!shortages.isEmpty()) {
+      log.info(
+          "In-store sale failed for order={} number={} — {} shortage(s)",
+          order.getId(),
+          order.getOrderNumber(),
+          shortages.size());
+      throw new InsufficientStockException(shortages);
+    }
+
+    // -stock only (reserved unchanged): the customer takes the goods now, no reservation existed.
+    for (UUID pid : sortedProductIds) {
+      int qty = demandByProduct.get(pid);
+      Inventory current = locked.get(pid); // non-null: shortages was empty
+      Inventory updated = inventoryRepo.adjustQuantities(orgId, pid, -qty, 0, current.getVersion());
+      inventoryLogRepo.insert(
+          orgId,
+          pid,
+          -qty,
+          0,
+          updated.getStockQty(),
+          updated.getReservedQty(),
+          StockReason.SOLD,
+          order.getId(),
+          actor);
+    }
+
+    UUID fulfillmentId = UUID.randomUUID();
+    List<FulfillmentLine> fulfillmentLines = new ArrayList<>(lines.size());
+    for (DeliveredLineInput in : lines) {
+      // inventory_reservation_id = NULL: in-store lines never had a reservation.
+      fulfillmentLines.add(
+          FulfillmentLine.create(
+              UUID.randomUUID(), fulfillmentId, in.salesOrderLineId(), in.quantity(), null));
+    }
+    Fulfillment fulfillment =
+        Fulfillment.createDelivered(
+            fulfillmentId,
+            orgId,
+            order.getId(),
+            trimOrNull(carrier),
+            trimOrNull(trackingNumber),
+            trimOrNull(notes),
+            now);
+    fulfillmentRepo.insert(fulfillment, fulfillmentLines);
+
+    log.info(
+        "Created DELIVERED fulfillment id={} orgId={} order={} products={} by actor={}",
+        fulfillmentId,
+        orgId,
+        order.getOrderNumber(),
+        sortedProductIds.size(),
+        actor == null ? null : actor.actorId());
+    return new FulfillmentView(fulfillment, fulfillmentLines);
+  }
+
+  /**
+   * Roll the order forward after an online delivery: FULFILLING → FULFILLED once every order line's
    * delivered quantity equals its ordered quantity, then FULFILLED → CLOSED once every invoice for
    * the order is PAID. Persists only if something changed.
    */
   private void maybeRollUpOrder(
+      DSLContext txDsl,
       UUID orgId,
       SalesOrder order,
       Map<UUID, SalesOrderLine> orderLines,
-      SalesInvoiceRepository invoiceRepo,
       FulfillmentRepository fulfillmentRepo,
       SalesOrderRepository orderRepo,
       OffsetDateTime now) {
@@ -560,25 +584,10 @@ public final class FulfillmentService {
     }
 
     order.markFulfilled(now);
-    boolean allInvoicesPaid =
-        invoiceRepo.findByOrderId(orgId, order.getId()).stream().allMatch(SalesInvoice::isPaid);
-    if (allInvoicesPaid) {
+    if (invoiceService.allInvoicesPaid(txDsl, orgId, order.getId())) {
       order.close(now);
     }
     orderRepo.updateFulfillmentState(order);
-  }
-
-  private static String invoiceCustomerName(Customer customer) {
-    if (customer == null) {
-      return "Walk-in customer";
-    }
-    if (customer.getName() != null && !customer.getName().isBlank()) {
-      return customer.getName();
-    }
-    if (customer.getEmail() != null && !customer.getEmail().isBlank()) {
-      return customer.getEmail();
-    }
-    return "Customer " + customer.getId();
   }
 
   private void requireFulfillable(SalesOrder order) {

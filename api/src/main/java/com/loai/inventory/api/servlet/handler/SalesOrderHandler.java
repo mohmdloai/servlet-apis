@@ -2,17 +2,18 @@ package com.loai.inventory.api.servlet.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
-import com.loai.inventory.api.dto.PlaceOnlineOrderRequest;
-import com.loai.inventory.api.dto.SalesOrderResponse;
+import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.mapper.SalesOrderMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
+import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.SalesOrderService;
+import com.loai.inventory.service.SalesOrderService.InStoreSale;
 import com.loai.inventory.service.SalesOrderService.Placed;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -22,11 +23,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Handles {@code POST /api/orgs/{orgId}/sales-orders}.
+ * Handles {@code POST /api/orgs/{orgId}/sales-orders}, dispatching by request {@code channel}:
+ * {@code IN_STORE} runs the whole sale in one txn ({@code stories/in_store_sale.md}); {@code
+ * ONLINE} / {@code PHONE} (the default) place a PENDING_PAYMENT order with reservations ({@code
+ * stories/place_online_order.md}). Both require STAFF (system ADMIN bypasses).
  *
- * <p>v1 scope: place an online order. Other methods (GET/PUT/DELETE) and the {@code
- * /sales-orders/{id}} sub-paths are not implemented yet — they land in later slices (TX-2…TX-5,
- * cancellation, queries).
+ * <p>Other methods (GET/PUT/DELETE) and the {@code /sales-orders/{id}} sub-paths are not
+ * implemented yet — later slices.
  */
 public class SalesOrderHandler implements OrgResourceHandler {
 
@@ -71,15 +74,32 @@ public class SalesOrderHandler implements OrgResourceHandler {
       throws IOException {
     SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
 
-    PlaceOnlineOrderRequest body = readBody(req, PlaceOnlineOrderRequest.class);
+    PlaceSalesOrderRequest body = readBody(req, PlaceSalesOrderRequest.class);
+    OrderChannel channel = body.getChannel() == null ? OrderChannel.ONLINE : body.getChannel();
+    ActorContext actor = sc.toActorContext();
+
+    // Both channels require the header: the storefront (online) and the POS (in-store) must each
+    // protect against double-submit, and the service enforces the same invariant on the order +
+    // payment rows.
     String idempotencyKey = req.getHeader(IDEMPOTENCY_HEADER);
-    // Online orders require the header — the storefront must protect against double-submit, and
-    // the domain SalesOrder enforces the same invariant on creation.
     if (idempotencyKey == null || idempotencyKey.isBlank()) {
       throw new ValidationException(IDEMPOTENCY_HEADER + " header is required");
     }
 
-    ActorContext actor = sc.toActorContext();
+    if (channel == OrderChannel.IN_STORE) {
+      InStoreSale sale =
+          service.placeInStoreSale(
+              orgId,
+              SalesOrderMapper.toCustomerInput(body),
+              SalesOrderMapper.toLineInputs(body),
+              SalesOrderMapper.toPaymentInput(body),
+              body.getNotes(),
+              actor,
+              idempotencyKey,
+              sc.actorId());
+      writeJson(resp, 201, SalesOrderMapper.toInStoreResponse(sale));
+      return;
+    }
 
     Placed placed =
         service.placeOnlineOrder(
@@ -90,8 +110,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
             body.getNotes(),
             actor);
 
-    SalesOrderResponse out = SalesOrderMapper.toResponse(placed);
-    writeJson(resp, 201, out);
+    writeJson(resp, 201, SalesOrderMapper.toResponse(placed));
   }
 
   private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {

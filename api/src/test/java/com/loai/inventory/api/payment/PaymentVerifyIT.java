@@ -94,7 +94,9 @@ class PaymentVerifyIT {
 
     PaymentService paymentService =
         new PaymentService(
-            new PaymentRepositoryFactoryImpl(), new SalesOrderRepositoryFactoryImpl());
+            new PaymentRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl(),
+            new PaymentTransactionRepositoryFactoryImpl());
     service =
         new PaymentTransactionService(
             dsl,
