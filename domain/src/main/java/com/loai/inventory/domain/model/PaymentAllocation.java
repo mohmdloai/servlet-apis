@@ -22,6 +22,7 @@ public final class PaymentAllocation {
   private final UUID paymentId;
   private final UUID salesInvoiceId;
   private final BigDecimal amount;
+  private final OffsetDateTime receivedAt;
   private final OffsetDateTime createdAt;
 
   public static PaymentAllocation create(
@@ -30,18 +31,26 @@ public final class PaymentAllocation {
       UUID paymentId,
       UUID salesInvoiceId,
       BigDecimal amount,
+      OffsetDateTime receivedAt,
       OffsetDateTime now) {
     Objects.requireNonNull(id, "id required");
     Objects.requireNonNull(orgId, "orgId required");
     Objects.requireNonNull(paymentId, "paymentId required");
     Objects.requireNonNull(salesInvoiceId, "salesInvoiceId required");
     Objects.requireNonNull(amount, "amount required");
+    Objects.requireNonNull(receivedAt, "receivedAt required");
     Objects.requireNonNull(now, "now required");
     if (amount.signum() <= 0) {
       throw new IllegalArgumentException("amount must be > 0");
     }
     return new PaymentAllocation(
-        id, orgId, paymentId, salesInvoiceId, amount.setScale(MONEY_SCALE, MONEY_ROUNDING), now);
+        id,
+        orgId,
+        paymentId,
+        salesInvoiceId,
+        amount.setScale(MONEY_SCALE, MONEY_ROUNDING),
+        receivedAt,
+        now);
   }
 
   public static PaymentAllocation rehydrate(
@@ -50,8 +59,10 @@ public final class PaymentAllocation {
       UUID paymentId,
       UUID salesInvoiceId,
       BigDecimal amount,
+      OffsetDateTime receivedAt,
       OffsetDateTime createdAt) {
-    return new PaymentAllocation(id, orgId, paymentId, salesInvoiceId, amount, createdAt);
+    return new PaymentAllocation(
+        id, orgId, paymentId, salesInvoiceId, amount, receivedAt, createdAt);
   }
 
   private PaymentAllocation(
@@ -60,12 +71,14 @@ public final class PaymentAllocation {
       UUID paymentId,
       UUID salesInvoiceId,
       BigDecimal amount,
+      OffsetDateTime receivedAt,
       OffsetDateTime createdAt) {
     this.id = id;
     this.orgId = orgId;
     this.paymentId = paymentId;
     this.salesInvoiceId = salesInvoiceId;
     this.amount = amount;
+    this.receivedAt = receivedAt;
     this.createdAt = createdAt;
   }
 
@@ -87,6 +100,11 @@ public final class PaymentAllocation {
 
   public BigDecimal getAmount() {
     return amount;
+  }
+
+  /** When the parent {@link Payment} was received — the primary FIFO key for refund unwinding. */
+  public OffsetDateTime getReceivedAt() {
+    return receivedAt;
   }
 
   public OffsetDateTime getCreatedAt() {
