@@ -169,7 +169,10 @@ public class AppConfig {
             inventoryReservationRepositoryFactory,
             inventoryLogRepositoryFactory);
     this.paymentService =
-        new PaymentService(paymentRepositoryFactory, salesOrderRepositoryFactory);
+        new PaymentService(
+            paymentRepositoryFactory,
+            salesOrderRepositoryFactory,
+            paymentTransactionRepositoryFactory);
     this.paymentTransactionService =
         new PaymentTransactionService(
             dsl, paymentTransactionRepositoryFactory, paymentRepositoryFactory, paymentService);
@@ -188,7 +191,13 @@ public class AppConfig {
             inventoryLogRepositoryFactory,
             invoiceService);
     this.salesOrderService =
-        new SalesOrderService(dsl, salesOrderRepositoryFactory, reservationService);
+        new SalesOrderService(
+            dsl,
+            salesOrderRepositoryFactory,
+            reservationService,
+            fulfillmentService,
+            paymentService,
+            invoiceService);
 
     int batchLimit = (int) parseLong(System.getenv("ORDER_SWEEPER_BATCH_LIMIT"), 200L);
     this.orderTtlSweeperJob = new OrderTtlSweeperJob(orderExpiryService, batchLimit);
