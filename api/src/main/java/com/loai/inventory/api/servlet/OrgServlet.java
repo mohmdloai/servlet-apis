@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.servlet.handler.CreditNoteHandler;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
 import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
 import com.loai.inventory.api.servlet.handler.InventoryHandler;
@@ -11,6 +12,7 @@ import com.loai.inventory.api.servlet.handler.OrgHandler;
 import com.loai.inventory.api.servlet.handler.OrgResourceHandler;
 import com.loai.inventory.api.servlet.handler.PaymentTransactionHandler;
 import com.loai.inventory.api.servlet.handler.ProductHandler;
+import com.loai.inventory.api.servlet.handler.RefundHandler;
 import com.loai.inventory.api.servlet.handler.SalesOrderHandler;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -58,7 +60,9 @@ public class OrgServlet extends HttpServlet {
             Map.entry(
                 "payment-transactions",
                 new PaymentTransactionHandler(config.paymentTransactionService, mapper)),
-            Map.entry("fulfillments", new FulfillmentHandler(config.fulfillmentService, mapper)));
+            Map.entry("fulfillments", new FulfillmentHandler(config.fulfillmentService, mapper)),
+            Map.entry("credit-notes", new CreditNoteHandler(config.creditNoteService, mapper)),
+            Map.entry("refunds", new RefundHandler(config.refundService, mapper)));
   }
 
   @Override

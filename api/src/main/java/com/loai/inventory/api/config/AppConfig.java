@@ -5,6 +5,7 @@ import com.loai.inventory.api.job.OrderTtlSweeperJob;
 import com.loai.inventory.common.DataSourceFactory;
 import com.loai.inventory.common.RedisFactory;
 import com.loai.inventory.common.security.JwtUtil;
+import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
@@ -15,10 +16,13 @@ import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
+import com.loai.inventory.domain.repository.RefundAllocationRepositoryFactory;
+import com.loai.inventory.domain.repository.RefundRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
+import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
@@ -29,10 +33,13 @@ import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
+import com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl;
+import com.loai.inventory.repository.RefundRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
+import com.loai.inventory.service.CreditNoteService;
 import com.loai.inventory.service.CustomerService;
 import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
@@ -42,6 +49,7 @@ import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.ProductService;
+import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReservationService;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.auth.AuthService;
@@ -95,6 +103,9 @@ public class AppConfig {
   public final FulfillmentRepositoryFactory fulfillmentRepositoryFactory;
   public final SalesInvoiceRepositoryFactory salesInvoiceRepositoryFactory;
   public final PaymentAllocationRepositoryFactory paymentAllocationRepositoryFactory;
+  public final CreditNoteRepositoryFactory creditNoteRepositoryFactory;
+  public final RefundRepositoryFactory refundRepositoryFactory;
+  public final RefundAllocationRepositoryFactory refundAllocationRepositoryFactory;
 
   // Services
   public final RefreshTokenStore refreshTokenStore;
@@ -110,6 +121,8 @@ public class AppConfig {
   public final PaymentTransactionService paymentTransactionService;
   public final InvoiceService invoiceService;
   public final FulfillmentService fulfillmentService;
+  public final CreditNoteService creditNoteService;
+  public final RefundService refundService;
 
   // Order-TTL sweeper job + its JobRunr lifecycle flag.
   public final OrderTtlSweeperJob orderTtlSweeperJob;
@@ -148,6 +161,9 @@ public class AppConfig {
     this.fulfillmentRepositoryFactory = new FulfillmentRepositoryFactoryImpl();
     this.salesInvoiceRepositoryFactory = new SalesInvoiceRepositoryFactoryImpl();
     this.paymentAllocationRepositoryFactory = new PaymentAllocationRepositoryFactoryImpl();
+    this.creditNoteRepositoryFactory = new CreditNoteRepositoryFactoryImpl();
+    this.refundRepositoryFactory = new RefundRepositoryFactoryImpl();
+    this.refundAllocationRepositoryFactory = new RefundAllocationRepositoryFactoryImpl();
 
     this.refreshTokenStore = new RefreshTokenStore(jedisPool);
     this.authService = new AuthService(userRepository, refreshTokenStore, jwtUtil);
@@ -198,6 +214,23 @@ public class AppConfig {
             fulfillmentService,
             paymentService,
             invoiceService);
+    this.creditNoteService =
+        new CreditNoteService(
+            dsl,
+            creditNoteRepositoryFactory,
+            salesInvoiceRepositoryFactory,
+            refundRepositoryFactory,
+            orgRepositoryFactory);
+    this.refundService =
+        new RefundService(
+            dsl,
+            refundRepositoryFactory,
+            refundAllocationRepositoryFactory,
+            creditNoteRepositoryFactory,
+            paymentRepositoryFactory,
+            paymentAllocationRepositoryFactory,
+            paymentTransactionRepositoryFactory,
+            orgRepositoryFactory);
 
     int batchLimit = (int) parseLong(System.getenv("ORDER_SWEEPER_BATCH_LIMIT"), 200L);
     this.orderTtlSweeperJob = new OrderTtlSweeperJob(orderExpiryService, batchLimit);

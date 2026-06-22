@@ -92,7 +92,7 @@ public class OrgHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.OWNER);
 
     UpdateOrgRequest body = readBody(req, UpdateOrgRequest.class);
-    Org updated = orgService.update(orgId, body.getName());
+    Org updated = orgService.update(orgId, body.getName(), body.getRefundApprovalThreshold());
     writeJson(resp, 200, OrgResponse.from(updated));
   }
 
