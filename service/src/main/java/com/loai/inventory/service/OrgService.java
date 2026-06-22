@@ -86,7 +86,19 @@ public class OrgService {
   }
 
   public Org update(UUID id, String name) {
+    return update(id, name, null);
+  }
+
+  /**
+   * Update an org's name and, optionally, its {@code refundApprovalThreshold} (the per-org boundary
+   * above which returning money requires an OWNER). A null threshold leaves the current value
+   * unchanged.
+   */
+  public Org update(UUID id, String name, java.math.BigDecimal refundApprovalThreshold) {
     validateName(name);
+    if (refundApprovalThreshold != null && refundApprovalThreshold.signum() < 0) {
+      throw new ValidationException("refund_approval_threshold must be >= 0");
+    }
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -95,6 +107,9 @@ public class OrgService {
 
           Org existing = orgRepo.findById(id).orElseThrow(() -> new NotFoundException("Org", id));
           existing.setName(name);
+          if (refundApprovalThreshold != null) {
+            existing.setRefundApprovalThreshold(refundApprovalThreshold);
+          }
 
           Org updated = orgRepo.update(existing);
           log.info("Updated org id={}", id);

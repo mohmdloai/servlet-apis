@@ -34,6 +34,7 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
         .set(PAYMENT.AMOUNT, payment.getAmount())
         .set(PAYMENT.CURRENCY, payment.getCurrency())
         .set(PAYMENT.UNALLOCATED_AMOUNT, payment.getUnallocatedAmount())
+        .set(PAYMENT.REFUNDED_AMOUNT, payment.getRefundedAmount())
         .set(
             PAYMENT.STATUS,
             com.loai.inventory.repository.generated.enums.PaymentStatus.valueOf(
@@ -54,6 +55,15 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
     return dsl.selectFrom(PAYMENT)
         .where(
             PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.PAYMENT_TRANSACTION_ID.eq(paymentTransactionId)))
+        .fetchOptional()
+        .map(this::toPayment);
+  }
+
+  @Override
+  public Optional<Payment> findByIdForUpdate(UUID orgId, UUID id) {
+    return dsl.selectFrom(PAYMENT)
+        .where(PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.ID.eq(id)))
+        .forUpdate()
         .fetchOptional()
         .map(this::toPayment);
   }
@@ -82,6 +92,7 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
   public void updateAllocationState(Payment payment) {
     dsl.update(PAYMENT)
         .set(PAYMENT.UNALLOCATED_AMOUNT, payment.getUnallocatedAmount())
+        .set(PAYMENT.REFUNDED_AMOUNT, payment.getRefundedAmount())
         .set(
             PAYMENT.STATUS,
             com.loai.inventory.repository.generated.enums.PaymentStatus.valueOf(
@@ -103,6 +114,7 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
         r.getReceivedAt(),
         r.getCreatedAt(),
         r.getUnallocatedAmount(),
+        r.getRefundedAmount(),
         PaymentStatus.valueOf(r.getStatus().name()),
         r.getNotes(),
         r.getUpdatedAt());

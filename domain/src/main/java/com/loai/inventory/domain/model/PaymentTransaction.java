@@ -89,6 +89,56 @@ public class PaymentTransaction {
         now);
   }
 
+  /**
+   * The DEBIT (money-out) transaction that executes a {@link Refund}, created already VERIFIED —
+   * the admin records the real-world reverse transfer they just performed, so there is no separate
+   * verification step and no reconciliation (a refund is not matched against an order). Direction
+   * is fixed to {@code DEBIT}.
+   */
+  public static PaymentTransaction createVerifiedDebit(
+      UUID id,
+      UUID orgId,
+      PaymentProvider provider,
+      String providerRef,
+      BigDecimal amount,
+      String currency,
+      UUID verifiedBy,
+      String verificationProof,
+      OffsetDateTime now) {
+    Objects.requireNonNull(id, "id required");
+    Objects.requireNonNull(orgId, "orgId required");
+    Objects.requireNonNull(provider, "provider required");
+    Objects.requireNonNull(currency, "currency required");
+    Objects.requireNonNull(verifiedBy, "verifiedBy required");
+    Objects.requireNonNull(now, "now required");
+    if (providerRef == null || providerRef.isBlank()) {
+      throw new IllegalArgumentException("providerRef required");
+    }
+    Objects.requireNonNull(amount, "amount required");
+    if (amount.signum() <= 0) {
+      throw new IllegalArgumentException("amount must be > 0");
+    }
+    return new PaymentTransaction(
+        id,
+        orgId,
+        provider,
+        providerRef,
+        PaymentDirection.DEBIT,
+        amount.setScale(MONEY_SCALE, MONEY_ROUNDING),
+        currency,
+        now,
+        now,
+        null,
+        null,
+        now,
+        PaymentVerificationStatus.VERIFIED,
+        verifiedBy,
+        now,
+        verificationProof,
+        null,
+        now);
+  }
+
   /** Reconstitute from persistent state — trusts DB invariants, skips creation-time validation. */
   public static PaymentTransaction rehydrate(
       UUID id,

@@ -23,6 +23,17 @@ public interface SalesInvoiceRepository {
    */
   Optional<SalesInvoice> findByFulfillmentId(UUID orgId, UUID fulfillmentId);
 
+  /** Read an invoice by id, scoped to {@code orgId} — backs CreditNote issuance against it. */
+  Optional<SalesInvoice> findById(UUID orgId, UUID id);
+
+  /**
+   * Read an invoice by id under a {@code SELECT … FOR UPDATE} row lock, scoped to {@code orgId}.
+   * Backs CreditNote issuance: holding the invoice row for the rest of the transaction serializes
+   * concurrent issuances against the same invoice, so the cumulative-credit cap sees every
+   * committed sibling note instead of racing past a stale sum.
+   */
+  Optional<SalesInvoice> findByIdForUpdate(UUID orgId, UUID id);
+
   /** All invoices issued against an order — drives the "all invoices PAID → CLOSED" roll-up. */
   List<SalesInvoice> findByOrderId(UUID orgId, UUID salesOrderId);
 

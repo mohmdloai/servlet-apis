@@ -21,6 +21,12 @@ public interface PaymentRepository {
   Optional<Payment> findByTransactionId(UUID orgId, UUID paymentTransactionId);
 
   /**
+   * Read a payment by id with a write lock ({@code SELECT … FOR UPDATE}). Used by refund execution
+   * to serialize concurrent refunds touching the same payment's caches.
+   */
+  Optional<Payment> findByIdForUpdate(UUID orgId, UUID id);
+
+  /**
    * The order's prepayment Payments still carrying an unallocated balance, locked {@code FOR
    * UPDATE} and ordered for FIFO consumption at invoice issuance:
    *

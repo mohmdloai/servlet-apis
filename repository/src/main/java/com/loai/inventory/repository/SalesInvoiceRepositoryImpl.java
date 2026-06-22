@@ -93,6 +93,23 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
   }
 
   @Override
+  public Optional<SalesInvoice> findById(UUID orgId, UUID id) {
+    return dsl.selectFrom(SALES_INVOICE)
+        .where(SALES_INVOICE.ORG_ID.eq(orgId).and(SALES_INVOICE.ID.eq(id)))
+        .fetchOptional()
+        .map(this::toInvoice);
+  }
+
+  @Override
+  public Optional<SalesInvoice> findByIdForUpdate(UUID orgId, UUID id) {
+    return dsl.selectFrom(SALES_INVOICE)
+        .where(SALES_INVOICE.ORG_ID.eq(orgId).and(SALES_INVOICE.ID.eq(id)))
+        .forUpdate()
+        .fetchOptional()
+        .map(this::toInvoice);
+  }
+
+  @Override
   public List<SalesInvoice> findByOrderId(UUID orgId, UUID salesOrderId) {
     return dsl.selectFrom(SALES_INVOICE)
         .where(SALES_INVOICE.ORG_ID.eq(orgId).and(SALES_INVOICE.SALES_ORDER_ID.eq(salesOrderId)))

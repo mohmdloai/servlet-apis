@@ -75,6 +75,7 @@ public final class OrgRepositoryImpl implements OrgRepository {
         dsl.update(ORG)
             .set(ORG.NAME, org.getName())
             .set(ORG.ACTIVE, org.isActive())
+            .set(ORG.REFUND_APPROVAL_THRESHOLD, org.getRefundApprovalThreshold())
             .set(ORG.UPDATED_AT, OffsetDateTime.now())
             .where(ORG.ID.eq(org.getId()))
             .returning()
@@ -101,6 +102,12 @@ public final class OrgRepositoryImpl implements OrgRepository {
 
   private Org toOrg(OrgRecord r) {
     return new Org(
-        r.getId(), r.getName(), r.getSlug(), r.getActive(), r.getCreatedAt(), r.getUpdatedAt());
+        r.getId(),
+        r.getName(),
+        r.getSlug(),
+        r.getActive(),
+        r.getRefundApprovalThreshold(),
+        r.getCreatedAt(),
+        r.getUpdatedAt());
   }
 }

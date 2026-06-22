@@ -1,0 +1,242 @@
+package com.loai.inventory.service;
+
+import com.loai.inventory.common.exception.AuthorizationException;
+import com.loai.inventory.common.exception.ConflictException;
+import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.CreditNote;
+import com.loai.inventory.domain.model.CreditNoteLine;
+import com.loai.inventory.domain.model.CreditNoteReason;
+import com.loai.inventory.domain.model.InvoiceStatus;
+import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.SalesInvoice;
+import com.loai.inventory.domain.repository.CreditNoteRepository;
+import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgRepositoryFactory;
+import com.loai.inventory.domain.repository.RefundRepository;
+import com.loai.inventory.domain.repository.RefundRepositoryFactory;
+import com.loai.inventory.domain.repository.SalesInvoiceRepository;
+import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import org.jooq.DSLContext;
+import org.jooq.impl.DSL;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Issue and void {@link CreditNote}s — the negative-side mirror of {@code InvoiceService}. Owns its
+ * transaction boundary via {@code rootDsl.transactionResult(...)}. See {@code
+ * sys-analysis/outbound/refund.md}.
+ *
+ * <p>A CreditNote always credits a specific previously-billed {@link SalesInvoice}; its total may
+ * not exceed that invoice's grand total. Issuance claims a gapless per-org per-year {@code
+ * CN-YYYY-NNNN} number and is the authorization point for CreditNote-backed refunds — above the
+ * org's {@code refund_approval_threshold} it requires an OWNER (the caller passes whether they hold
+ * OWNER / system ADMIN).
+ */
+public final class CreditNoteService {
+
+  private static final Logger log = LoggerFactory.getLogger(CreditNoteService.class);
+
+  private final DSLContext rootDsl;
+  private final CreditNoteRepositoryFactory creditNoteRepoFactory;
+  private final SalesInvoiceRepositoryFactory invoiceRepoFactory;
+  private final RefundRepositoryFactory refundRepoFactory;
+  private final OrgRepositoryFactory orgRepoFactory;
+
+  public CreditNoteService(
+      DSLContext rootDsl,
+      CreditNoteRepositoryFactory creditNoteRepoFactory,
+      SalesInvoiceRepositoryFactory invoiceRepoFactory,
+      RefundRepositoryFactory refundRepoFactory,
+      OrgRepositoryFactory orgRepoFactory) {
+    this.rootDsl = rootDsl;
+    this.creditNoteRepoFactory = creditNoteRepoFactory;
+    this.invoiceRepoFactory = invoiceRepoFactory;
+    this.refundRepoFactory = refundRepoFactory;
+    this.orgRepoFactory = orgRepoFactory;
+  }
+
+  /** One credit-note line to issue. */
+  public record LineSpec(
+      UUID productId, String description, int quantity, BigDecimal unitPrice, BigDecimal taxRate) {}
+
+  /** Admin-supplied issuance command. */
+  public record IssueCommand(
+      UUID salesInvoiceId, CreditNoteReason reason, String reasonNote, List<LineSpec> lines) {}
+
+  /** The issued credit note with its lines. */
+  public record Issued(CreditNote creditNote, List<CreditNoteLine> lines) {}
+
+  /**
+   * Issue a CreditNote against an ISSUED/PAID invoice. {@code callerIsOwnerOrAdmin} gates the
+   * above-threshold escalation. Runs in its own transaction.
+   */
+  public Issued issue(UUID orgId, IssueCommand cmd, boolean callerIsOwnerOrAdmin) {
+    validate(cmd);
+
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          CreditNoteRepository creditNoteRepo = creditNoteRepoFactory.create(txDsl);
+          SalesInvoiceRepository invoiceRepo = invoiceRepoFactory.create(txDsl);
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+
+          // Lock the invoice row for the rest of the txn so concurrent issuances against it
+          // serialize — the cumulative-credit cap below then sees every committed sibling note.
+          SalesInvoice invoice =
+              invoiceRepo
+                  .findByIdForUpdate(orgId, cmd.salesInvoiceId())
+                  .orElseThrow(() -> new NotFoundException("SalesInvoice", cmd.salesInvoiceId()));
+          if (invoice.getStatus() != InvoiceStatus.ISSUED
+              && invoice.getStatus() != InvoiceStatus.PAID) {
+            throw new ConflictException(
+                "cannot credit invoice "
+                    + invoice.getInvoiceNumber()
+                    + " in status "
+                    + invoice.getStatus()
+                    + "; must be ISSUED or PAID");
+          }
+
+          UUID creditNoteId = UUID.randomUUID();
+          List<CreditNoteLine> lines = new ArrayList<>(cmd.lines().size());
+          BigDecimal subtotal = BigDecimal.ZERO;
+          BigDecimal taxTotal = BigDecimal.ZERO;
+          for (LineSpec spec : cmd.lines()) {
+            CreditNoteLine line =
+                CreditNoteLine.create(
+                    UUID.randomUUID(),
+                    creditNoteId,
+                    spec.productId(),
+                    spec.description(),
+                    spec.quantity(),
+                    spec.unitPrice(),
+                    spec.taxRate());
+            lines.add(line);
+            subtotal = subtotal.add(line.getLineSubtotal());
+            taxTotal = taxTotal.add(line.getLineTax());
+          }
+          BigDecimal total = subtotal.add(taxTotal);
+
+          // Credit notes for an invoice may not cumulatively exceed what it billed (gross grand
+          // total). The invoice row lock above serializes concurrent issuances, so this sum sees
+          // every committed sibling note — two issuances can't both slip past a stale total.
+          BigDecimal alreadyCredited =
+              creditNoteRepo.sumIssuedTotalByInvoice(orgId, invoice.getId());
+          BigDecimal creditedWithThis = alreadyCredited.add(total);
+          if (creditedWithThis.compareTo(invoice.getGrandTotal()) > 0) {
+            throw new ValidationException(
+                "credit notes for invoice "
+                    + invoice.getInvoiceNumber()
+                    + " would total "
+                    + creditedWithThis
+                    + " (already "
+                    + alreadyCredited
+                    + " + this "
+                    + total
+                    + "), exceeding invoice grand total "
+                    + invoice.getGrandTotal());
+          }
+
+          // Above-threshold escalation: returning this much money requires an OWNER.
+          BigDecimal threshold = orgThreshold(txDsl, orgId);
+          if (total.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
+            throw new AuthorizationException(
+                "credit note total "
+                    + total
+                    + " exceeds approval threshold "
+                    + threshold
+                    + "; requires OWNER");
+          }
+
+          CreditNote note =
+              CreditNote.createDraft(
+                  creditNoteId,
+                  orgId,
+                  invoice.getCustomerId(),
+                  invoice.getId(),
+                  cmd.reason(),
+                  cmd.reasonNote(),
+                  subtotal,
+                  taxTotal,
+                  invoice.getCurrency(),
+                  now);
+
+          int year = now.getYear();
+          long seq = creditNoteRepo.claimCreditNoteNumber(orgId, year);
+          note.issue(String.format("CN-%d-%04d", year, seq), now);
+          creditNoteRepo.insert(note, lines);
+
+          log.info(
+              "Issued credit note {} (id={}) orgId={} invoice={} reason={} total={}",
+              note.getCreditNoteNumber(),
+              creditNoteId,
+              orgId,
+              invoice.getInvoiceNumber(),
+              cmd.reason(),
+              total);
+          return new Issued(note, lines);
+        });
+  }
+
+  /** Read a credit note (with lines) for the GET endpoint. */
+  public Issued get(UUID orgId, UUID id) {
+    CreditNoteRepository repo = creditNoteRepoFactory.create(rootDsl);
+    CreditNote note =
+        repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("CreditNote", id));
+    return new Issued(note, repo.findLinesByCreditNoteId(id));
+  }
+
+  /** Void an ISSUED CreditNote — rejected if any refund has been EXECUTED against it. */
+  public CreditNote voidNote(UUID orgId, UUID id) {
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          CreditNoteRepository creditNoteRepo = creditNoteRepoFactory.create(txDsl);
+          RefundRepository refundRepo = refundRepoFactory.create(txDsl);
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+
+          CreditNote note =
+              creditNoteRepo
+                  .findByIdForUpdate(orgId, id)
+                  .orElseThrow(() -> new NotFoundException("CreditNote", id));
+          if (refundRepo.existsExecutedByCreditNote(orgId, id)) {
+            throw new ConflictException(
+                "cannot void credit note " + id + ": a refund has been executed against it");
+          }
+          note.voidNote(now);
+          creditNoteRepo.updateStatus(note);
+          log.info("Voided credit note {} orgId={}", id, orgId);
+          return note;
+        });
+  }
+
+  private BigDecimal orgThreshold(DSLContext txDsl, UUID orgId) {
+    Org org =
+        orgRepoFactory
+            .create(txDsl)
+            .findById(orgId)
+            .orElseThrow(() -> new NotFoundException("Org", orgId));
+    return org.getRefundApprovalThreshold();
+  }
+
+  private void validate(IssueCommand cmd) {
+    if (cmd == null) {
+      throw new ValidationException("request body is required");
+    }
+    if (cmd.salesInvoiceId() == null) {
+      throw new ValidationException("sales_invoice_id is required");
+    }
+    if (cmd.reason() == null) {
+      throw new ValidationException("reason is required");
+    }
+    if (cmd.lines() == null || cmd.lines().isEmpty()) {
+      throw new ValidationException("at least one line is required");
+    }
+  }
+}

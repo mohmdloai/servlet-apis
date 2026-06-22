@@ -1,6 +1,7 @@
 package com.loai.inventory.api.dto;
 
 import com.loai.inventory.domain.model.Org;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -9,6 +10,7 @@ public class OrgResponse {
   private String name;
   private String slug;
   private boolean active;
+  private BigDecimal refundApprovalThreshold;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -20,6 +22,7 @@ public class OrgResponse {
     r.name = o.getName();
     r.slug = o.getSlug();
     r.active = o.isActive();
+    r.refundApprovalThreshold = o.getRefundApprovalThreshold();
     r.createdAt = o.getCreatedAt();
     r.updatedAt = o.getUpdatedAt();
     return r;
@@ -39,6 +42,10 @@ public class OrgResponse {
 
   public boolean isActive() {
     return active;
+  }
+
+  public BigDecimal getRefundApprovalThreshold() {
+    return refundApprovalThreshold;
   }
 
   public OffsetDateTime getCreatedAt() {

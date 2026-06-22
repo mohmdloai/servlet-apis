@@ -152,7 +152,13 @@ public final class InvoiceService {
 
       PaymentAllocation allocation =
           PaymentAllocation.create(
-              UUID.randomUUID(), orgId, payment.getId(), invoiceId, amount, now);
+              UUID.randomUUID(),
+              orgId,
+              payment.getId(),
+              invoiceId,
+              amount,
+              payment.getReceivedAt(),
+              now);
       allocationRepo.insert(allocation);
       allocations.add(allocation);
 
