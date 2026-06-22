@@ -264,6 +264,21 @@ public class SalesOrder {
     this.updatedAt = now;
   }
 
+  /**
+   * In-store fast path: PAID → CLOSED directly at checkout, skipping FULFILLING/FULFILLED. By the
+   * time this fires the single checkout transaction has already issued + paid the invoice and
+   * created the DELIVERED fulfillment, so there is no fulfillment phase left to observe (see {@code
+   * state-machines.md} A2). Online orders must go through {@link #close} via FULFILLED instead.
+   */
+  public void closeInStore(OffsetDateTime now) {
+    requireStatus(OrderStatus.PAID);
+    requireChannel(OrderChannel.IN_STORE);
+    Objects.requireNonNull(now, "now required");
+    this.status = OrderStatus.CLOSED;
+    this.closedAt = now;
+    this.updatedAt = now;
+  }
+
   public void cancel(OffsetDateTime now) {
     Objects.requireNonNull(now, "now required");
     if (status == OrderStatus.FULFILLED || status == OrderStatus.CLOSED) {
