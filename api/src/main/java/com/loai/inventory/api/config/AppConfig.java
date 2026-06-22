@@ -36,6 +36,7 @@ import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CustomerService;
 import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
+import com.loai.inventory.service.InvoiceService;
 import com.loai.inventory.service.OrderExpiryService;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.PaymentService;
@@ -107,6 +108,7 @@ public class AppConfig {
   public final OrderExpiryService orderExpiryService;
   public final PaymentService paymentService;
   public final PaymentTransactionService paymentTransactionService;
+  public final InvoiceService invoiceService;
   public final FulfillmentService fulfillmentService;
 
   // Order-TTL sweeper job + its JobRunr lifecycle flag.
@@ -159,8 +161,6 @@ public class AppConfig {
             inventoryRepositoryFactory,
             inventoryReservationRepositoryFactory,
             inventoryLogRepositoryFactory);
-    this.salesOrderService =
-        new SalesOrderService(dsl, salesOrderRepositoryFactory, reservationService);
     this.orderExpiryService =
         new OrderExpiryService(
             dsl,
@@ -168,10 +168,16 @@ public class AppConfig {
             inventoryRepositoryFactory,
             inventoryReservationRepositoryFactory,
             inventoryLogRepositoryFactory);
-    this.paymentService = new PaymentService(paymentRepositoryFactory, salesOrderRepositoryFactory);
+    this.paymentService =
+        new PaymentService(paymentRepositoryFactory, salesOrderRepositoryFactory);
     this.paymentTransactionService =
         new PaymentTransactionService(
             dsl, paymentTransactionRepositoryFactory, paymentRepositoryFactory, paymentService);
+    this.invoiceService =
+        new InvoiceService(
+            salesInvoiceRepositoryFactory,
+            paymentRepositoryFactory,
+            paymentAllocationRepositoryFactory);
     this.fulfillmentService =
         new FulfillmentService(
             dsl,
@@ -180,9 +186,9 @@ public class AppConfig {
             inventoryRepositoryFactory,
             inventoryReservationRepositoryFactory,
             inventoryLogRepositoryFactory,
-            salesInvoiceRepositoryFactory,
-            paymentRepositoryFactory,
-            paymentAllocationRepositoryFactory);
+            invoiceService);
+    this.salesOrderService =
+        new SalesOrderService(dsl, salesOrderRepositoryFactory, reservationService);
 
     int batchLimit = (int) parseLong(System.getenv("ORDER_SWEEPER_BATCH_LIMIT"), 200L);
     this.orderTtlSweeperJob = new OrderTtlSweeperJob(orderExpiryService, batchLimit);

@@ -34,6 +34,7 @@ import com.loai.inventory.repository.generated.enums.ReservationStatus;
 import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.FulfillmentService.DeliveredView;
 import com.loai.inventory.service.FulfillmentService.LineInput;
+import com.loai.inventory.service.InvoiceService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -101,6 +102,11 @@ class DeliverInvoiceIT {
     dataSource = new HikariDataSource(cfg);
     dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
 
+    InvoiceService invoiceService =
+        new InvoiceService(
+            new SalesInvoiceRepositoryFactoryImpl(),
+            new PaymentRepositoryFactoryImpl(),
+            new PaymentAllocationRepositoryFactoryImpl());
     service =
         new FulfillmentService(
             dsl,
@@ -109,9 +115,7 @@ class DeliverInvoiceIT {
             new InventoryRepositoryFactoryImpl(),
             new InventoryReservationRepositoryFactoryImpl(),
             new InventoryLogRepositoryFactoryImpl(),
-            new SalesInvoiceRepositoryFactoryImpl(),
-            new PaymentRepositoryFactoryImpl(),
-            new PaymentAllocationRepositoryFactoryImpl());
+            invoiceService);
   }
 
   @AfterAll
