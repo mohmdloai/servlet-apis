@@ -62,6 +62,41 @@ public final class Fulfillment {
         now);
   }
 
+  /**
+   * Build a fulfillment created directly DELIVERED — the in-store checkout path. There is no
+   * PENDING/SHIPPED phase: the customer takes the goods now, so the caller writes the stock
+   * movements (no reservation to consume) in the same transaction. {@code shippedAt} stays null;
+   * {@code deliveredAt} is stamped now. See {@code state-machines.md} B2.
+   */
+  public static Fulfillment createDelivered(
+      UUID id,
+      UUID orgId,
+      UUID salesOrderId,
+      String carrier,
+      String trackingNumber,
+      String notes,
+      OffsetDateTime now) {
+    Objects.requireNonNull(id, "id required");
+    Objects.requireNonNull(orgId, "orgId required");
+    Objects.requireNonNull(salesOrderId, "salesOrderId required");
+    Objects.requireNonNull(now, "now required");
+    return new Fulfillment(
+        id,
+        orgId,
+        salesOrderId,
+        now,
+        FulfillmentStatus.DELIVERED,
+        carrier,
+        trackingNumber,
+        notes,
+        null,
+        now,
+        null,
+        null,
+        null,
+        now);
+  }
+
   /** Reconstruct from a persisted row. Trusts DB invariants; skips creation-time validation. */
   public static Fulfillment rehydrate(
       UUID id,
