@@ -3,6 +3,7 @@ package com.loai.inventory.api.servlet.handler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.PaymentTransactionResponse;
+import com.loai.inventory.api.dto.ResolveOrphanRequest;
 import com.loai.inventory.api.dto.VerifyPaymentTransactionRequest;
 import com.loai.inventory.api.mapper.PaymentTransactionMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -10,6 +11,7 @@ import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
+import com.loai.inventory.service.PaymentService.OrderRef;
 import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
 import jakarta.servlet.http.HttpServletRequest;
@@ -20,11 +22,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Handles {@code POST /api/orgs/{orgId}/payment-transactions} — the admin-facing record-and-verify
- * endpoint for manual InstaPay claims. Requires MANAGER in the org (system ADMIN bypasses).
+ * Admin-facing payment-transaction routes (all require MANAGER in the org; system ADMIN bypasses):
  *
- * <p>Returns {@code 201 Created} when this call processed the transaction, {@code 200 OK} on an
- * idempotent replay of an already-verified transaction.
+ * <ul>
+ *   <li>{@code POST /api/orgs/{orgId}/payment-transactions} — record-and-verify a manual InstaPay
+ *       claim. {@code 201 Created} when this call processed it, {@code 200 OK} on an idempotent
+ *       replay of an already-verified transaction.
+ *   <li>{@code POST /api/orgs/{orgId}/payment-transactions/{id}/resolve} — orphan resolution:
+ *       attach an ORPHAN transaction's payment to an admin-chosen order. {@code 201 Created} when
+ *       this call created the payment, {@code 200 OK} on an idempotent replay.
+ * </ul>
  */
 public class PaymentTransactionHandler implements OrgResourceHandler {
 
@@ -51,11 +58,21 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
         writeError(resp, 405, "Method not allowed");
         return;
       }
-      if (remainingPath != null && !remainingPath.isEmpty() && !"/".equals(remainingPath)) {
-        throw new ValidationException(
-            "Not implemented in this slice: " + method + " /payment-transactions" + remainingPath);
+
+      String[] parts = splitPath(remainingPath);
+      if (parts.length == 0) {
+        doPost(req, resp, orgId);
+        return;
       }
-      doPost(req, resp, orgId);
+      if (parts.length == 2 && "resolve".equals(parts[1])) {
+        doResolve(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
+      throw new ValidationException(
+          "Unknown payment-transactions route: "
+              + method
+              + " /payment-transactions"
+              + remainingPath);
     } catch (AppException e) {
       writeError(resp, e);
     } catch (Exception e) {
@@ -75,6 +92,39 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
 
     PaymentTransactionResponse out = PaymentTransactionMapper.toResponse(result);
     writeJson(resp, result.replay() ? 200 : 201, out);
+  }
+
+  /** {@code POST /{id}/resolve} — admin attaches an ORPHAN transaction's payment to an order. */
+  private void doResolve(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID transactionId)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
+
+    ResolveOrphanRequest body = readBody(req, ResolveOrphanRequest.class);
+    OrderRef ref = PaymentTransactionMapper.toOrderRef(body);
+
+    VerifyResult result = service.resolveOrphan(orgId, transactionId, ref, sc.actorId());
+
+    PaymentTransactionResponse out = PaymentTransactionMapper.toResponse(result);
+    // 201 when this call created the Payment, 200 on an idempotent replay of a prior resolution.
+    writeJson(resp, result.replay() ? 200 : 201, out);
+  }
+
+  /** Split {@code remainingPath} ("/{id}/resolve") into its non-empty segments. */
+  private static String[] splitPath(String remainingPath) {
+    if (remainingPath == null || remainingPath.isEmpty() || "/".equals(remainingPath)) {
+      return new String[0];
+    }
+    String raw = remainingPath.startsWith("/") ? remainingPath.substring(1) : remainingPath;
+    return raw.split("/");
+  }
+
+  private static UUID parseId(String raw) {
+    try {
+      return UUID.fromString(raw);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid transaction id format: " + raw);
+    }
   }
 
   private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {
