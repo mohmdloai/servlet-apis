@@ -181,12 +181,24 @@ public final class InvoiceService {
   }
 
   /**
-   * True when every invoice issued for {@code salesOrderId} is PAID — the CLOSED precondition for
-   * an online order's roll-up. Read-only; runs in the caller's {@code txDsl}.
+   * True when the order has at least one <b>live</b> (non-VOID) invoice and every live invoice is
+   * PAID — the CLOSED precondition for an online order's roll-up. Read-only; runs in the caller's
+   * {@code txDsl}.
+   *
+   * <p>VOID invoices are excluded deliberately: the cancelled predecessor of a void+reissue must
+   * neither block CLOSE (a VOID is not PAID, so {@code allMatch} would wrongly fail) nor — when it
+   * is the <em>only</em> invoice — let an order CLOSE vacuously over an empty set. The non-empty
+   * guard handles the latter. This is safe because the roll-up is only ever evaluated on a delivery
+   * event (which atomically issues an invoice for the just-delivered fulfillment); there is no path
+   * that re-triggers it after a bare void, so a delivered fulfillment can never be left with only a
+   * VOID invoice at the moment this runs.
    */
-  public boolean allInvoicesPaid(DSLContext txDsl, UUID orgId, UUID salesOrderId) {
-    return invoiceRepoFactory.create(txDsl).findByOrderId(orgId, salesOrderId).stream()
-        .allMatch(SalesInvoice::isPaid);
+  public boolean allLiveInvoicesPaid(DSLContext txDsl, UUID orgId, UUID salesOrderId) {
+    List<SalesInvoice> live =
+        invoiceRepoFactory.create(txDsl).findByOrderId(orgId, salesOrderId).stream()
+            .filter(inv -> !inv.isVoid())
+            .toList();
+    return !live.isEmpty() && live.stream().allMatch(SalesInvoice::isPaid);
   }
 
   private static String invoiceCustomerName(Customer customer) {
