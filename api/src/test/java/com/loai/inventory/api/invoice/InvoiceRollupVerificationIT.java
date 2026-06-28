@@ -59,8 +59,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 /**
  * Adversarial verification of the order→CLOSED roll-up precondition {@link
  * InvoiceService#allLiveInvoicesPaid} and its real driver {@link FulfillmentService#markDelivered →
- * maybeRollUpOrder}. The existing {@code InvoiceVoidReissueIT} only proves void/reissue mechanics on
- * the invoice rows; it never drives the order roll-up nor exercises the three rollup gaps:
+ * maybeRollUpOrder}. The existing {@code InvoiceVoidReissueIT} only proves void/reissue mechanics
+ * on the invoice rows; it never drives the order roll-up nor exercises the three rollup gaps:
  *
  * <ul>
  *   <li><b>(A)</b> a VOID sibling must NOT block CLOSE (the historic bug);
@@ -171,16 +171,17 @@ class InvoiceRollupVerificationIT {
   /**
    * REALISTIC PATH driven entirely through the production {@link FulfillmentService} delivery
    * roll-up. A two-line order with NO prepayment at delivery #1, so invoice #1 is issued ISSUED
-   * (unpaid) and is therefore genuinely VOID/REISSUE-eligible (a PAID invoice could never be reissued
-   * — that is the production rule, proven by {@code InvoiceVoidReissueIT}). Sequence:
+   * (unpaid) and is therefore genuinely VOID/REISSUE-eligible (a PAID invoice could never be
+   * reissued — that is the production rule, proven by {@code InvoiceVoidReissueIT}). Sequence:
    *
    * <ol>
    *   <li>Deliver line #1 → invoice #1 ISSUED, unpaid (order PAID → FULFILLING). No CLOSE: line #2
    *       still undelivered.
    *   <li>Seed a 200.00 prepayment on the order (money arrives after the wrong invoice was cut).
-   *   <li>VOID + REISSUE invoice #1: original → VOID, the replacement is issued through the very same
-   *       {@code issueForFulfillment} collaborator and auto-allocates 100.00 of the now-present
-   *       prepayment → PAID. This is the void+reissue→PAID arrangement the task asks for.
+   *   <li>VOID + REISSUE invoice #1: original → VOID, the replacement is issued through the very
+   *       same {@code issueForFulfillment} collaborator and auto-allocates 100.00 of the
+   *       now-present prepayment → PAID. This is the void+reissue→PAID arrangement the task asks
+   *       for.
    *   <li>Deliver line #2 → invoice #2 issued, auto-allocates the remaining 100.00 → PAID. This is
    *       the delivery that fires {@code maybeRollUpOrder}.
    * </ol>
@@ -193,11 +194,16 @@ class InvoiceRollupVerificationIT {
   void voidSibling_doesNotBlockClose_realisticDeliveryRollup() {
     TwoLineFixture f = seedTwoLineOrderNoPrepay();
 
-    // Deliver line #1 → invoice #1 ISSUED, unpaid. Order: PAID → FULFILLING (not yet all delivered).
+    // Deliver line #1 → invoice #1 ISSUED, unpaid. Order: PAID → FULFILLING (not yet all
+    // delivered).
     UUID f1 = deliverOneLine(f.org, f.orderId, f.lineId1);
     UUID inv1 = liveInvoiceForFulfillment(f.org, f1);
-    assertEquals(InvoiceStatus.ISSUED, statusOf(inv1), "invoice #1 issued with no prepayment → ISSUED/unpaid");
-    assertEquals(OrderStatus.FULFILLING, orderStatus(f.orderId), "first delivery moves order to FULFILLING");
+    assertEquals(
+        InvoiceStatus.ISSUED,
+        statusOf(inv1),
+        "invoice #1 issued with no prepayment → ISSUED/unpaid");
+    assertEquals(
+        OrderStatus.FULFILLING, orderStatus(f.orderId), "first delivery moves order to FULFILLING");
 
     // Money arrives now (200.00 covering both invoices), then we void+reissue the wrong invoice #1.
     seedPayment(f.org, f.customer, f.orderId, "200.00");
@@ -207,18 +213,28 @@ class InvoiceRollupVerificationIT {
                 f.org,
                 inv1,
                 "corrected line 1",
-                List.of(new ReissueLine(f.productId, "line1 corrected", 10, new BigDecimal("10.00"), BigDecimal.ZERO)))
+                List.of(
+                    new ReissueLine(
+                        f.productId,
+                        "line1 corrected",
+                        10,
+                        new BigDecimal("10.00"),
+                        BigDecimal.ZERO)))
             .invoice()
             .getId();
     assertNotEquals(inv1, replacement);
     assertEquals(InvoiceStatus.VOID, statusOf(inv1), "original invoice #1 must be VOID");
     assertEquals(
-        InvoiceStatus.PAID, statusOf(replacement), "replacement auto-allocates the now-present prepayment → PAID");
+        InvoiceStatus.PAID,
+        statusOf(replacement),
+        "replacement auto-allocates the now-present prepayment → PAID");
 
-    // Deliver line #2 → invoice #2 (PAID from remaining prepayment) → this delivery fires maybeRollUpOrder.
+    // Deliver line #2 → invoice #2 (PAID from remaining prepayment) → this delivery fires
+    // maybeRollUpOrder.
     UUID f2 = deliverOneLine(f.org, f.orderId, f.lineId2);
     UUID inv2 = liveInvoiceForFulfillment(f.org, f2);
-    assertEquals(InvoiceStatus.PAID, statusOf(inv2), "invoice #2 should be PAID from remaining prepayment");
+    assertEquals(
+        InvoiceStatus.PAID, statusOf(inv2), "invoice #2 should be PAID from remaining prepayment");
 
     // The order now has 1 VOID + 2 live PAID invoices. VOID must be ignored → CLOSED.
     long voidCount = countInvoices(f.orderId, InvoiceStatus.VOID);
@@ -239,9 +255,9 @@ class InvoiceRollupVerificationIT {
   // ════════════════════════════ (B) all-VOID does NOT vacuously CLOSE ════════════════════
 
   /**
-   * DIRECT PATH (the realistic path cannot produce an all-VOID order at roll-up time). Seed an order
-   * whose only invoices are VOID. {@code allLiveInvoicesPaid} must return false — the non-empty guard
-   * must stop {@code allMatch} from vacuously succeeding over an empty live set.
+   * DIRECT PATH (the realistic path cannot produce an all-VOID order at roll-up time). Seed an
+   * order whose only invoices are VOID. {@code allLiveInvoicesPaid} must return false — the
+   * non-empty guard must stop {@code allMatch} from vacuously succeeding over an empty live set.
    */
   @Test
   void allVoidInvoices_doesNotVacuouslyClose() {
@@ -254,14 +270,13 @@ class InvoiceRollupVerificationIT {
     seedInvoiceRow(org, customer, orderId, InvoiceStatus.VOID, "100.00", "0.00");
     seedInvoiceRow(org, customer, orderId, InvoiceStatus.VOID, "100.00", "0.00");
 
-    boolean result =
-        allLivePaid(org, orderId);
-    assertFalse(result, "an all-VOID invoice set must NOT vacuously satisfy the CLOSE precondition");
+    boolean result = allLivePaid(org, orderId);
+    assertFalse(
+        result, "an all-VOID invoice set must NOT vacuously satisfy the CLOSE precondition");
 
     // And with zero invoices at all (empty set) → also false.
     UUID emptyOrder = seedBareOrder(org, customer, product, OrderStatus.FULFILLING);
-    boolean emptyResult =
-        allLivePaid(org, emptyOrder);
+    boolean emptyResult = allLivePaid(org, emptyOrder);
     assertFalse(emptyResult, "an order with no invoices must NOT satisfy the CLOSE precondition");
   }
 
@@ -276,20 +291,18 @@ class InvoiceRollupVerificationIT {
     UUID orderId = seedBareOrder(org, customer, product, OrderStatus.FULFILLING);
     seedInvoiceRow(org, customer, orderId, InvoiceStatus.PAID, "100.00", "100.00");
 
-    boolean result =
-        allLivePaid(org, orderId);
+    boolean result = allLivePaid(org, orderId);
     assertTrue(result, "a single live PAID invoice must satisfy the CLOSE precondition");
 
     // One PAID + one VOID → still true (VOID excluded).
     seedInvoiceRow(org, customer, orderId, InvoiceStatus.VOID, "50.00", "0.00");
-    boolean withVoid =
-        allLivePaid(org, orderId);
-    assertTrue(withVoid, "a VOID alongside a live PAID invoice must still satisfy the precondition");
+    boolean withVoid = allLivePaid(org, orderId);
+    assertTrue(
+        withVoid, "a VOID alongside a live PAID invoice must still satisfy the precondition");
 
     // Add an ISSUED (unpaid) live invoice → now false (not every live invoice is PAID).
     seedInvoiceRow(org, customer, orderId, InvoiceStatus.ISSUED, "30.00", "0.00");
-    boolean withUnpaid =
-        allLivePaid(org, orderId);
+    boolean withUnpaid = allLivePaid(org, orderId);
     assertFalse(withUnpaid, "an unpaid live invoice must fail the precondition");
   }
 
@@ -303,12 +316,16 @@ class InvoiceRollupVerificationIT {
     UUID ful = deliverOneLine(f.org, f.orderId, f.lineId1);
     UUID inv = liveInvoiceForFulfillment(f.org, ful);
     assertEquals(InvoiceStatus.PAID, statusOf(inv));
-    assertEquals(OrderStatus.CLOSED, orderStatus(f.orderId), "a fully-paid single-line order must CLOSE on delivery");
+    assertEquals(
+        OrderStatus.CLOSED,
+        orderStatus(f.orderId),
+        "a fully-paid single-line order must CLOSE on delivery");
   }
 
   // ════════════════════════════ fixtures & helpers ════════════════════════════
 
-  private record TwoLineFixture(UUID org, UUID customer, UUID productId, UUID orderId, UUID lineId1, UUID lineId2) {}
+  private record TwoLineFixture(
+      UUID org, UUID customer, UUID productId, UUID orderId, UUID lineId1, UUID lineId2) {}
 
   /** Drive create→ship→markDelivered for one order line; returns the fulfillment id. */
   private UUID deliverOneLine(UUID org, UUID orderId, UUID orderLineId) {
@@ -334,7 +351,8 @@ class InvoiceRollupVerificationIT {
     createInventory(org, product, 50, 20);
 
     UUID orderId = UUID.randomUUID();
-    seedOrderHeader(org, customer, orderId, new BigDecimal("200.00"), BigDecimal.ZERO, OrderStatus.PAID);
+    seedOrderHeader(
+        org, customer, orderId, new BigDecimal("200.00"), BigDecimal.ZERO, OrderStatus.PAID);
     UUID line1 = seedOrderLine(org, orderId, product, 10);
     UUID line2 = seedOrderLine(org, orderId, product, 10);
     return new TwoLineFixture(org, customer, product, orderId, line1, line2);
@@ -348,7 +366,13 @@ class InvoiceRollupVerificationIT {
     createInventory(org, product, 50, 10);
 
     UUID orderId = UUID.randomUUID();
-    seedOrderHeader(org, customer, orderId, new BigDecimal("100.00"), new BigDecimal("100.00"), OrderStatus.PAID);
+    seedOrderHeader(
+        org,
+        customer,
+        orderId,
+        new BigDecimal("100.00"),
+        new BigDecimal("100.00"),
+        OrderStatus.PAID);
     UUID line1 = seedOrderLine(org, orderId, product, 10);
     seedPayment(org, customer, orderId, "100.00");
     return new TwoLineFixture(org, customer, product, orderId, line1, null);
@@ -360,7 +384,11 @@ class InvoiceRollupVerificationIT {
 
   private UUID createOrg(String slug) {
     UUID id = UUID.randomUUID();
-    dsl.insertInto(ORG).set(ORG.ID, id).set(ORG.NAME, slug).set(ORG.SLUG, slug + "-" + id).execute();
+    dsl.insertInto(ORG)
+        .set(ORG.ID, id)
+        .set(ORG.NAME, slug)
+        .set(ORG.SLUG, slug + "-" + id)
+        .execute();
     return id;
   }
 
@@ -397,7 +425,12 @@ class InvoiceRollupVerificationIT {
   }
 
   private void seedOrderHeader(
-      UUID org, UUID customer, UUID orderId, BigDecimal grand, BigDecimal prepaid, OrderStatus status) {
+      UUID org,
+      UUID customer,
+      UUID orderId,
+      BigDecimal grand,
+      BigDecimal prepaid,
+      OrderStatus status) {
     String number = "SO-" + now().getYear() + "-" + String.format("%05d", seq.getAndIncrement());
     dsl.insertInto(SALES_ORDER)
         .set(SALES_ORDER.ID, orderId)
@@ -447,9 +480,10 @@ class InvoiceRollupVerificationIT {
   }
 
   /**
-   * Insert a sales_invoice row directly with a chosen status/paid_amount (no lines needed). Each row
-   * gets its OWN real fulfillment row because {@code fulfillment_id} is NOT NULL + FK-constrained and
-   * the partial unique index forbids two LIVE invoices sharing a fulfillment. Returns the invoice id.
+   * Insert a sales_invoice row directly with a chosen status/paid_amount (no lines needed). Each
+   * row gets its OWN real fulfillment row because {@code fulfillment_id} is NOT NULL +
+   * FK-constrained and the partial unique index forbids two LIVE invoices sharing a fulfillment.
+   * Returns the invoice id.
    */
   private UUID seedInvoiceRow(
       UUID org, UUID customer, UUID orderId, InvoiceStatus status, String grand, String paid) {
@@ -533,7 +567,8 @@ class InvoiceRollupVerificationIT {
         .set(
             com.loai.inventory.repository.generated.Tables.PAYMENT.STATUS,
             com.loai.inventory.repository.generated.enums.PaymentStatus.RECEIVED)
-        .set(com.loai.inventory.repository.generated.Tables.PAYMENT.RECEIVED_AT, now().minusHours(2))
+        .set(
+            com.loai.inventory.repository.generated.Tables.PAYMENT.RECEIVED_AT, now().minusHours(2))
         .execute();
   }
 
@@ -543,31 +578,44 @@ class InvoiceRollupVerificationIT {
   private boolean allLivePaid(UUID org, UUID orderId) {
     Boolean r =
         dsl.transactionResult(
-            cfg -> Boolean.valueOf(invoiceService.allLiveInvoicesPaid(DSL.using(cfg), org, orderId)));
+            cfg ->
+                Boolean.valueOf(invoiceService.allLiveInvoicesPaid(DSL.using(cfg), org, orderId)));
     return r.booleanValue();
   }
 
   private OrderStatus orderStatus(UUID orderId) {
-    return dsl.select(SALES_ORDER.STATUS).from(SALES_ORDER).where(SALES_ORDER.ID.eq(orderId)).fetchOne(SALES_ORDER.STATUS);
+    return dsl.select(SALES_ORDER.STATUS)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ID.eq(orderId))
+        .fetchOne(SALES_ORDER.STATUS);
   }
 
   private InvoiceStatus statusOf(UUID invoiceId) {
-    return dsl.select(SALES_INVOICE.STATUS).from(SALES_INVOICE).where(SALES_INVOICE.ID.eq(invoiceId)).fetchOne(SALES_INVOICE.STATUS);
+    return dsl.select(SALES_INVOICE.STATUS)
+        .from(SALES_INVOICE)
+        .where(SALES_INVOICE.ID.eq(invoiceId))
+        .fetchOne(SALES_INVOICE.STATUS);
   }
 
   private UUID liveInvoiceForFulfillment(UUID org, UUID fulfillmentId) {
-    SalesInvoice live = invoiceRepoFactory.create(dsl).findByFulfillmentId(org, fulfillmentId).orElseThrow();
+    SalesInvoice live =
+        invoiceRepoFactory.create(dsl).findByFulfillmentId(org, fulfillmentId).orElseThrow();
     return live.getId();
   }
 
   private long countInvoices(UUID orderId, InvoiceStatus status) {
     return dsl.fetchCount(
-        dsl.selectFrom(SALES_INVOICE).where(SALES_INVOICE.SALES_ORDER_ID.eq(orderId).and(SALES_INVOICE.STATUS.eq(status))));
+        dsl.selectFrom(SALES_INVOICE)
+            .where(SALES_INVOICE.SALES_ORDER_ID.eq(orderId).and(SALES_INVOICE.STATUS.eq(status))));
   }
 
   private long countLiveInvoices(UUID orderId) {
     return dsl.fetchCount(
         dsl.selectFrom(SALES_INVOICE)
-            .where(SALES_INVOICE.SALES_ORDER_ID.eq(orderId).and(SALES_INVOICE.STATUS.ne(InvoiceStatus.VOID))));
+            .where(
+                SALES_INVOICE
+                    .SALES_ORDER_ID
+                    .eq(orderId)
+                    .and(SALES_INVOICE.STATUS.ne(InvoiceStatus.VOID))));
   }
 }
