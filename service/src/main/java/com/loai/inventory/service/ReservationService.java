@@ -149,4 +149,85 @@ public final class ReservationService {
         reservations.size());
     return reservations;
   }
+
+  /** Outcome of a release pass: rows flipped to RELEASED and distinct products touched. */
+  public record ReleaseResult(int released, int productsAffected) {
+    static final ReleaseResult NONE = new ReleaseResult(0, 0);
+  }
+
+  /**
+   * Release every ACTIVE reservation for {@code orderId} back to {@code available}: decrement each
+   * product's {@code reserved_qty}, write a {@code RELEASED} {@code inventory_log} row, and flip
+   * the reservation rows to RELEASED. Runs in the caller's {@code txDsl} — does not open its own
+   * transaction. Shared by TTL expiry ({@link OrderExpiryService}) and order cancellation so the
+   * {@code reserved_qty == SUM(ACTIVE reservations)} invariant is preserved by one code path.
+   *
+   * <p>Mirrors the reserve lock discipline: products are locked {@code FOR UPDATE} in ascending id
+   * order, so reserve and release never AB/BA-deadlock. A reservation whose inventory row is
+   * missing throws (the ground-truth invariant is already broken upstream).
+   */
+  public ReleaseResult releaseForOrder(
+      DSLContext txDsl, UUID orderId, String reason, ActorContext actor, OffsetDateTime now) {
+
+    InventoryReservationRepository reservationRepo = reservationRepoFactory.create(txDsl);
+
+    List<InventoryReservation> active = reservationRepo.findActiveByOrderId(orderId);
+    if (active.isEmpty()) {
+      return ReleaseResult.NONE;
+    }
+
+    // org_id comes from the reservation rows themselves — no separate SELECT on sales_order.
+    UUID orgId = active.get(0).getOrgId();
+
+    // Aggregate released qty per product (multi-line same-SKU collapses to one inventory delta and
+    // one log row, but every reservation row is still released).
+    Map<UUID, Integer> releasedByProduct = new LinkedHashMap<>();
+    List<UUID> reservationIds = new ArrayList<>(active.size());
+    for (InventoryReservation r : active) {
+      releasedByProduct.merge(r.getProductId(), r.getQuantity(), Integer::sum);
+      reservationIds.add(r.getId());
+    }
+    List<UUID> sortedProductIds = releasedByProduct.keySet().stream().sorted().toList();
+
+    InventoryRepository inventoryRepo = inventoryRepoFactory.create(txDsl);
+    InventoryLogRepository inventoryLogRepo = inventoryLogRepoFactory.create(txDsl);
+    Map<UUID, Inventory> locked = inventoryRepo.lockForUpdate(orgId, sortedProductIds);
+
+    // Mutate the canonical aggregate (reserved_qty) and write the audit row per product. The
+    // reserved_delta is negative; stock_delta is 0 — nothing physical moved in the warehouse.
+    for (UUID pid : sortedProductIds) {
+      int total = releasedByProduct.get(pid);
+      Inventory current = locked.get(pid);
+      if (current == null) {
+        throw new IllegalStateException(
+            "no inventory row for product "
+                + pid
+                + " (org "
+                + orgId
+                + ") while releasing order "
+                + orderId);
+      }
+      Inventory updated =
+          inventoryRepo.adjustQuantities(orgId, pid, 0, -total, current.getVersion());
+      inventoryLogRepo.insert(
+          orgId,
+          pid,
+          0,
+          -total,
+          updated.getStockQty(),
+          updated.getReservedQty(),
+          StockReason.RELEASED,
+          orderId,
+          actor);
+    }
+
+    int released = reservationRepo.markReleased(reservationIds, reason, now);
+    log.info(
+        "Released {} reservation(s) for order {} across {} product(s) (reason={})",
+        released,
+        orderId,
+        sortedProductIds.size(),
+        reason);
+    return new ReleaseResult(released, sortedProductIds.size());
+  }
 }

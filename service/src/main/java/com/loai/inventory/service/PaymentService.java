@@ -8,7 +8,6 @@ import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
 import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.SalesOrder;
-import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
@@ -123,14 +122,26 @@ public final class PaymentService {
     BigDecimal outstanding = order.getGrandTotal().subtract(order.getPrepaidAmount());
     int cmp = txn.getAmount().compareTo(outstanding);
     if (cmp < 0) {
+      // UNDERPAID — a partial prepayment. Per the documented model (state-machines.md E /
+      // payment.md): still create the Payment and accumulate prepaid_amount; the order stays
+      // PENDING_PAYMENT because prepaid < grand_total. The partial is a refundable Payment the
+      // customer can top up (chase) or have refunded on cancel.
+      OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+      Payment payment = createPrepayment(txDsl, orgId, order, txn, now);
+      order.addPrepayment(order.getPrepaidAmount().add(txn.getAmount()), now);
+      orderRepo.updatePaymentState(order);
       log.info(
-          "Reconcile UNDERPAID: order {} outstanding {} > amount {}",
+          "Reconcile UNDERPAID: order {} prepaid {} < grandTotal {} (payment {} RECEIVED amount={})",
           order.getOrderNumber(),
-          outstanding,
-          txn.getAmount());
-      return new Reconciliation(PaymentReconciliationStatus.UNDERPAID, null, order);
+          order.getPrepaidAmount(),
+          order.getGrandTotal(),
+          payment.getId(),
+          payment.getAmount());
+      return new Reconciliation(PaymentReconciliationStatus.UNDERPAID, payment, order);
     }
     if (cmp > 0) {
+      // OVERPAID — deferred to the overpaid slice (Payment created + order → PAID with the excess
+      // sitting on payment.unallocated_amount). For now record the outcome without a Payment.
       log.info(
           "Reconcile OVERPAID: order {} outstanding {} < amount {}",
           order.getOrderNumber(),
@@ -141,19 +152,7 @@ public final class PaymentService {
 
     // MATCHED — exact cover. Create the payment, then flip the order to PAID in the same txn.
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-    Payment payment =
-        Payment.createReceived(
-            UUID.randomUUID(),
-            orgId,
-            order.getCustomerId(),
-            order.getId(),
-            txn.getId(),
-            txn.getAmount(),
-            txn.getCurrency(),
-            now);
-    PaymentRepository paymentRepo = paymentRepoFactory.create(txDsl);
-    paymentRepo.insert(payment);
-
+    Payment payment = createPrepayment(txDsl, orgId, order, txn, now);
     BigDecimal newPrepaid = order.getPrepaidAmount().add(txn.getAmount());
     order.markPaid(newPrepaid, now); // domain guard: prepaid >= grand_total, PENDING_PAYMENT → PAID
     orderRepo.updatePaymentState(order);
@@ -165,6 +164,27 @@ public final class PaymentService {
         payment.getId(),
         payment.getAmount());
     return new Reconciliation(PaymentReconciliationStatus.MATCHED, payment, order);
+  }
+
+  /**
+   * Create and persist a RECEIVED, fully-unallocated {@link Payment} for {@code txn} against {@code
+   * order}, inside {@code txDsl}. Shared by the MATCHED and UNDERPAID reconciliation branches; the
+   * caller then updates {@code prepaid_amount} (and, for MATCHED, flips the order to PAID).
+   */
+  private Payment createPrepayment(
+      DSLContext txDsl, UUID orgId, SalesOrder order, PaymentTransaction txn, OffsetDateTime now) {
+    Payment payment =
+        Payment.createReceived(
+            UUID.randomUUID(),
+            orgId,
+            order.getCustomerId(),
+            order.getId(),
+            txn.getId(),
+            txn.getAmount(),
+            txn.getCurrency(),
+            now);
+    paymentRepoFactory.create(txDsl).insert(payment);
+    return payment;
   }
 
   /**
