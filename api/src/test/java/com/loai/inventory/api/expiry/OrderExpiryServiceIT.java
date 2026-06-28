@@ -188,9 +188,8 @@ class OrderExpiryServiceIT extends ExpiryIntegrationTestBase {
         new OrderExpiryService(
             dsl,
             salesOrderRepoFactory,
-            inventoryRepoFactory,
-            poisonFactory,
-            inventoryLogRepoFactory);
+            new com.loai.inventory.service.ReservationService(
+                inventoryRepoFactory, poisonFactory, inventoryLogRepoFactory));
 
     Summary summary = poisoned.sweep(200);
 
