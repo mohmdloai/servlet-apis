@@ -69,8 +69,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *       payment (the {@code FOR UPDATE} row lock prevents a double-insert).
  * </ul>
  *
- * <p>Mirrors {@code OrphanResolutionIT}'s infra setup verbatim: same container, same service wiring,
- * same helpers. Drives the service directly against the real jOOQ repositories — no Tomcat.
+ * <p>Mirrors {@code OrphanResolutionIT}'s infra setup verbatim: same container, same service
+ * wiring, same helpers. Drives the service directly against the real jOOQ repositories — no Tomcat.
  */
 @Testcontainers
 class OrphanResolutionEdgeIT {
@@ -265,7 +265,8 @@ class OrphanResolutionEdgeIT {
     assertEquals("PAID", orderStatus(order.id()));
     assertEquals("MATCHED", txnReconciliation(txnId));
 
-    // At most one call may have done the real insert (replay()==false); the other replayed or threw.
+    // At most one call may have done the real insert (replay()==false); the other replayed or
+    // threw.
     long realInserts = results.stream().filter(r -> !r.replay()).count();
     assertTrue(realInserts <= 1, "at most one resolve may be a non-replay insert");
   }

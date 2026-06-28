@@ -55,6 +55,13 @@ public interface SalesOrderRepository {
    */
   void updateFulfillmentState(SalesOrder order);
 
+  /**
+   * Persist the cancellation state of an order: {@code status}, {@code cancelled_at}, the (possibly
+   * refund-reduced) {@code prepaid_amount} and {@code updated_at}. Used by order cancellation.
+   * Scoped by {@code (org_id, id)}.
+   */
+  void updateCancelledState(SalesOrder order);
+
   /** Idempotency short-circuit: returns the prior order if this key has already been used. */
   Optional<SalesOrder> findByIdempotencyKey(UUID orgId, String idempotencyKey);
 

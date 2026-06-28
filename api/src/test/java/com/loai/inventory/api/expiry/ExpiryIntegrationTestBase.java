@@ -109,9 +109,8 @@ abstract class ExpiryIntegrationTestBase {
         new OrderExpiryService(
             dsl,
             salesOrderRepoFactory,
-            inventoryRepoFactory,
-            reservationRepoFactory,
-            inventoryLogRepoFactory);
+            new com.loai.inventory.service.ReservationService(
+                inventoryRepoFactory, reservationRepoFactory, inventoryLogRepoFactory));
   }
 
   /** The ground-truth invariant — asserted after every scenario. Never weaken this. */

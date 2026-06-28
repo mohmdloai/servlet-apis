@@ -1,10 +1,14 @@
 package com.loai.inventory.api.mapper;
 
+import com.loai.inventory.api.dto.CancelOrderResponse;
 import com.loai.inventory.api.dto.InStoreSaleResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.dto.SalesOrderResponse;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.model.Refund;
+import com.loai.inventory.domain.model.SalesOrder;
+import com.loai.inventory.service.OrderCancellationService.CancelResult;
 import com.loai.inventory.service.SalesOrderService.CustomerInput;
 import com.loai.inventory.service.SalesOrderService.InStoreSale;
 import com.loai.inventory.service.SalesOrderService.OrderLineInput;
@@ -52,6 +56,24 @@ public final class SalesOrderMapper {
 
   public static InStoreSaleResponse toInStoreResponse(InStoreSale sale) {
     return InStoreSaleResponse.from(sale);
+  }
+
+  /** Parse the optional refund method on a cancel request; blank → null (service default). */
+  public static PaymentProvider toRefundMethod(String raw) {
+    return parseProvider(raw);
+  }
+
+  public static CancelOrderResponse toCancelResponse(CancelResult result) {
+    SalesOrder order = result.order();
+    CancelOrderResponse r = new CancelOrderResponse();
+    r.setOrderId(order.getId());
+    r.setOrderNumber(order.getOrderNumber());
+    r.setStatus(order.getStatus().name());
+    r.setCancelledAt(order.getCancelledAt());
+    r.setReservationsReleased(result.reservationsReleased());
+    r.setPendingRefundTotal(result.pendingRefundTotal());
+    r.setPendingRefundIds(result.refunds().stream().map(Refund::getId).toList());
+    return r;
   }
 
   /** Accept the enum name ({@code CASH}) or the DB literal ({@code cash}); blank → null. */

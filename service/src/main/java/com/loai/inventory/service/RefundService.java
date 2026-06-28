@@ -264,6 +264,78 @@ public final class RefundService {
         });
   }
 
+  /**
+   * Create a <b>PENDING</b> direct (from-Payment) refund for {@code amount} against an
+   * already-locked {@code payment}, <b>inside the caller's transaction</b> ({@code txDsl}). Used by
+   * order cancellation to record the refund obligation atomically with the cancel + reservation
+   * release.
+   *
+   * <p>This is step 1 of the two-step refund lifecycle ({@code refund.md}: PENDING → EXECUTED). No
+   * money moves and no DEBIT Transaction is created here — the order's prepayment is left intact
+   * ({@code payment.unallocated_amount} unchanged) and {@code sales_order.prepaid_amount} is not
+   * reduced. The admin later performs the real reverse transfer and calls {@link #execute} (step
+   * 2), which records the VERIFIED DEBIT and moves the caches. The same amount-based approval gate
+   * as the manual path applies at creation: an above-threshold refund escalates to OWNER ({@code
+   * callerIsOwnerOrAdmin}).
+   */
+  public Refund createDirectPendingInTx(
+      DSLContext txDsl,
+      UUID orgId,
+      Payment payment,
+      BigDecimal amount,
+      PaymentProvider method,
+      String notes,
+      boolean callerIsOwnerOrAdmin,
+      OffsetDateTime now) {
+    if (payment == null) {
+      throw new ValidationException("payment is required");
+    }
+    if (method == null) {
+      throw new ValidationException("method is required");
+    }
+    if (amount == null || amount.signum() <= 0) {
+      throw new ValidationException("amount must be > 0");
+    }
+    if (amount.compareTo(payment.getUnallocatedAmount()) > 0) {
+      throw new ConflictException(
+          "refund amount "
+              + amount
+              + " exceeds payment unallocated "
+              + payment.getUnallocatedAmount());
+    }
+    // Same amount-based gate as the manual direct-refund path: large cash out needs OWNER.
+    BigDecimal threshold = orgThreshold(txDsl, orgId);
+    if (amount.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
+      throw new AuthorizationException(
+          "refund amount "
+              + amount
+              + " exceeds approval threshold "
+              + threshold
+              + "; requires OWNER");
+    }
+
+    Refund refund =
+        Refund.createPending(
+            UUID.randomUUID(),
+            orgId,
+            payment.getCustomerId(),
+            null,
+            payment.getId(),
+            amount,
+            payment.getCurrency(),
+            method,
+            notes,
+            now);
+    refundRepoFactory.create(txDsl).insert(refund);
+    log.info(
+        "Created PENDING direct refund {} orgId={} amount={} payment={} (awaiting execute)",
+        refund.getId(),
+        orgId,
+        amount,
+        payment.getId());
+    return refund;
+  }
+
   private void executeCreditNoteBacked(
       DSLContext txDsl, UUID orgId, Refund refund, OffsetDateTime now) {
     CreditNoteRepository cnRepo = creditNoteRepoFactory.create(txDsl);

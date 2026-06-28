@@ -151,7 +151,7 @@ class PaymentVerifyIT {
   }
 
   @Test
-  void underpaid_createsNoPaymentAndOrderStaysPending() {
+  void underpaid_createsPartialPaymentAndOrderStaysPending() {
     UUID orgId = createOrg("acme");
     UUID admin = createUser("admin@acme.test");
     Order order = seedPendingOrder(orgId, "250.00");
@@ -160,10 +160,18 @@ class PaymentVerifyIT {
         service.verify(
             orgId, cmd(PaymentProvider.INSTAPAY_MANUAL, "100.00", order.number()), admin);
 
+    // UNDERPAID still records a refundable prepayment (state-machines.md E / payment.md): the
+    // partial Payment exists, prepaid_amount accumulates, but the order stays PENDING_PAYMENT.
     assertEquals("UNDERPAID", result.reconciliationStatus().name());
     assertEquals("PENDING_PAYMENT", orderStatus(order.id()));
-    assertEquals(0, paymentCountForOrder(order.id()));
-    assertNull(result.payment());
+    assertEquals(0, new BigDecimal("100.00").compareTo(prepaidAmount(order.id())));
+
+    assertEquals(1, paymentCountForOrder(order.id()));
+    assertNotNull(result.payment());
+    assertEquals("RECEIVED", result.payment().getStatus().name());
+    assertEquals(
+        0, result.payment().getAmount().compareTo(result.payment().getUnallocatedAmount()));
+    assertEquals(0, new BigDecimal("100.00").compareTo(result.payment().getAmount()));
   }
 
   @Test

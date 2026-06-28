@@ -57,7 +57,10 @@ public class OrgServlet extends HttpServlet {
             Map.entry("products", new ProductHandler(config.productService, mapper)),
             Map.entry("customers", new CustomerHandler(config.customerService, mapper)),
             Map.entry("inventory", new InventoryHandler(config.inventoryService, mapper)),
-            Map.entry("sales-orders", new SalesOrderHandler(config.salesOrderService, mapper)),
+            Map.entry(
+                "sales-orders",
+                new SalesOrderHandler(
+                    config.salesOrderService, config.orderCancellationService, mapper)),
             Map.entry(
                 "payment-transactions",
                 new PaymentTransactionHandler(config.paymentTransactionService, mapper)),

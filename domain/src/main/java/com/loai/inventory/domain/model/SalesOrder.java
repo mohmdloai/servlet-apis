@@ -239,6 +239,29 @@ public class SalesOrder {
     this.updatedAt = now;
   }
 
+  /**
+   * Record a partial online prepayment: accumulate {@code prepaid_amount} while the order stays
+   * PENDING_PAYMENT. Used by reconciliation for an UNDERPAID transfer — the partial is a refundable
+   * {@link com.loai.inventory.domain.model.Payment} the customer can top up (chase) or have
+   * refunded on cancel. The caller passes the NEW total prepaid (existing + this transfer); it must
+   * stay strictly below {@code grand_total} — once it reaches grand_total the order is PAID via
+   * {@link #markPaid}.
+   */
+  public void addPrepayment(BigDecimal prepaid, OffsetDateTime now) {
+    requireStatus(OrderStatus.PENDING_PAYMENT);
+    Objects.requireNonNull(prepaid, "prepaid required");
+    Objects.requireNonNull(now, "now required");
+    if (prepaid.signum() < 0) {
+      throw new IllegalArgumentException("prepaid must be >= 0");
+    }
+    if (prepaid.compareTo(grandTotal) >= 0) {
+      throw new InvalidOrderTransitionException(
+          "prepaid " + prepaid + " >= grandTotal " + grandTotal + " — use markPaid");
+    }
+    this.prepaidAmount = prepaid.setScale(MONEY_SCALE, MONEY_ROUNDING);
+    this.updatedAt = now;
+  }
+
   public void markFulfilling(OffsetDateTime now) {
     // ONLINE / PHONE flow only — IN_STORE goes PAID → CLOSED directly at checkout.
     requireStatus(OrderStatus.PAID);

@@ -45,6 +45,7 @@ import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceService;
+import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderExpiryService;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.PaymentService;
@@ -125,6 +126,7 @@ public class AppConfig {
   public final FulfillmentService fulfillmentService;
   public final CreditNoteService creditNoteService;
   public final RefundService refundService;
+  public final OrderCancellationService orderCancellationService;
 
   // Order-TTL sweeper job + its JobRunr lifecycle flag.
   public final OrderTtlSweeperJob orderTtlSweeperJob;
@@ -180,12 +182,7 @@ public class AppConfig {
             inventoryReservationRepositoryFactory,
             inventoryLogRepositoryFactory);
     this.orderExpiryService =
-        new OrderExpiryService(
-            dsl,
-            salesOrderRepositoryFactory,
-            inventoryRepositoryFactory,
-            inventoryReservationRepositoryFactory,
-            inventoryLogRepositoryFactory);
+        new OrderExpiryService(dsl, salesOrderRepositoryFactory, reservationService);
     this.paymentService =
         new PaymentService(
             paymentRepositoryFactory,
@@ -242,6 +239,13 @@ public class AppConfig {
             paymentAllocationRepositoryFactory,
             paymentTransactionRepositoryFactory,
             orgRepositoryFactory);
+    this.orderCancellationService =
+        new OrderCancellationService(
+            dsl,
+            salesOrderRepositoryFactory,
+            paymentRepositoryFactory,
+            reservationService,
+            refundService);
 
     int batchLimit = (int) parseLong(System.getenv("ORDER_SWEEPER_BATCH_LIMIT"), 200L);
     this.orderTtlSweeperJob = new OrderTtlSweeperJob(orderExpiryService, batchLimit);
