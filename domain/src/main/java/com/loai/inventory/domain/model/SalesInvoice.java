@@ -251,8 +251,38 @@ public final class SalesInvoice {
     this.updatedAt = now;
   }
 
+  /**
+   * Cancel an ISSUED invoice: move ISSUED → VOID, recording {@code reason} and {@code voidedAt}.
+   * Legal only on an unpaid ISSUED invoice — a PAID (or already VOID/DRAFT) invoice cannot be
+   * voided, and the {@code paidAmount == 0} check is a defensive mirror of the service's "no
+   * allocations" rule (a non-zero cached paid amount means allocations exist). Named {@code
+   * voidInvoice} because {@code void} is a reserved word.
+   */
+  public void voidInvoice(String reason, OffsetDateTime now) {
+    if (this.status != InvoiceStatus.ISSUED) {
+      throw new InvalidOrderTransitionException(
+          "cannot void invoice " + id + " in status " + status + "; must be ISSUED");
+    }
+    if (this.paidAmount.signum() != 0) {
+      throw new InvalidOrderTransitionException(
+          "cannot void invoice " + id + "; it has allocations (paidAmount=" + paidAmount + ")");
+    }
+    if (reason == null || reason.isBlank()) {
+      throw new IllegalArgumentException("void reason required");
+    }
+    Objects.requireNonNull(now, "now required");
+    this.status = InvoiceStatus.VOID;
+    this.voidedAt = now;
+    this.voidReason = reason;
+    this.updatedAt = now;
+  }
+
   public boolean isPaid() {
     return status == InvoiceStatus.PAID;
+  }
+
+  public boolean isVoid() {
+    return status == InvoiceStatus.VOID;
   }
 
   public UUID getId() {

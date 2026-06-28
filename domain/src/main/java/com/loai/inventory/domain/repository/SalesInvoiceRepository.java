@@ -17,9 +17,11 @@ public interface SalesInvoiceRepository {
   void insert(SalesInvoice invoice, List<SalesInvoiceLine> lines);
 
   /**
-   * Find the invoice issued for a given fulfillment ({@code sales_invoice.fulfillment_id} is {@code
-   * UNIQUE}). Backs idempotent re-delivery: a retried DELIVERED finds the existing invoice instead
-   * of creating a duplicate.
+   * Find the <em>live</em> (non-VOID) invoice issued for a given fulfillment. Backs idempotent
+   * re-delivery: a retried DELIVERED finds the existing invoice instead of creating a duplicate.
+   * VOID rows are excluded so that after a void/reissue this returns the corrected invoice, never a
+   * cancelled one — consistent with the partial unique index {@code
+   * sales_invoice_fulfillment_id_live_uq} (at most one live invoice per fulfillment).
    */
   Optional<SalesInvoice> findByFulfillmentId(UUID orgId, UUID fulfillmentId);
 
@@ -42,6 +44,15 @@ public interface SalesInvoiceRepository {
    * updated_at}. Scoped by {@code (org_id, id)}.
    */
   void updatePaymentState(SalesInvoice invoice);
+
+  /**
+   * Persist a void: {@code status}, {@code voided_at}, {@code void_reason}, {@code updated_at}.
+   * Scoped by {@code (org_id, id)}. Backs invoice void / reissue.
+   */
+  void updateVoidState(SalesInvoice invoice);
+
+  /** The invoice's lines, for response assembly on read / void. */
+  List<SalesInvoiceLine> findLinesByInvoiceId(UUID salesInvoiceId);
 
   /**
    * Claim the next gapless invoice sequence number for {@code (orgId, year)}. Ensures the counter
