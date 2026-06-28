@@ -584,7 +584,7 @@ public final class FulfillmentService {
     }
 
     order.markFulfilled(now);
-    if (invoiceService.allInvoicesPaid(txDsl, orgId, order.getId())) {
+    if (invoiceService.allLiveInvoicesPaid(txDsl, orgId, order.getId())) {
       order.close(now);
     }
     orderRepo.updateFulfillmentState(order);

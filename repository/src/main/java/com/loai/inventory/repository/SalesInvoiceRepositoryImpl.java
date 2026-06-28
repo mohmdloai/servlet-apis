@@ -86,8 +86,17 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
 
   @Override
   public Optional<SalesInvoice> findByFulfillmentId(UUID orgId, UUID fulfillmentId) {
+    // Exclude VOID: after a void/reissue the live (corrected) invoice is the one re-delivery
+    // idempotency must return — never a cancelled sibling. Mirrors the partial unique index.
     return dsl.selectFrom(SALES_INVOICE)
-        .where(SALES_INVOICE.ORG_ID.eq(orgId).and(SALES_INVOICE.FULFILLMENT_ID.eq(fulfillmentId)))
+        .where(
+            SALES_INVOICE
+                .ORG_ID
+                .eq(orgId)
+                .and(SALES_INVOICE.FULFILLMENT_ID.eq(fulfillmentId))
+                .and(
+                    SALES_INVOICE.STATUS.ne(
+                        com.loai.inventory.repository.generated.enums.InvoiceStatus.VOID)))
         .fetchOptional()
         .map(this::toInvoice);
   }
@@ -129,6 +138,30 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
         .where(
             SALES_INVOICE.ID.eq(invoice.getId()).and(SALES_INVOICE.ORG_ID.eq(invoice.getOrgId())))
         .execute();
+  }
+
+  @Override
+  public void updateVoidState(SalesInvoice invoice) {
+    dsl.update(SALES_INVOICE)
+        .set(
+            SALES_INVOICE.STATUS,
+            com.loai.inventory.repository.generated.enums.InvoiceStatus.valueOf(
+                invoice.getStatus().name()))
+        .set(SALES_INVOICE.VOIDED_AT, invoice.getVoidedAt())
+        .set(SALES_INVOICE.VOID_REASON, invoice.getVoidReason())
+        .set(SALES_INVOICE.UPDATED_AT, invoice.getUpdatedAt())
+        .where(
+            SALES_INVOICE.ID.eq(invoice.getId()).and(SALES_INVOICE.ORG_ID.eq(invoice.getOrgId())))
+        .execute();
+  }
+
+  @Override
+  public List<SalesInvoiceLine> findLinesByInvoiceId(UUID salesInvoiceId) {
+    return dsl.selectFrom(SALES_INVOICE_LINE)
+        .where(SALES_INVOICE_LINE.SALES_INVOICE_ID.eq(salesInvoiceId))
+        .orderBy(SALES_INVOICE_LINE.ID.asc())
+        .fetch()
+        .map(this::toLine);
   }
 
   @Override
@@ -188,5 +221,19 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
         r.getVoidReason(),
         r.getCreatedAt(),
         r.getUpdatedAt());
+  }
+
+  private SalesInvoiceLine toLine(SalesInvoiceLineRecord r) {
+    return SalesInvoiceLine.rehydrate(
+        r.getId(),
+        r.getSalesInvoiceId(),
+        r.getProductId(),
+        r.getDescription(),
+        r.getQuantity(),
+        r.getUnitPrice(),
+        r.getTaxRate(),
+        r.getLineSubtotal(),
+        r.getLineTax(),
+        r.getLineTotal());
   }
 }
