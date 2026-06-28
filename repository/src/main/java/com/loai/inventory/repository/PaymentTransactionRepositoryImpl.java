@@ -10,6 +10,7 @@ import com.loai.inventory.domain.model.PaymentVerificationStatus;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository;
 import com.loai.inventory.repository.generated.tables.records.PaymentTransactionRecord;
 import java.util.Optional;
+import java.util.UUID;
 import org.jooq.DSLContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -89,6 +90,15 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
                     com.loai.inventory.repository.generated.enums.PaymentProvider.valueOf(
                         provider.dbLiteral()))
                 .and(PAYMENT_TRANSACTION.PROVIDER_REF.eq(providerRef)))
+        .fetchOptional()
+        .map(this::toPaymentTransaction);
+  }
+
+  @Override
+  public Optional<PaymentTransaction> findByIdForUpdate(UUID orgId, UUID id) {
+    return dsl.selectFrom(PAYMENT_TRANSACTION)
+        .where(PAYMENT_TRANSACTION.ID.eq(id).and(PAYMENT_TRANSACTION.ORG_ID.eq(orgId)))
+        .forUpdate()
         .fetchOptional()
         .map(this::toPaymentTransaction);
   }
