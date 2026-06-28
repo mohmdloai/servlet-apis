@@ -14,3 +14,4 @@ GUIDES
 .env
 .env.*
 !.env.example
+sys-analysis/
