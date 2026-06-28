@@ -3,6 +3,7 @@ package com.loai.inventory.domain.repository;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentTransaction;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Persistence for {@link PaymentTransaction}. Bound to a transactional {@code DSLContext} via
@@ -22,6 +23,13 @@ public interface PaymentTransactionRepository {
 
   /** Look up a transaction by its global natural key {@code (provider, provider_ref)}. */
   Optional<PaymentTransaction> findByProviderRef(PaymentProvider provider, String providerRef);
+
+  /**
+   * Load a transaction by id with a row write lock ({@code SELECT … FOR UPDATE}), scoped to the
+   * org. Used by orphan resolution to serialize the ORPHAN → MATCHED flip against any concurrent
+   * resolve of the same transaction.
+   */
+  Optional<PaymentTransaction> findByIdForUpdate(UUID orgId, UUID id);
 
   /** Persist verification + reconciliation columns for an existing transaction. */
   void update(PaymentTransaction transaction);
