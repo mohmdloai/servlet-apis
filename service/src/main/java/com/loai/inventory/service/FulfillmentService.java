@@ -9,6 +9,7 @@ import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.FulfillmentLine;
+import com.loai.inventory.domain.model.FulfillmentResolution;
 import com.loai.inventory.domain.model.FulfillmentStatus;
 import com.loai.inventory.domain.model.Inventory;
 import com.loai.inventory.domain.model.InventoryReservation;
@@ -94,6 +95,7 @@ public final class FulfillmentService {
   private final PaymentRepositoryFactory paymentRepoFactory;
   private final InvoiceService invoiceService;
   private final RefundService refundService;
+  private final ReservationService reservationService;
 
   public FulfillmentService(
       DSLContext rootDsl,
@@ -104,7 +106,8 @@ public final class FulfillmentService {
       InventoryLogRepositoryFactory inventoryLogRepoFactory,
       PaymentRepositoryFactory paymentRepoFactory,
       InvoiceService invoiceService,
-      RefundService refundService) {
+      RefundService refundService,
+      ReservationService reservationService) {
     this.rootDsl = rootDsl;
     this.fulfillmentRepoFactory = fulfillmentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
@@ -114,6 +117,7 @@ public final class FulfillmentService {
     this.paymentRepoFactory = paymentRepoFactory;
     this.invoiceService = invoiceService;
     this.refundService = refundService;
+    this.reservationService = reservationService;
   }
 
   /** Which order line to ship; quantity is derived from that line's ACTIVE reservation (v1). */
@@ -156,93 +160,130 @@ public final class FulfillmentService {
       ActorContext actor) {
 
     validateCreateInputs(salesOrderId, lines);
-
     return rootDsl.transactionResult(
-        cfg -> {
-          DSLContext txDsl = DSL.using(cfg);
-          SalesOrderRepository orderRepo = salesOrderRepoFactory.create(txDsl);
-          FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
-          InventoryReservationRepository reservationRepo = reservationRepoFactory.create(txDsl);
+        cfg ->
+            createInTx(
+                DSL.using(cfg),
+                orgId,
+                salesOrderId,
+                lines,
+                carrier,
+                trackingNumber,
+                notes,
+                null,
+                actor,
+                OffsetDateTime.now(ZoneOffset.UTC)));
+  }
 
-          SalesOrder order =
-              orderRepo
-                  .findByIdForUpdate(orgId, salesOrderId)
-                  .orElseThrow(() -> new NotFoundException("SalesOrder", salesOrderId));
-          requireFulfillable(order);
+  /**
+   * Build a PENDING fulfillment inside the caller's {@code txDsl}: validate line membership, claim
+   * each line's ACTIVE reservation, enforce the over-fulfillment ceiling, then insert. Shared by
+   * {@link #create} (own transaction) and {@link #replaceFailed} (which re-reserves first, then
+   * builds the replacement in the same transaction). A non-null {@code replacesFulfillmentId}
+   * stamps the audit link back to the FAILED fulfillment being re-shipped.
+   */
+  private FulfillmentView createInTx(
+      DSLContext txDsl,
+      UUID orgId,
+      UUID salesOrderId,
+      List<LineInput> lines,
+      String carrier,
+      String trackingNumber,
+      String notes,
+      UUID replacesFulfillmentId,
+      ActorContext actor,
+      OffsetDateTime now) {
+    SalesOrderRepository orderRepo = salesOrderRepoFactory.create(txDsl);
+    FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
+    InventoryReservationRepository reservationRepo = reservationRepoFactory.create(txDsl);
 
-          // Order lines, by id — used to validate membership and the over-fulfillment ceiling.
-          Map<UUID, SalesOrderLine> orderLines = new LinkedHashMap<>();
-          for (SalesOrderLine l : orderRepo.findLinesByOrderId(salesOrderId)) {
-            orderLines.put(l.getId(), l);
-          }
+    SalesOrder order =
+        orderRepo
+            .findByIdForUpdate(orgId, salesOrderId)
+            .orElseThrow(() -> new NotFoundException("SalesOrder", salesOrderId));
+    requireFulfillable(order);
 
-          // ACTIVE reservations for this order, keyed by sales_order_line_id (one per line).
-          Map<UUID, InventoryReservation> activeByLine = new LinkedHashMap<>();
-          for (InventoryReservation r : reservationRepo.findActiveByOrderId(salesOrderId)) {
-            activeByLine.put(r.getSalesOrderLineId(), r);
-          }
+    // Order lines, by id — used to validate membership and the over-fulfillment ceiling.
+    Map<UUID, SalesOrderLine> orderLines = new LinkedHashMap<>();
+    for (SalesOrderLine l : orderRepo.findLinesByOrderId(salesOrderId)) {
+      orderLines.put(l.getId(), l);
+    }
 
-          Map<UUID, Integer> alreadyFulfilled =
-              fulfillmentRepo.sumFulfilledQtyByOrderLine(salesOrderId);
+    // ACTIVE reservations for this order, keyed by sales_order_line_id (one per line).
+    Map<UUID, InventoryReservation> activeByLine = new LinkedHashMap<>();
+    for (InventoryReservation r : reservationRepo.findActiveByOrderId(salesOrderId)) {
+      activeByLine.put(r.getSalesOrderLineId(), r);
+    }
 
-          UUID fulfillmentId = UUID.randomUUID();
-          List<FulfillmentLine> fulfillmentLines = new ArrayList<>(lines.size());
-          for (LineInput in : lines) {
-            UUID lineId = in.salesOrderLineId();
-            SalesOrderLine orderLine = orderLines.get(lineId);
-            if (orderLine == null) {
-              throw new ValidationException(
-                  "sales_order_line " + lineId + " does not belong to order " + salesOrderId);
-            }
-            InventoryReservation reservation = activeByLine.get(lineId);
-            if (reservation == null) {
-              throw new ValidationException(
-                  "sales_order_line "
-                      + lineId
-                      + " has no active reservation (already fulfilled or released)");
-            }
-            int already = alreadyFulfilled.getOrDefault(lineId, 0);
-            if (already + reservation.getQuantity() > orderLine.getQuantity()) {
-              throw new ValidationException(
-                  "over-fulfillment of sales_order_line "
-                      + lineId
-                      + ": already "
-                      + already
-                      + " + "
-                      + reservation.getQuantity()
-                      + " > ordered "
-                      + orderLine.getQuantity());
-            }
-            fulfillmentLines.add(
-                FulfillmentLine.create(
-                    UUID.randomUUID(),
-                    fulfillmentId,
-                    lineId,
-                    reservation.getQuantity(),
-                    reservation.getId()));
-          }
+    Map<UUID, Integer> alreadyFulfilled = fulfillmentRepo.sumFulfilledQtyByOrderLine(salesOrderId);
 
-          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-          Fulfillment fulfillment =
-              Fulfillment.createPending(
-                  fulfillmentId,
-                  orgId,
-                  salesOrderId,
-                  trimOrNull(carrier),
-                  trimOrNull(trackingNumber),
-                  trimOrNull(notes),
-                  now);
-          fulfillmentRepo.insert(fulfillment, fulfillmentLines);
+    UUID fulfillmentId = UUID.randomUUID();
+    List<FulfillmentLine> fulfillmentLines = new ArrayList<>(lines.size());
+    for (LineInput in : lines) {
+      UUID lineId = in.salesOrderLineId();
+      SalesOrderLine orderLine = orderLines.get(lineId);
+      if (orderLine == null) {
+        throw new ValidationException(
+            "sales_order_line " + lineId + " does not belong to order " + salesOrderId);
+      }
+      InventoryReservation reservation = activeByLine.get(lineId);
+      if (reservation == null) {
+        throw new ValidationException(
+            "sales_order_line "
+                + lineId
+                + " has no active reservation (already fulfilled or released)");
+      }
+      int already = alreadyFulfilled.getOrDefault(lineId, 0);
+      if (already + reservation.getQuantity() > orderLine.getQuantity()) {
+        throw new ValidationException(
+            "over-fulfillment of sales_order_line "
+                + lineId
+                + ": already "
+                + already
+                + " + "
+                + reservation.getQuantity()
+                + " > ordered "
+                + orderLine.getQuantity());
+      }
+      fulfillmentLines.add(
+          FulfillmentLine.create(
+              UUID.randomUUID(),
+              fulfillmentId,
+              lineId,
+              reservation.getQuantity(),
+              reservation.getId()));
+    }
 
-          log.info(
-              "Created PENDING fulfillment id={} orgId={} order={} lines={} by actor={}",
-              fulfillment.getId(),
-              orgId,
-              order.getOrderNumber(),
-              fulfillmentLines.size(),
-              actor == null ? null : actor.actorId());
-          return new FulfillmentView(fulfillment, fulfillmentLines);
-        });
+    Fulfillment fulfillment =
+        replacesFulfillmentId == null
+            ? Fulfillment.createPending(
+                fulfillmentId,
+                orgId,
+                salesOrderId,
+                trimOrNull(carrier),
+                trimOrNull(trackingNumber),
+                trimOrNull(notes),
+                now)
+            : Fulfillment.createReplacementPending(
+                fulfillmentId,
+                orgId,
+                salesOrderId,
+                replacesFulfillmentId,
+                trimOrNull(carrier),
+                trimOrNull(trackingNumber),
+                trimOrNull(notes),
+                now);
+    fulfillmentRepo.insert(fulfillment, fulfillmentLines);
+
+    log.info(
+        "Created PENDING fulfillment id={} orgId={} order={} lines={} replaces={} by actor={}",
+        fulfillment.getId(),
+        orgId,
+        order.getOrderNumber(),
+        fulfillmentLines.size(),
+        replacesFulfillmentId,
+        actor == null ? null : actor.actorId());
+    return new FulfillmentView(fulfillment, fulfillmentLines);
   }
 
   /**
@@ -582,6 +623,14 @@ public final class FulfillmentService {
                     + fulfillment.getStatus()
                     + ", not FAILED; only a failed fulfillment can be refunded");
           }
+          // A failure is resolved once: a refunded-or-replaced fulfillment can't be refunded again.
+          if (fulfillment.getResolution() != null) {
+            throw new ConflictException(
+                "fulfillment "
+                    + fulfillmentId
+                    + " already resolved as "
+                    + fulfillment.getResolution());
+          }
 
           // Refund only THIS fulfillment's value — the grand total the invoice would have carried
           // had it been delivered — NOT the order's whole unallocated prepayment (that is an order
@@ -653,6 +702,9 @@ public final class FulfillmentService {
                 remaining);
           }
 
+          fulfillment.resolve(FulfillmentResolution.REFUNDED, now);
+          fulfillmentRepo.updateStatus(fulfillment);
+
           log.info(
               "Refunded failed fulfillment id={} orgId={} order={} pendingRefunds={} total={}",
               fulfillmentId,
@@ -661,6 +713,105 @@ public final class FulfillmentService {
               refunds.size(),
               pendingRefundTotal);
           return new FailedRefundResult(fulfillment, refunds, pendingRefundTotal);
+        });
+  }
+
+  /**
+   * Replace a FAILED fulfillment by re-shipping its goods: create a new PENDING fulfillment for the
+   * same order lines, funded by the prepayment that was never refunded. The failed fulfillment is
+   * stamped REPLACED (resolved once — so it can no longer be refunded). Its original reservations
+   * were consumed at ship, so the lines are re-reserved from current {@code available} stock first;
+   * if any line is short the whole call fails 409 (the admin must restock — e.g. record the goods'
+   * physical return — before replacing). No money moves here: the replacement's invoice is funded
+   * at its own delivery. See {@code fulfillment.md} §FAILED.
+   */
+  public FulfillmentView replaceFailed(
+      UUID orgId,
+      UUID fulfillmentId,
+      String carrier,
+      String trackingNumber,
+      String notes,
+      ActorContext actor) {
+    if (orgId == null) {
+      throw new ValidationException("orgId is required");
+    }
+    if (fulfillmentId == null) {
+      throw new ValidationException("fulfillmentId is required");
+    }
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+          FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
+          SalesOrderRepository orderRepo = salesOrderRepoFactory.create(txDsl);
+
+          Fulfillment failed =
+              fulfillmentRepo
+                  .findByIdForUpdate(orgId, fulfillmentId)
+                  .orElseThrow(() -> new NotFoundException("Fulfillment", fulfillmentId));
+          if (failed.getStatus() != FulfillmentStatus.FAILED) {
+            throw new ConflictException(
+                "fulfillment "
+                    + fulfillmentId
+                    + " is "
+                    + failed.getStatus()
+                    + ", not FAILED; only a failed fulfillment can be replaced");
+          }
+          if (failed.getResolution() != null) {
+            throw new ConflictException(
+                "fulfillment " + fulfillmentId + " already resolved as " + failed.getResolution());
+          }
+
+          UUID orderId = failed.getSalesOrderId();
+          SalesOrder order =
+              orderRepo
+                  .findByIdForUpdate(orgId, orderId)
+                  .orElseThrow(() -> new NotFoundException("SalesOrder", orderId));
+
+          // The failed fulfillment's order lines, in order — re-reserve exactly these.
+          List<UUID> lineIds = new ArrayList<>();
+          for (FulfillmentLine fl : fulfillmentRepo.findLinesByFulfillmentId(fulfillmentId)) {
+            lineIds.add(fl.getSalesOrderLineId());
+          }
+          List<SalesOrderLine> linesToReserve = new ArrayList<>();
+          for (SalesOrderLine ol : orderRepo.findLinesByOrderId(orderId)) {
+            if (lineIds.contains(ol.getId())) {
+              linesToReserve.add(ol);
+            }
+          }
+
+          // Re-reserve from current stock (originals were consumed at ship). Throws
+          // InsufficientStockException (409) if short — and the whole replace rolls back.
+          reservationService.reserveForOrder(txDsl, orgId, order, linesToReserve, actor);
+
+          // Resolve the failed one, then build the replacement over the fresh reservations.
+          failed.resolve(FulfillmentResolution.REPLACED, now);
+          fulfillmentRepo.updateStatus(failed);
+
+          List<LineInput> replacementLines = new ArrayList<>(lineIds.size());
+          for (UUID lineId : lineIds) {
+            replacementLines.add(new LineInput(lineId));
+          }
+          FulfillmentView replacement =
+              createInTx(
+                  txDsl,
+                  orgId,
+                  orderId,
+                  replacementLines,
+                  carrier,
+                  trackingNumber,
+                  notes,
+                  fulfillmentId,
+                  actor,
+                  now);
+
+          log.info(
+              "Replaced failed fulfillment id={} orgId={} order={} with replacement id={}",
+              fulfillmentId,
+              orgId,
+              orderId,
+              replacement.fulfillment().getId());
+          return replacement;
         });
   }
 
