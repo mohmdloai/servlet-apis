@@ -140,7 +140,11 @@ class InvoiceRollupVerificationIT {
                 new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()));
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+            new com.loai.inventory.service.ReservationService(
+                new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl()));
     invoiceAdminService =
         new InvoiceAdminService(
             dsl,
