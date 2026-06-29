@@ -231,7 +231,8 @@ public class AppConfig {
             inventoryLogRepositoryFactory,
             paymentRepositoryFactory,
             invoiceService,
-            refundService);
+            refundService,
+            reservationService);
     this.salesOrderService =
         new SalesOrderService(
             dsl,

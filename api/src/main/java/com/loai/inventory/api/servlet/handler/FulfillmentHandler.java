@@ -5,6 +5,7 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CreateFulfillmentRequest;
 import com.loai.inventory.api.dto.FailFulfillmentRequest;
 import com.loai.inventory.api.dto.RefundFulfillmentRequest;
+import com.loai.inventory.api.dto.ReplaceFulfillmentRequest;
 import com.loai.inventory.api.mapper.FulfillmentMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
@@ -37,10 +38,12 @@ import org.slf4j.LoggerFactory;
  *       (200); body {@code {refund_method?}}
  *   <li>{@code POST /fulfillments/{id}/return} — record a FAILED fulfillment's goods back in stock
  *       (200)
+ *   <li>{@code POST /fulfillments/{id}/replace} — re-ship a FAILED fulfillment as a new PENDING
+ *       fulfillment (201)
  * </ul>
  *
  * <p>Create/ship/deliver/fail require STAFF; the money-moving {@code refund} and the stock-moving
- * {@code return} require MANAGER (system ADMIN bypasses).
+ * {@code return} / {@code replace} require MANAGER (system ADMIN bypasses).
  */
 public class FulfillmentHandler implements OrgResourceHandler {
 
@@ -83,6 +86,7 @@ public class FulfillmentHandler implements OrgResourceHandler {
           case "fail" -> doFail(req, resp, orgId, id);
           case "refund" -> doRefund(req, resp, orgId, id);
           case "return" -> doReturn(req, resp, orgId, id);
+          case "replace" -> doReplace(req, resp, orgId, id);
           default -> throw new ValidationException("Unknown route: POST /fulfillments/" + tail);
         }
         return;
@@ -165,6 +169,25 @@ public class FulfillmentHandler implements OrgResourceHandler {
     writeJson(resp, 200, FulfillmentMapper.toRefundResponse(result));
   }
 
+  /**
+   * {@code POST /{id}/replace} — re-ship a FAILED fulfillment as a new PENDING fulfillment, funded
+   * by the surviving prepayment. MANAGER+. Returns 201 with the replacement.
+   */
+  private void doReplace(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
+    ReplaceFulfillmentRequest body = readBodyOrNull(req, ReplaceFulfillmentRequest.class);
+    FulfillmentView view =
+        service.replaceFailed(
+            orgId,
+            id,
+            body == null ? null : body.getCarrier(),
+            body == null ? null : body.getTrackingNumber(),
+            body == null ? null : body.getNotes(),
+            sc.toActorContext());
+    writeJson(resp, 201, FulfillmentMapper.toResponse(view));
+  }
+
   /** {@code POST /{id}/return} — record a FAILED fulfillment's goods back in stock. MANAGER+. */
   private void doReturn(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
       throws IOException {
@@ -200,20 +223,30 @@ public class FulfillmentHandler implements OrgResourceHandler {
     }
   }
 
+  /** Read a required JSON body. A malformed body is a client error → 400, not a 500. */
   private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {
-    return mapper.readValue(req.getInputStream(), type);
+    byte[] bytes = req.getInputStream() == null ? new byte[0] : req.getInputStream().readAllBytes();
+    try {
+      return mapper.readValue(bytes, type);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new ValidationException("malformed JSON body");
+    }
   }
 
-  /** Like {@link #readBody} but tolerates an absent/blank body, returning {@code null}. */
+  /**
+   * Like {@link #readBody} but tolerates an absent/blank body, returning {@code null}. A
+   * present-but-unparseable body is a client error → {@link ValidationException} (400), not a 500.
+   */
   private <T> T readBodyOrNull(HttpServletRequest req, Class<T> type) throws IOException {
-    if (req.getInputStream() == null) {
+    byte[] bytes = req.getInputStream() == null ? new byte[0] : req.getInputStream().readAllBytes();
+    if (bytes.length == 0 || new String(bytes, java.nio.charset.StandardCharsets.UTF_8).isBlank()) {
       return null;
     }
-    byte[] bytes = req.getInputStream().readAllBytes();
-    if (bytes.length == 0) {
-      return null;
+    try {
+      return mapper.readValue(bytes, type);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new ValidationException("malformed JSON body");
     }
-    return mapper.readValue(bytes, type);
   }
 
   private void writeJson(HttpServletResponse resp, int status, Object body) throws IOException {
