@@ -459,6 +459,17 @@ public final class RefundService {
     return org.getRefundApprovalThreshold();
   }
 
+  /**
+   * The org's refund-approval threshold, read inside the caller's transaction. Exposed so a caller
+   * that creates several refunds in one operation (order cancel) can gate the <b>aggregate</b>
+   * against the same bar that {@link #createDirectPendingInTx} applies per refund — closing the
+   * structuring gap where many sub-threshold refunds sum to an above-threshold payout without
+   * OWNER.
+   */
+  public BigDecimal approvalThreshold(DSLContext txDsl, UUID orgId) {
+    return orgThreshold(txDsl, orgId);
+  }
+
   private void validateCreate(CreateCommand cmd) {
     if (cmd == null) {
       throw new ValidationException("request body is required");

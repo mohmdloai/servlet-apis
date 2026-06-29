@@ -1,5 +1,6 @@
 package com.loai.inventory.service;
 
+import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
@@ -36,9 +37,14 @@ import org.slf4j.LoggerFactory;
  *       and direct-refund the full prepayment.
  * </ul>
  *
- * <p>Out of scope here (needs the CreditNote path): cancelling after at least one DELIVERED
- * fulfillment — {@link SalesOrder#cancel} already rejects FULFILLED/CLOSED, and a partially-
- * delivered order's invoiced lines must be credited rather than refunded from Payment.
+ * <p>Out of scope here (needs the CreditNote path): cancelling once any shipment is in flight —
+ * {@link SalesOrder#cancel} rejects FULFILLING/FULFILLED/CLOSED. A FULFILLING order has stock
+ * already shipped (its reservation CONSUMED, beyond {@code releaseForOrder}'s reach) and possibly
+ * an invoiced line, so its lines must be credited rather than blanket-refunded from Payment.
+ *
+ * <p>Approval gate: a cancel whose refunds sum above the org threshold needs OWNER — gated on the
+ * <b>aggregate</b>, not per refund, so splitting a payout across several sub-threshold prepayments
+ * cannot dodge the escalation.
  *
  * <p>Two-step refund lifecycle ({@code refund.md}: PENDING → EXECUTED). This step creates the
  * refund(s) as <b>PENDING</b> only — it records the obligation but moves no money: no DEBIT
@@ -136,9 +142,33 @@ public final class OrderCancellationService {
               reservationService.releaseForOrder(
                   txDsl, orderId, RELEASE_REASON_CANCELLED, actor, now);
 
-          // Create a PENDING direct refund for every prepayment still carrying an unallocated
-          // balance (FIFO-locked). No money moves here — the admin executes each refund separately.
+          // Every prepayment still carrying an unallocated balance will be direct-refunded.
           List<Payment> payments = paymentRepo.findUnallocatedByOrderForUpdate(orgId, orderId);
+
+          // Aggregate approval gate: a single cancel that pays back more than the org threshold
+          // needs OWNER — even if it splits across several sub-threshold prepayments. The
+          // per-refund
+          // gate in createDirectPendingInTx alone is bypassable by structuring one payout into many
+          // small payments, so gate the SUM here before creating any refund.
+          BigDecimal totalToRefund = BigDecimal.ZERO;
+          for (Payment payment : payments) {
+            BigDecimal amount = payment.getUnallocatedAmount();
+            if (amount.signum() > 0) {
+              totalToRefund = totalToRefund.add(amount);
+            }
+          }
+          BigDecimal threshold = refundService.approvalThreshold(txDsl, orgId);
+          if (totalToRefund.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
+            throw new AuthorizationException(
+                "cancel refunds totalling "
+                    + totalToRefund
+                    + " exceed approval threshold "
+                    + threshold
+                    + "; requires OWNER");
+          }
+
+          // Create a PENDING direct refund per prepayment (FIFO-locked). No money moves here — the
+          // admin executes each refund separately.
           List<Refund> refunds = new ArrayList<>(payments.size());
           BigDecimal pendingRefundTotal = BigDecimal.ZERO;
           for (Payment payment : payments) {
@@ -160,9 +190,10 @@ public final class OrderCancellationService {
             pendingRefundTotal = pendingRefundTotal.add(amount);
           }
 
-          // prepaid_amount is intentionally NOT reduced here — that happens when the refund
-          // EXECUTES
-          // (prepaid = SUM(payments) − SUM(EXECUTED refunds)). Persist only the cancel state.
+          // prepaid_amount is left unchanged. It is NOT recomputed here, and (despite an earlier
+          // comment) it is NOT recomputed on refund execute either — executeDirect only updates the
+          // Payment. The order is now terminal (CANCELLED), so the stored cache is no longer read;
+          // the true figure is derivable as SUM(payments) − SUM(EXECUTED refunds) if ever needed.
           orderRepo.updateCancelledState(order);
 
           log.info(

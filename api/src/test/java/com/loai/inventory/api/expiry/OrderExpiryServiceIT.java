@@ -173,8 +173,8 @@ class OrderExpiryServiceIT extends ExpiryIntegrationTestBase {
 
             @Override
             public int markReleased(
-                java.util.Collection<UUID> ids, String reason, OffsetDateTime now) {
-              return real.markReleased(ids, reason, now);
+                UUID orgId, java.util.Collection<UUID> ids, String reason, OffsetDateTime now) {
+              return real.markReleased(orgId, ids, reason, now);
             }
 
             @Override
