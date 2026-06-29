@@ -43,6 +43,7 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
         .set(FULFILLMENT.TRACKING_NUMBER, fulfillment.getTrackingNumber())
         .set(FULFILLMENT.NOTES, fulfillment.getNotes())
         .set(FULFILLMENT.SHIPPED_AT, fulfillment.getShippedAt())
+        .set(FULFILLMENT.REPLACES_FULFILLMENT_ID, fulfillment.getReplacesFulfillmentId())
         .set(FULFILLMENT.CREATED_AT, fulfillment.getCreatedAt())
         .set(FULFILLMENT.UPDATED_AT, fulfillment.getUpdatedAt())
         .execute();
@@ -108,6 +109,9 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
         .set(FULFILLMENT.FAILED_AT, fulfillment.getFailedAt())
         .set(FULFILLMENT.FAILED_REASON, fulfillment.getFailedReason())
         .set(FULFILLMENT.RETURNED_AT, fulfillment.getReturnedAt())
+        .set(
+            FULFILLMENT.RESOLUTION,
+            fulfillment.getResolution() == null ? null : fulfillment.getResolution().name())
         .set(FULFILLMENT.UPDATED_AT, fulfillment.getUpdatedAt())
         .where(
             FULFILLMENT
@@ -119,8 +123,9 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
 
   @Override
   public Map<UUID, Integer> sumFulfilledQtyByOrderLine(UUID salesOrderId) {
-    // Join lines to their parent fulfillment so we can filter out CANCELLED shipments (their lines
-    // no longer count against the order line's fulfillable quantity).
+    // Join lines to their parent fulfillment so we can filter out shipments whose lines no longer
+    // count against the order line's fulfillable quantity: CANCELLED (never shipped) and FAILED (a
+    // shipment that never arrived — its lines are eligible for re-fulfillment via a replacement).
     Map<UUID, Integer> out = new HashMap<>();
     dsl.select(
             FULFILLMENT_LINE.SALES_ORDER_LINE_ID, org.jooq.impl.DSL.sum(FULFILLMENT_LINE.QUANTITY))
@@ -132,8 +137,9 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
                 .SALES_ORDER_ID
                 .eq(salesOrderId)
                 .and(
-                    FULFILLMENT.STATUS.ne(
-                        com.loai.inventory.repository.generated.enums.FulfillmentStatus.CANCELLED)))
+                    FULFILLMENT.STATUS.notIn(
+                        com.loai.inventory.repository.generated.enums.FulfillmentStatus.CANCELLED,
+                        com.loai.inventory.repository.generated.enums.FulfillmentStatus.FAILED)))
         .groupBy(FULFILLMENT_LINE.SALES_ORDER_LINE_ID)
         .fetch()
         .forEach(r -> out.put(r.value1(), r.value2() == null ? 0 : r.value2().intValue()));
@@ -179,6 +185,10 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
         r.getFailedAt(),
         r.getFailedReason(),
         r.getReturnedAt(),
+        r.getResolution() == null
+            ? null
+            : com.loai.inventory.domain.model.FulfillmentResolution.valueOf(r.getResolution()),
+        r.getReplacesFulfillmentId(),
         r.getUpdatedAt());
   }
 
