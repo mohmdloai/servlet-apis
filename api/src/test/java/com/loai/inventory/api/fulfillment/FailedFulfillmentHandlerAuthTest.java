@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
+import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.OrgRole;
@@ -251,6 +252,37 @@ class FailedFulfillmentHandlerAuthTest {
 
     assertEquals(201, resp.status, "MANAGER replace must succeed (201)");
     verify(service).replaceFailed(eq(ORG), eq(FULFILLMENT), any(), any(), any(), any());
+  }
+
+  @Test
+  void replace_shortStock_renders409WithStructuredShortages() throws IOException {
+    UUID product = UUID.randomUUID();
+    FulfillmentService service = Mockito.mock(FulfillmentService.class);
+    when(service.replaceFailed(eq(ORG), eq(FULFILLMENT), any(), any(), any(), any()))
+        .thenThrow(
+            new InsufficientStockException(
+                List.of(new InsufficientStockException.Shortage(product, 5, 2))));
+    Resp resp = new Resp();
+
+    handler(service)
+        .handle(
+            "POST",
+            reqWith(ctxWith(OrgRole.MANAGER), ""),
+            resp.mock,
+            ORG,
+            "/" + FULFILLMENT + "/replace");
+
+    assertEquals(409, resp.status, "insufficient stock must be 409");
+    var body =
+        com.loai.inventory.api.config.ObjectMapperProvider.build()
+            .readTree(resp.body.toByteArray());
+    var shortages = body.get("shortages");
+    assertTrue(
+        shortages != null && shortages.isArray() && shortages.size() == 1,
+        "409 body must carry a structured shortages[] like SalesOrderHandler, was: " + body);
+    assertEquals(product.toString(), shortages.get(0).get("product_id").asText());
+    assertEquals(5, shortages.get(0).get("requested").asInt());
+    assertEquals(2, shortages.get(0).get("available").asInt());
   }
 
   @Test
