@@ -117,7 +117,17 @@ class InStoreSaleIT {
             new InventoryRepositoryFactoryImpl(),
             new InventoryReservationRepositoryFactoryImpl(),
             new InventoryLogRepositoryFactoryImpl(),
-            invoiceService);
+            new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
+            invoiceService,
+            new com.loai.inventory.service.RefundService(
+                dsl,
+                new com.loai.inventory.repository.RefundRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()));
     PaymentService paymentService =
         new PaymentService(
             new PaymentRepositoryFactoryImpl(),
