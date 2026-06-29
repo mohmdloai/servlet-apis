@@ -63,6 +63,33 @@ public final class InvoiceService {
   public record LineSpec(
       UUID productId, String description, int quantity, BigDecimal unitPrice, BigDecimal taxRate) {}
 
+  /** Placeholder id for throwaway lines built only to value {@code specs} (never persisted). */
+  private static final UUID VALUATION_PLACEHOLDER_ID = new UUID(0L, 0L);
+
+  /**
+   * The grand total an invoice would carry for {@code specs} — the sum of each line's (subtotal +
+   * tax) at the canonical money scale. Sizes a failed-fulfillment refund to the exact value of the
+   * invoice that fulfillment would have produced at delivery, so the customer is refunded for the
+   * goods they didn't receive and no more. Reuses {@link SalesInvoiceLine#create} so the arithmetic
+   * is identical to real issuance (same scale, same rounding).
+   */
+  public static BigDecimal grandTotalOf(List<LineSpec> specs) {
+    BigDecimal total = BigDecimal.ZERO;
+    for (LineSpec spec : specs) {
+      SalesInvoiceLine line =
+          SalesInvoiceLine.create(
+              VALUATION_PLACEHOLDER_ID,
+              VALUATION_PLACEHOLDER_ID,
+              spec.productId(),
+              spec.description(),
+              spec.quantity(),
+              spec.unitPrice(),
+              spec.taxRate());
+      total = total.add(line.getLineTotal());
+    }
+    return total;
+  }
+
   /**
    * The issued invoice, its lines, the allocations auto-created from prepayment, and the Payment
    * objects those allocations mutated (carrying their post-allocation status / unallocated balance

@@ -9,10 +9,14 @@ import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.FulfillmentLine;
+import com.loai.inventory.domain.model.FulfillmentStatus;
 import com.loai.inventory.domain.model.Inventory;
 import com.loai.inventory.domain.model.InventoryReservation;
 import com.loai.inventory.domain.model.OrderStatus;
+import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
+import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.ReservationStatus;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
@@ -27,8 +31,11 @@ import com.loai.inventory.domain.repository.InventoryRepository;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepository;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
+import com.loai.inventory.domain.repository.PaymentRepository;
+import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -73,13 +80,20 @@ public final class FulfillmentService {
 
   private static final Logger log = LoggerFactory.getLogger(FulfillmentService.class);
 
+  /**
+   * Default refund channel for a failed-fulfillment refund — online prepayments arrive InstaPay.
+   */
+  private static final PaymentProvider DEFAULT_REFUND_METHOD = PaymentProvider.INSTAPAY_MANUAL;
+
   private final DSLContext rootDsl;
   private final FulfillmentRepositoryFactory fulfillmentRepoFactory;
   private final SalesOrderRepositoryFactory salesOrderRepoFactory;
   private final InventoryRepositoryFactory inventoryRepoFactory;
   private final InventoryReservationRepositoryFactory reservationRepoFactory;
   private final InventoryLogRepositoryFactory inventoryLogRepoFactory;
+  private final PaymentRepositoryFactory paymentRepoFactory;
   private final InvoiceService invoiceService;
+  private final RefundService refundService;
 
   public FulfillmentService(
       DSLContext rootDsl,
@@ -88,14 +102,18 @@ public final class FulfillmentService {
       InventoryRepositoryFactory inventoryRepoFactory,
       InventoryReservationRepositoryFactory reservationRepoFactory,
       InventoryLogRepositoryFactory inventoryLogRepoFactory,
-      InvoiceService invoiceService) {
+      PaymentRepositoryFactory paymentRepoFactory,
+      InvoiceService invoiceService,
+      RefundService refundService) {
     this.rootDsl = rootDsl;
     this.fulfillmentRepoFactory = fulfillmentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.inventoryRepoFactory = inventoryRepoFactory;
     this.reservationRepoFactory = reservationRepoFactory;
     this.inventoryLogRepoFactory = inventoryLogRepoFactory;
+    this.paymentRepoFactory = paymentRepoFactory;
     this.invoiceService = invoiceService;
+    this.refundService = refundService;
   }
 
   /** Which order line to ship; quantity is derived from that line's ACTIVE reservation (v1). */
@@ -118,6 +136,10 @@ public final class FulfillmentService {
       List<SalesInvoiceLine> invoiceLines,
       List<PaymentAllocation> allocations,
       SalesOrder order) {}
+
+  /** A failed-fulfillment refund: the failed fulfillment plus the PENDING refund(s) created. */
+  public record FailedRefundResult(
+      Fulfillment fulfillment, List<Refund> refunds, BigDecimal pendingRefundTotal) {}
 
   /**
    * Create a PENDING fulfillment for {@code salesOrderId} covering the requested order lines. The
@@ -455,6 +477,299 @@ public final class FulfillmentService {
               order.getStatus());
           return new DeliveredView(
               fulfillment, issued.invoice(), issued.lines(), issued.allocations(), order);
+        });
+  }
+
+  /**
+   * Mark a SHIPPED fulfillment FAILED — the shipment never arrived (lost, refused, returned to
+   * sender). Locks the fulfillment, guards SHIPPED → FAILED, and stamps {@code failed_at}/{@code
+   * failed_reason}. Nothing else moves: the stock is still out there and the order keeps its
+   * current status. Resolution is a separate admin step — {@link #refundFailed} (money back) and/or
+   * {@link #recordReturn} (goods came back). STAFF may flag a failure; the money-moving resolution
+   * is MANAGER-gated at the API layer.
+   */
+  public FulfillmentView markFailed(UUID orgId, UUID fulfillmentId, String reason) {
+    if (orgId == null) {
+      throw new ValidationException("orgId is required");
+    }
+    if (fulfillmentId == null) {
+      throw new ValidationException("fulfillmentId is required");
+    }
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
+
+          Fulfillment fulfillment =
+              fulfillmentRepo
+                  .findByIdForUpdate(orgId, fulfillmentId)
+                  .orElseThrow(() -> new NotFoundException("Fulfillment", fulfillmentId));
+          // Domain guard also enforces SHIPPED; pre-check for a clean 409 instead of a 500.
+          if (fulfillment.getStatus() != FulfillmentStatus.SHIPPED) {
+            throw new ConflictException(
+                "fulfillment "
+                    + fulfillmentId
+                    + " is "
+                    + fulfillment.getStatus()
+                    + ", not SHIPPED; only a shipped fulfillment can fail");
+          }
+
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+          fulfillment.markFailed(reason, now);
+          fulfillmentRepo.updateStatus(fulfillment);
+
+          List<FulfillmentLine> lines = fulfillmentRepo.findLinesByFulfillmentId(fulfillmentId);
+          log.info(
+              "Failed fulfillment id={} orgId={} order={} reason={}",
+              fulfillmentId,
+              orgId,
+              fulfillment.getSalesOrderId(),
+              reason);
+          return new FulfillmentView(fulfillment, lines);
+        });
+  }
+
+  /**
+   * Refund the customer for a FAILED fulfillment they paid for but never received. Locks the
+   * fulfillment, asserts FAILED, then creates a <b>PENDING</b> direct (payment-backed) refund for
+   * every prepayment on the order still carrying an unallocated balance — the same two-step
+   * lifecycle as an order cancel ({@code refund.md}: PENDING → EXECUTED). No money moves here; the
+   * admin performs the real reverse transfer and calls {@code POST /refunds/{id}/execute} after.
+   *
+   * <p>The refund is direct-from-Payment, not CreditNote-backed: failure is reachable only from
+   * SHIPPED, before any invoice is issued, so the prepayment is still unallocated and there is
+   * nothing to credit. An above-threshold refund escalates to OWNER ({@code callerIsOwnerOrAdmin});
+   * the whole call rolls back if denied.
+   *
+   * <p>Idempotency: a duplicate call records a second PENDING refund against the same balance, but
+   * {@link RefundService#execute} re-checks {@code unallocated_amount} at execution, so only the
+   * first can move money — the surplus is a never-executable PENDING refund the admin can cancel.
+   */
+  public FailedRefundResult refundFailed(
+      UUID orgId,
+      UUID fulfillmentId,
+      PaymentProvider refundMethod,
+      UUID actorId,
+      boolean callerIsOwnerOrAdmin) {
+    if (orgId == null) {
+      throw new ValidationException("orgId is required");
+    }
+    if (fulfillmentId == null) {
+      throw new ValidationException("fulfillmentId is required");
+    }
+    if (actorId == null) {
+      throw new ValidationException("actor identity is required");
+    }
+    PaymentProvider method = refundMethod == null ? DEFAULT_REFUND_METHOD : refundMethod;
+
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+          FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
+          PaymentRepository paymentRepo = paymentRepoFactory.create(txDsl);
+          SalesOrderRepository orderRepo = salesOrderRepoFactory.create(txDsl);
+
+          Fulfillment fulfillment =
+              fulfillmentRepo
+                  .findByIdForUpdate(orgId, fulfillmentId)
+                  .orElseThrow(() -> new NotFoundException("Fulfillment", fulfillmentId));
+          if (fulfillment.getStatus() != FulfillmentStatus.FAILED) {
+            throw new ConflictException(
+                "fulfillment "
+                    + fulfillmentId
+                    + " is "
+                    + fulfillment.getStatus()
+                    + ", not FAILED; only a failed fulfillment can be refunded");
+          }
+
+          // Refund only THIS fulfillment's value — the grand total the invoice would have carried
+          // had it been delivered — NOT the order's whole unallocated prepayment (that is an order
+          // cancel). The order continues, so its other fulfillments must keep their funding. No
+          // invoice exists for a SHIPPED-failed fulfillment, so the refund is direct-from-Payment.
+          Map<UUID, SalesOrderLine> orderLines = new LinkedHashMap<>();
+          for (SalesOrderLine ol : orderRepo.findLinesByOrderId(fulfillment.getSalesOrderId())) {
+            orderLines.put(ol.getId(), ol);
+          }
+          List<InvoiceService.LineSpec> specs = new ArrayList<>();
+          for (FulfillmentLine fl : fulfillmentRepo.findLinesByFulfillmentId(fulfillmentId)) {
+            SalesOrderLine ol = orderLines.get(fl.getSalesOrderLineId());
+            if (ol == null) {
+              throw new IllegalStateException(
+                  "fulfillment line " + fl.getId() + " references unknown order line");
+            }
+            specs.add(
+                new InvoiceService.LineSpec(
+                    ol.getProductId(),
+                    ol.getDescription(),
+                    fl.getQuantity(),
+                    ol.getUnitPrice(),
+                    ol.getTaxRate()));
+          }
+          BigDecimal fulfillmentValue = InvoiceService.grandTotalOf(specs);
+
+          // Draw that value FIFO across the order's unallocated prepayment(s): each Payment
+          // contributes min(its unallocated, remaining). createDirectPendingInTx caps each refund
+          // at the Payment's unallocated balance, so a partial draw is always valid.
+          List<Payment> payments =
+              paymentRepo.findUnallocatedByOrderForUpdate(orgId, fulfillment.getSalesOrderId());
+          List<Refund> refunds = new ArrayList<>();
+          BigDecimal remaining = fulfillmentValue;
+          BigDecimal pendingRefundTotal = BigDecimal.ZERO;
+          for (Payment payment : payments) {
+            if (remaining.signum() <= 0) {
+              break;
+            }
+            BigDecimal available = payment.getUnallocatedAmount();
+            if (available.signum() <= 0) {
+              continue;
+            }
+            BigDecimal amount = available.min(remaining);
+            Refund refund =
+                refundService.createDirectPendingInTx(
+                    txDsl,
+                    orgId,
+                    payment,
+                    amount,
+                    method,
+                    "fulfillment " + fulfillmentId + " failed",
+                    callerIsOwnerOrAdmin,
+                    now);
+            refunds.add(refund);
+            remaining = remaining.subtract(amount);
+            pendingRefundTotal = pendingRefundTotal.add(amount);
+          }
+          if (remaining.signum() > 0) {
+            // Invariant: a PAID order's prepayment covers every fulfillment, and a failed
+            // (never-delivered) fulfillment's share was never allocated — so unallocated should
+            // always cover it. Log loudly if that ever breaks rather than silently under-refunding.
+            log.warn(
+                "Failed-fulfillment refund under-covered: fulfillment={} order={} value={}"
+                    + " refunded={} shortfall={}",
+                fulfillmentId,
+                fulfillment.getSalesOrderId(),
+                fulfillmentValue,
+                pendingRefundTotal,
+                remaining);
+          }
+
+          log.info(
+              "Refunded failed fulfillment id={} orgId={} order={} pendingRefunds={} total={}",
+              fulfillmentId,
+              orgId,
+              fulfillment.getSalesOrderId(),
+              refunds.size(),
+              pendingRefundTotal);
+          return new FailedRefundResult(fulfillment, refunds, pendingRefundTotal);
+        });
+  }
+
+  /**
+   * Record that a FAILED fulfillment's goods physically returned to the warehouse: write a {@code
+   * +stock} {@code inventory_log} row per product (reason {@code RESTOCKED_FAILED_FULFILLMENT} —
+   * the spec's {@code due_to='failed_fulfillment'}) and stamp {@code returned_at}. Only {@code
+   * on_hand} rises; {@code reserved} is untouched (the reservation was consumed at SHIPPED).
+   * Idempotent — a second return is rejected (409) so the same goods are never restocked twice.
+   */
+  public FulfillmentView recordReturn(UUID orgId, UUID fulfillmentId, ActorContext actor) {
+    if (orgId == null) {
+      throw new ValidationException("orgId is required");
+    }
+    if (fulfillmentId == null) {
+      throw new ValidationException("fulfillmentId is required");
+    }
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+          FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
+          InventoryRepository inventoryRepo = inventoryRepoFactory.create(txDsl);
+          InventoryReservationRepository reservationRepo = reservationRepoFactory.create(txDsl);
+          InventoryLogRepository inventoryLogRepo = inventoryLogRepoFactory.create(txDsl);
+
+          Fulfillment fulfillment =
+              fulfillmentRepo
+                  .findByIdForUpdate(orgId, fulfillmentId)
+                  .orElseThrow(() -> new NotFoundException("Fulfillment", fulfillmentId));
+          if (fulfillment.getStatus() != FulfillmentStatus.FAILED) {
+            throw new ConflictException(
+                "fulfillment "
+                    + fulfillmentId
+                    + " is "
+                    + fulfillment.getStatus()
+                    + ", not FAILED; only a failed fulfillment's goods can be returned");
+          }
+          if (fulfillment.getReturnedAt() != null) {
+            throw new ConflictException(
+                "fulfillment " + fulfillmentId + " goods already returned to stock");
+          }
+
+          List<FulfillmentLine> lines = fulfillmentRepo.findLinesByFulfillmentId(fulfillmentId);
+          if (lines.isEmpty()) {
+            throw new ValidationException(
+                "fulfillment " + fulfillmentId + " has no lines to return");
+          }
+
+          // Resolve the (now CONSUMED) reservations to recover each line's product, then aggregate
+          // the returned quantity per product so a SKU on two lines writes a single +stock row.
+          List<UUID> reservationIds = new ArrayList<>(lines.size());
+          for (FulfillmentLine line : lines) {
+            if (line.getInventoryReservationId() == null) {
+              throw new IllegalStateException(
+                  "fulfillment line "
+                      + line.getId()
+                      + " has no reservation to resolve its product");
+            }
+            reservationIds.add(line.getInventoryReservationId());
+          }
+          Map<UUID, InventoryReservation> reservationsById = new LinkedHashMap<>();
+          for (InventoryReservation r : reservationRepo.findByIds(reservationIds)) {
+            reservationsById.put(r.getId(), r);
+          }
+          Map<UUID, Integer> returnedByProduct = new LinkedHashMap<>();
+          for (FulfillmentLine line : lines) {
+            InventoryReservation r = reservationsById.get(line.getInventoryReservationId());
+            if (r == null) {
+              throw new IllegalStateException(
+                  "reservation " + line.getInventoryReservationId() + " not found for return");
+            }
+            returnedByProduct.merge(r.getProductId(), line.getQuantity(), Integer::sum);
+          }
+
+          List<UUID> sortedProductIds = returnedByProduct.keySet().stream().sorted().toList();
+          Map<UUID, Inventory> locked = inventoryRepo.lockForUpdate(orgId, sortedProductIds);
+          for (UUID pid : sortedProductIds) {
+            int qty = returnedByProduct.get(pid);
+            Inventory current = locked.get(pid);
+            if (current == null) {
+              throw new IllegalStateException(
+                  "no inventory row for returned product " + pid + " in org " + orgId);
+            }
+            // +stock, reserved unchanged: the goods are back on the shelf.
+            Inventory updated =
+                inventoryRepo.adjustQuantities(orgId, pid, qty, 0, current.getVersion());
+            inventoryLogRepo.insert(
+                orgId,
+                pid,
+                qty,
+                0,
+                updated.getStockQty(),
+                updated.getReservedQty(),
+                StockReason.RESTOCKED_FAILED_FULFILLMENT,
+                fulfillment.getSalesOrderId(),
+                actor);
+          }
+
+          fulfillment.markReturned(now);
+          fulfillmentRepo.updateStatus(fulfillment);
+
+          log.info(
+              "Returned failed fulfillment id={} orgId={} order={} products={}",
+              fulfillmentId,
+              orgId,
+              fulfillment.getSalesOrderId(),
+              sortedProductIds.size());
+          return new FulfillmentView(fulfillment, lines);
         });
   }
 
