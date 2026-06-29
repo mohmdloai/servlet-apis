@@ -221,7 +221,7 @@ public final class ReservationService {
           actor);
     }
 
-    int released = reservationRepo.markReleased(reservationIds, reason, now);
+    int released = reservationRepo.markReleased(orgId, reservationIds, reason, now);
     log.info(
         "Released {} reservation(s) for order {} across {} product(s) (reason={})",
         released,

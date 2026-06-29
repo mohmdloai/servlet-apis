@@ -30,10 +30,11 @@ public interface InventoryReservationRepository {
 
   /**
    * Bulk-flip the given reservations to {@code RELEASED}, stamping {@code released_at=now} and
-   * {@code released_reason=reason}. Filters on {@code status='ACTIVE'} so a concurrently-consumed
-   * row is never re-released. Returns the number of rows actually updated.
+   * {@code released_reason=reason}. Scoped to {@code orgId} (defense-in-depth — a row is only
+   * released within its own tenant) and filtered on {@code status='ACTIVE'} so a concurrently-
+   * consumed row is never re-released. Returns the number of rows actually updated.
    */
-  int markReleased(Collection<UUID> ids, String reason, OffsetDateTime now);
+  int markReleased(UUID orgId, Collection<UUID> ids, String reason, OffsetDateTime now);
 
   /**
    * Bulk-flip the given reservations to {@code CONSUMED}, stamping {@code consumed_at=now}. Filters

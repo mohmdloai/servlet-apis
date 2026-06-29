@@ -94,11 +94,12 @@ public final class InventoryReservationRepositoryImpl implements InventoryReserv
   }
 
   @Override
-  public int markReleased(Collection<UUID> ids, String reason, OffsetDateTime now) {
+  public int markReleased(UUID orgId, Collection<UUID> ids, String reason, OffsetDateTime now) {
     if (ids == null || ids.isEmpty()) {
       return 0;
     }
-    // Filter on status='ACTIVE' so a concurrently-CONSUMED row is never re-released (Race C).
+    // Scope to org (defense-in-depth) and filter on status='ACTIVE' so a concurrently-CONSUMED row
+    // is never re-released (Race C).
     return dsl.update(INVENTORY_RESERVATION)
         .set(
             INVENTORY_RESERVATION.STATUS,
@@ -107,8 +108,9 @@ public final class InventoryReservationRepositoryImpl implements InventoryReserv
         .set(INVENTORY_RESERVATION.RELEASED_REASON, reason)
         .where(
             INVENTORY_RESERVATION
-                .ID
-                .in(ids)
+                .ORG_ID
+                .eq(orgId)
+                .and(INVENTORY_RESERVATION.ID.in(ids))
                 .and(
                     INVENTORY_RESERVATION.STATUS.eq(
                         com.loai.inventory.repository.generated.enums.ReservationStatus.ACTIVE)))

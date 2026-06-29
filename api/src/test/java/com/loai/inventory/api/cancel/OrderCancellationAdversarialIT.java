@@ -15,6 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.loai.inventory.common.exception.AuthorizationException;
+import com.loai.inventory.common.exception.InvalidOrderTransitionException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
@@ -271,13 +273,13 @@ class OrderCancellationAdversarialIT {
   }
 
   /**
-   * The approval gate is applied PER REFUND, not on the aggregate. Two 400 refunds (total 800 &gt;
-   * the 500 threshold) each clear the gate, so a NON-owner cancel succeeds. This documents the
-   * structuring exposure: splitting one prepayment into sub-threshold payments bypasses the OWNER
-   * escalation that a single 800 payment would trigger.
+   * The approval gate is on the AGGREGATE, not per refund: two 400 refunds (total 800 &gt; the 500
+   * threshold) cannot be split past the OWNER escalation. A non-owner cancel of an order whose
+   * prepayments sum above threshold is rejected (closes the structuring hole), and nothing is
+   * written — the order stays PAID with its reservation and payments intact.
    */
   @Test
-  void perRefundThreshold_twoSubThresholdPayments_nonOwnerSucceeds() {
+  void aggregateThreshold_twoSubThresholdPayments_nonOwnerRejected() {
     UUID orgId = createOrg();
     UUID adminId = createUser();
     UUID customerId = createCustomer(orgId);
@@ -288,8 +290,32 @@ class OrderCancellationAdversarialIT {
     UUID p1 = seedPayment(orgId, customerId, orderId, "400.00", "400.00", PaymentStatus.RECEIVED);
     UUID p2 = seedPayment(orgId, customerId, orderId, "400.00", "400.00", PaymentStatus.RECEIVED);
 
-    // Non-owner (callerIsOwnerOrAdmin=false). Default org threshold is 500; each refund is 400.
-    CancelResult result = service.cancel(orgId, orderId, "structured", null, adminId, false);
+    // Non-owner (callerIsOwnerOrAdmin=false): aggregate 800 > 500 threshold ⇒ OWNER required.
+    assertThrows(
+        AuthorizationException.class,
+        () -> service.cancel(orgId, orderId, "structured", null, adminId, false));
+
+    // Whole cancel rolled back: nothing refunded, order untouched, reservation still held.
+    assertEquals("PAID", orderStatus(orderId));
+    assertEquals(0, pendingRefundCount(p1));
+    assertEquals(0, pendingRefundCount(p2));
+    assertEquals(80, reservedQty(orgId, productId));
+  }
+
+  /** The same above-threshold aggregate IS allowed for an OWNER/admin caller. */
+  @Test
+  void aggregateThreshold_twoSubThresholdPayments_ownerSucceeds() {
+    UUID orgId = createOrg();
+    UUID adminId = createUser();
+    UUID customerId = createCustomer(orgId);
+    UUID productId = createProduct(orgId);
+    createInventory(orgId, productId, 100, 80);
+    UUID orderId = seedOrder(orgId, customerId, OrderStatus.PAID, "800.00", "800.00");
+    seedLineWithReservation(orgId, orderId, productId, 80);
+    UUID p1 = seedPayment(orgId, customerId, orderId, "400.00", "400.00", PaymentStatus.RECEIVED);
+    UUID p2 = seedPayment(orgId, customerId, orderId, "400.00", "400.00", PaymentStatus.RECEIVED);
+
+    CancelResult result = service.cancel(orgId, orderId, "approved", null, adminId, true);
 
     assertEquals("CANCELLED", orderStatus(orderId));
     assertEquals(2, result.refunds().size());
@@ -346,13 +372,14 @@ class OrderCancellationAdversarialIT {
   }
 
   /**
-   * Boundary probe: the domain {@link com.loai.inventory.domain.model.SalesOrder#cancel} guard only
-   * rejects FULFILLED/CLOSED/terminal — it PERMITS FULFILLING. This records the actual behavior:
-   * cancelling a FULFILLING order succeeds (releases reservations + refunds), even though the
-   * service's documented scope speaks of pre-PAID / PAID-no-delivery. Surfaced as a finding.
+   * A FULFILLING order has a shipment in flight (its reservation CONSUMED, beyond {@code
+   * releaseForOrder}'s reach), so a blanket cancel would refund the full prepayment while the goods
+   * are gone. The {@link com.loai.inventory.domain.model.SalesOrder#cancel} guard now rejects
+   * FULFILLING; the cancel rolls back entirely (no refund, reservation untouched). Crediting a
+   * partially-fulfilled order is the deferred partial-delivery-cancel slice.
    */
   @Test
-  void fulfillingOrder_cancelIsPermittedByGuard_releasesAndRefunds() {
+  void fulfillingOrder_cancelIsRejected_andRollsBack() {
     UUID orgId = createOrg();
     UUID adminId = createUser();
     UUID customerId = createCustomer(orgId);
@@ -363,12 +390,13 @@ class OrderCancellationAdversarialIT {
     UUID payId =
         seedPayment(orgId, customerId, orderId, "250.00", "250.00", PaymentStatus.RECEIVED);
 
-    CancelResult result = service.cancel(orgId, orderId, "mid-fulfillment", null, adminId, false);
+    assertThrows(
+        InvalidOrderTransitionException.class,
+        () -> service.cancel(orgId, orderId, "mid-fulfillment", null, adminId, false));
 
-    assertEquals("CANCELLED", orderStatus(orderId));
-    assertEquals(1, result.refunds().size());
-    assertEquals(0, reservedQty(orgId, productId));
-    assertEquals(1, pendingRefundCount(payId));
+    assertEquals("FULFILLING", orderStatus(orderId), "order must stay FULFILLING");
+    assertEquals(25, reservedQty(orgId, productId), "reservation untouched");
+    assertEquals(0, pendingRefundCount(payId), "no refund created");
   }
 
   // ───────────────────────────── seeding ─────────────────────────────
