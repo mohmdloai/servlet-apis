@@ -39,8 +39,9 @@ import org.mockito.Mockito;
 
 /**
  * Runtime auth verification for the failed-fulfillment routes on {@link FulfillmentHandler}: {@code
- * fail} requires STAFF, while the money-moving {@code refund} and stock-moving {@code return}
- * require MANAGER (lower roles get 403 and the service is never called).
+ * fail} requires STAFF, while the money-moving {@code refund} and stock-moving {@code return} /
+ * {@code replace} require MANAGER (lower roles get 403 and the service is never called). Also pins
+ * malformed-JSON → 400 (not 500).
  */
 class FailedFulfillmentHandlerAuthTest {
 
@@ -214,6 +215,59 @@ class FailedFulfillmentHandlerAuthTest {
 
     assertEquals(405, resp.status, "GET on /refund must be 405");
     verify(service, never()).refundFailed(any(), any(), any(), any(), anyBoolean());
+  }
+
+  @Test
+  void replace_forbiddenForStaff_serviceNeverCalled() throws IOException {
+    FulfillmentService service = Mockito.mock(FulfillmentService.class);
+    Resp resp = new Resp();
+
+    handler(service)
+        .handle(
+            "POST",
+            reqWith(ctxWith(OrgRole.STAFF), ""),
+            resp.mock,
+            ORG,
+            "/" + FULFILLMENT + "/replace");
+
+    assertEquals(403, resp.status, "STAFF must be forbidden from replace (requires MANAGER)");
+    verify(service, never()).replaceFailed(any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void replace_allowedForManager_serviceCalled() throws IOException {
+    FulfillmentService service = Mockito.mock(FulfillmentService.class);
+    when(service.replaceFailed(eq(ORG), eq(FULFILLMENT), any(), any(), any(), any()))
+        .thenReturn(aView());
+    Resp resp = new Resp();
+
+    handler(service)
+        .handle(
+            "POST",
+            reqWith(ctxWith(OrgRole.MANAGER), ""),
+            resp.mock,
+            ORG,
+            "/" + FULFILLMENT + "/replace");
+
+    assertEquals(201, resp.status, "MANAGER replace must succeed (201)");
+    verify(service).replaceFailed(eq(ORG), eq(FULFILLMENT), any(), any(), any(), any());
+  }
+
+  @Test
+  void fail_malformedJsonBody_is400_notSwallowedNor500() throws IOException {
+    FulfillmentService service = Mockito.mock(FulfillmentService.class);
+    Resp resp = new Resp();
+
+    handler(service)
+        .handle(
+            "POST",
+            reqWith(ctxWith(OrgRole.STAFF), "{ not json"),
+            resp.mock,
+            ORG,
+            "/" + FULFILLMENT + "/fail");
+
+    assertEquals(400, resp.status, "malformed JSON must be 400 (not 500, not a swallowed null)");
+    verify(service, never()).markFailed(any(), any(), any());
   }
 
   // ─────────────── harness (mirrors PaymentDisputeHandlerAuthTest) ───────────────
