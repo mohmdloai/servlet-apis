@@ -60,6 +60,14 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
   }
 
   @Override
+  public Optional<Payment> findById(UUID orgId, UUID id) {
+    return dsl.selectFrom(PAYMENT)
+        .where(PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.ID.eq(id)))
+        .fetchOptional()
+        .map(this::toPayment);
+  }
+
+  @Override
   public Optional<Payment> findByIdForUpdate(UUID orgId, UUID id) {
     return dsl.selectFrom(PAYMENT)
         .where(PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.ID.eq(id)))
@@ -102,6 +110,20 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
         .execute();
   }
 
+  @Override
+  public void updateDisputeState(Payment payment) {
+    dsl.update(PAYMENT)
+        .set(
+            PAYMENT.STATUS,
+            com.loai.inventory.repository.generated.enums.PaymentStatus.valueOf(
+                payment.getStatus().name()))
+        .set(PAYMENT.DISPUTED_AT, payment.getDisputedAt())
+        .set(PAYMENT.DISPUTE_REASON, payment.getDisputeReason())
+        .set(PAYMENT.UPDATED_AT, payment.getUpdatedAt())
+        .where(PAYMENT.ID.eq(payment.getId()).and(PAYMENT.ORG_ID.eq(payment.getOrgId())))
+        .execute();
+  }
+
   private Payment toPayment(PaymentRecord r) {
     return Payment.rehydrate(
         r.getId(),
@@ -117,6 +139,8 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
         r.getRefundedAmount(),
         PaymentStatus.valueOf(r.getStatus().name()),
         r.getNotes(),
+        r.getDisputedAt(),
+        r.getDisputeReason(),
         r.getUpdatedAt());
   }
 }

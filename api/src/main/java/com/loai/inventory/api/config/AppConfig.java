@@ -48,6 +48,7 @@ import com.loai.inventory.service.InvoiceService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderExpiryService;
 import com.loai.inventory.service.OrgService;
+import com.loai.inventory.service.PaymentDisputeService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.ProductService;
@@ -120,6 +121,7 @@ public class AppConfig {
   public final SalesOrderService salesOrderService;
   public final OrderExpiryService orderExpiryService;
   public final PaymentService paymentService;
+  public final PaymentDisputeService paymentDisputeService;
   public final PaymentTransactionService paymentTransactionService;
   public final InvoiceService invoiceService;
   public final InvoiceAdminService invoiceAdminService;
@@ -188,6 +190,8 @@ public class AppConfig {
             paymentRepositoryFactory,
             salesOrderRepositoryFactory,
             paymentTransactionRepositoryFactory);
+    this.paymentDisputeService =
+        new PaymentDisputeService(dsl, paymentRepositoryFactory, refundAllocationRepositoryFactory);
     this.paymentTransactionService =
         new PaymentTransactionService(
             dsl, paymentTransactionRepositoryFactory, paymentRepositoryFactory, paymentService);

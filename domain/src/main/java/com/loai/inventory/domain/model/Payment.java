@@ -31,6 +31,8 @@ public class Payment {
   private BigDecimal refundedAmount;
   private PaymentStatus status;
   private String notes;
+  private OffsetDateTime disputedAt;
+  private String disputeReason;
   private OffsetDateTime updatedAt;
 
   /** A fully-unallocated payment in {@code RECEIVED} state, linked to its order and transaction. */
@@ -68,6 +70,8 @@ public class Payment {
         BigDecimal.ZERO.setScale(MONEY_SCALE, MONEY_ROUNDING),
         PaymentStatus.RECEIVED,
         null,
+        null,
+        null,
         now);
   }
 
@@ -86,6 +90,8 @@ public class Payment {
       BigDecimal refundedAmount,
       PaymentStatus status,
       String notes,
+      OffsetDateTime disputedAt,
+      String disputeReason,
       OffsetDateTime updatedAt) {
     return new Payment(
         id,
@@ -101,6 +107,8 @@ public class Payment {
         refundedAmount,
         status,
         notes,
+        disputedAt,
+        disputeReason,
         updatedAt);
   }
 
@@ -118,6 +126,8 @@ public class Payment {
       BigDecimal refundedAmount,
       PaymentStatus status,
       String notes,
+      OffsetDateTime disputedAt,
+      String disputeReason,
       OffsetDateTime updatedAt) {
     this.id = id;
     this.orgId = orgId;
@@ -132,6 +142,8 @@ public class Payment {
     this.refundedAmount = refundedAmount;
     this.status = status;
     this.notes = notes;
+    this.disputedAt = disputedAt;
+    this.disputeReason = disputeReason;
     this.updatedAt = updatedAt;
   }
 
@@ -186,12 +198,26 @@ public class Payment {
    *
    * Caller persists the resulting state and writes the matching RefundAllocation row (allocation
    * path) in the same transaction.
+   *
+   * <p>A DISPUTED payment is refundable only through the CreditNote ({@code fromAllocation}) path.
+   * Because one CreditNote credits exactly one invoice, a disputed payment spanning several
+   * invoices is fully refunded by several CreditNote-backed refunds. Each accrues {@code
+   * refundedAmount} but the payment <b>stays frozen as DISPUTED</b> — it does not pass through
+   * PARTIALLY_REFUNDED (state-machines.md F has no DISPUTED → PARTIALLY_REFUNDED edge) — until the
+   * cumulative refunds cover the whole amount, at which point it becomes REFUNDED. The direct
+   * (overpayment) path stays blocked while DISPUTED.
    */
   public void recordRefund(BigDecimal amount, boolean fromAllocation, OffsetDateTime now) {
     Objects.requireNonNull(amount, "amount required");
     Objects.requireNonNull(now, "now required");
-    if (status == PaymentStatus.DISPUTED) {
-      throw new IllegalStateException("cannot refund a DISPUTED payment " + id);
+    // A DISPUTED payment is frozen against ad-hoc moves, but the documented way to resolve a
+    // dispute
+    // is CreditNote + Refund (sys-analysis/outbound/payment.md §Disputed, state-machines.md F:
+    // DISPUTED ──[admin refunds]──▶ REFUNDED). So the CreditNote-backed path may drain a DISPUTED
+    // payment; the direct-from-Payment path stays blocked — disputed money is allocated to an
+    // invoice, not sitting unallocated.
+    if (status == PaymentStatus.DISPUTED && !fromAllocation) {
+      throw new IllegalStateException("cannot direct-refund a DISPUTED payment " + id);
     }
     if (amount.signum() <= 0) {
       throw new IllegalArgumentException("refund amount must be > 0");
@@ -223,6 +249,14 @@ public class Payment {
     this.refundedAmount = newRefunded;
     if (newRefunded.compareTo(this.amount) == 0) {
       this.status = PaymentStatus.REFUNDED;
+    } else if (status == PaymentStatus.DISPUTED) {
+      // Multi-invoice dispute resolution: the full refund arrives as several CreditNote-backed
+      // refunds (one CreditNote per credited invoice). The payment stays frozen as DISPUTED — it
+      // never enters PARTIALLY_REFUNDED (no such edge out of DISPUTED in state-machines.md F) — and
+      // flips to REFUNDED above only once the cumulative refunds cover the whole amount. The direct
+      // path is blocked above, so reaching here implies fromAllocation; unallocatedAmount is
+      // untouched, so the freeze against new allocation / direct refund holds throughout.
+      this.status = PaymentStatus.DISPUTED;
     } else if (fromAllocation) {
       this.status = PaymentStatus.PARTIALLY_REFUNDED;
     } else {
@@ -239,6 +273,49 @@ public class Payment {
         this.status = PaymentStatus.PARTIALLY_ALLOCATED;
       }
     }
+    this.updatedAt = now;
+  }
+
+  /**
+   * Flag a fully-allocated payment as DISPUTED — the customer claims it didn't happen, wasn't
+   * authorized, or was wrong (sys-analysis/outbound/payment.md §Disputed; state-machines.md F). The
+   * money is frozen: while DISPUTED a payment cannot be allocated to new invoices ({@link
+   * #allocate}) nor refunded directly ({@link #recordRefund}); only an upheld decision ({@link
+   * #uphold}) or a CreditNote-backed refund clears it. Only ALLOCATED payments enter dispute —
+   * disputes happen after the money was reconciled and recognized.
+   */
+  public void dispute(String reason, OffsetDateTime now) {
+    Objects.requireNonNull(now, "now required");
+    if (status != PaymentStatus.ALLOCATED) {
+      throw new IllegalStateException(
+          "only an ALLOCATED payment can be disputed; " + id + " is " + status);
+    }
+    this.status = PaymentStatus.DISPUTED;
+    this.disputedAt = now;
+    this.disputeReason = reason;
+    this.updatedAt = now;
+  }
+
+  /**
+   * Resolve a dispute in the org's favour: the payment was real and correct, so it returns to
+   * ALLOCATED (state-machines.md F: DISPUTED ──[admin upholds]──▶ ALLOCATED). {@code disputedAt} /
+   * {@code disputeReason} are retained as the audit trail of the resolved dispute.
+   *
+   * <p>A pre-dispute overpayment refund may leave {@code refundedAmount > 0} on an ALLOCATED (then
+   * disputed) payment, so this method does not gate on {@code refundedAmount}. What it must
+   * <i>not</i> allow is upholding after a <b>dispute-resolution</b> refund has begun (real money
+   * already returned for the disputed money). That is gated in {@code PaymentDisputeService.uphold}
+   * by the presence of a RefundAllocation against this payment — which can only have appeared
+   * post-dispute, since any allocation-backed refund moves a payment off ALLOCATED before it could
+   * be disputed.
+   */
+  public void uphold(OffsetDateTime now) {
+    Objects.requireNonNull(now, "now required");
+    if (status != PaymentStatus.DISPUTED) {
+      throw new IllegalStateException(
+          "only a DISPUTED payment can be upheld; " + id + " is " + status);
+    }
+    this.status = PaymentStatus.ALLOCATED;
     this.updatedAt = now;
   }
 
@@ -292,6 +369,14 @@ public class Payment {
 
   public String getNotes() {
     return notes;
+  }
+
+  public OffsetDateTime getDisputedAt() {
+    return disputedAt;
+  }
+
+  public String getDisputeReason() {
+    return disputeReason;
   }
 
   public OffsetDateTime getUpdatedAt() {

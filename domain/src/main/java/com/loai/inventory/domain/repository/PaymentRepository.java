@@ -20,6 +20,9 @@ public interface PaymentRepository {
    */
   Optional<Payment> findByTransactionId(UUID orgId, UUID paymentTransactionId);
 
+  /** Read a payment by id without locking. Used by the read-only GET endpoint. */
+  Optional<Payment> findById(UUID orgId, UUID id);
+
   /**
    * Read a payment by id with a write lock ({@code SELECT … FOR UPDATE}). Used by refund execution
    * to serialize concurrent refunds touching the same payment's caches.
@@ -47,4 +50,10 @@ public interface PaymentRepository {
    * {@code updated_at}. Scoped by {@code (org_id, id)}.
    */
   void updateAllocationState(Payment payment);
+
+  /**
+   * Persist the dispute-mutable state of a payment: {@code status}, {@code disputed_at}, {@code
+   * dispute_reason}, {@code updated_at}. Scoped by {@code (org_id, id)}.
+   */
+  void updateDisputeState(Payment payment);
 }
