@@ -107,6 +107,7 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
         .set(FULFILLMENT.CANCELLED_AT, fulfillment.getCancelledAt())
         .set(FULFILLMENT.FAILED_AT, fulfillment.getFailedAt())
         .set(FULFILLMENT.FAILED_REASON, fulfillment.getFailedReason())
+        .set(FULFILLMENT.RETURNED_AT, fulfillment.getReturnedAt())
         .set(FULFILLMENT.UPDATED_AT, fulfillment.getUpdatedAt())
         .where(
             FULFILLMENT
@@ -177,6 +178,7 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
         r.getCancelledAt(),
         r.getFailedAt(),
         r.getFailedReason(),
+        r.getReturnedAt(),
         r.getUpdatedAt());
   }
 
