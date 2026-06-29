@@ -1,5 +1,6 @@
 package com.loai.inventory.repository;
 
+import static com.loai.inventory.repository.generated.Tables.PAYMENT_ALLOCATION;
 import static com.loai.inventory.repository.generated.Tables.REFUND_ALLOCATION;
 
 import com.loai.inventory.domain.model.RefundAllocation;
@@ -37,5 +38,19 @@ public final class RefundAllocationRepositoryImpl implements RefundAllocationRep
             .where(REFUND_ALLOCATION.PAYMENT_ALLOCATION_ID.eq(paymentAllocationId))
             .fetchOne(0, BigDecimal.class);
     return sum == null ? BigDecimal.ZERO : sum;
+  }
+
+  @Override
+  public boolean existsForPayment(UUID orgId, UUID paymentId) {
+    return dsl.fetchExists(
+        dsl.selectOne()
+            .from(REFUND_ALLOCATION)
+            .join(PAYMENT_ALLOCATION)
+            .on(REFUND_ALLOCATION.PAYMENT_ALLOCATION_ID.eq(PAYMENT_ALLOCATION.ID))
+            .where(
+                PAYMENT_ALLOCATION
+                    .PAYMENT_ID
+                    .eq(paymentId)
+                    .and(PAYMENT_ALLOCATION.ORG_ID.eq(orgId))));
   }
 }

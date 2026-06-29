@@ -19,4 +19,12 @@ public interface RefundAllocationRepository {
    * this.
    */
   BigDecimal sumByPaymentAllocation(UUID paymentAllocationId);
+
+  /**
+   * Whether any RefundAllocation exists against an allocation of the given payment — i.e. a
+   * CreditNote-backed refund has executed against this payment. Used to block upholding a dispute
+   * after a dispute-resolution refund has begun: such a row can only appear post-dispute, because
+   * an allocation-backed refund moves a payment off ALLOCATED before it could ever be disputed.
+   */
+  boolean existsForPayment(UUID orgId, UUID paymentId);
 }
