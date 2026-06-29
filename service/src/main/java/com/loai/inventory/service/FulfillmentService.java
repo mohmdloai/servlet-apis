@@ -768,6 +768,19 @@ public final class FulfillmentService {
                   .findByIdForUpdate(orgId, orderId)
                   .orElseThrow(() -> new NotFoundException("SalesOrder", orderId));
 
+          // If the order left PAID/FULFILLING between fail and replace, that's a resource-state
+          // conflict (409), not a malformed request. Guard here with the right status before any
+          // reservation work — createInTx's requireFulfillable would otherwise surface it as a 400.
+          if (order.getStatus() != OrderStatus.PAID
+              && order.getStatus() != OrderStatus.FULFILLING) {
+            throw new ConflictException(
+                "order "
+                    + order.getOrderNumber()
+                    + " is "
+                    + order.getStatus()
+                    + ", not PAID/FULFILLING; cannot replace a fulfillment on it");
+          }
+
           // The failed fulfillment's order lines, in order — re-reserve exactly these.
           List<UUID> lineIds = new ArrayList<>();
           for (FulfillmentLine fl : fulfillmentRepo.findLinesByFulfillmentId(fulfillmentId)) {
