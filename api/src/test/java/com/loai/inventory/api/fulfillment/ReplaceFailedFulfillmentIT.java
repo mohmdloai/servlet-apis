@@ -242,6 +242,26 @@ class ReplaceFailedFulfillmentIT {
   }
 
   @Test
+  void replace_whenOrderLeftFulfillable_isConflictNotValidation() {
+    // The order moved out of PAID/FULFILLING between fail and replace (e.g. cancelled underneath).
+    // That's a resource-state conflict (409 ConflictException), not a malformed request (400).
+    Shipped s = shipOne("30.00", 3, 10);
+    service.markFailed(s.org, s.fulfillmentId, "lost");
+    dsl.update(SALES_ORDER)
+        .set(SALES_ORDER.STATUS, OrderStatus.CANCELLED)
+        .where(SALES_ORDER.ID.eq(s.orderId))
+        .execute();
+
+    assertThrows(
+        ConflictException.class,
+        () -> service.replaceFailed(s.org, s.fulfillmentId, null, null, null, actor));
+
+    // Nothing written: no reservation, failure still unresolved.
+    assertEquals(0, activeReservationCount(s.lineId));
+    assertNull(resolution(s.fulfillmentId));
+  }
+
+  @Test
   void refundThenReplace_isRejected() {
     Shipped s = shipOne("30.00", 3, 10);
     service.markFailed(s.org, s.fulfillmentId, "lost");
