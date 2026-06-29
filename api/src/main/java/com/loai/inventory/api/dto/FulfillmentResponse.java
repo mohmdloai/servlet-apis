@@ -16,6 +16,9 @@ public class FulfillmentResponse {
   private String trackingNumber;
   private String notes;
   private OffsetDateTime shippedAt;
+  private OffsetDateTime failedAt;
+  private String failedReason;
+  private OffsetDateTime returnedAt;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
   private List<FulfillmentLineResponse> lines;
@@ -32,6 +35,9 @@ public class FulfillmentResponse {
     r.trackingNumber = fulfillment.getTrackingNumber();
     r.notes = fulfillment.getNotes();
     r.shippedAt = fulfillment.getShippedAt();
+    r.failedAt = fulfillment.getFailedAt();
+    r.failedReason = fulfillment.getFailedReason();
+    r.returnedAt = fulfillment.getReturnedAt();
     r.createdAt = fulfillment.getCreatedAt();
     r.updatedAt = fulfillment.getUpdatedAt();
     r.lines = lines.stream().map(FulfillmentLineResponse::from).toList();
@@ -68,6 +74,18 @@ public class FulfillmentResponse {
 
   public OffsetDateTime getShippedAt() {
     return shippedAt;
+  }
+
+  public OffsetDateTime getFailedAt() {
+    return failedAt;
+  }
+
+  public String getFailedReason() {
+    return failedReason;
+  }
+
+  public OffsetDateTime getReturnedAt() {
+    return returnedAt;
   }
 
   public OffsetDateTime getCreatedAt() {

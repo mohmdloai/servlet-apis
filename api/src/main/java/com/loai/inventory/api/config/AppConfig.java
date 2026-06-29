@@ -209,6 +209,18 @@ public class AppConfig {
             salesOrderRepositoryFactory,
             customerRepositoryFactory,
             invoiceService);
+    // RefundService is built before FulfillmentService: the failed-fulfillment refund path
+    // (FulfillmentService.refundFailed) reuses RefundService.createDirectPendingInTx.
+    this.refundService =
+        new RefundService(
+            dsl,
+            refundRepositoryFactory,
+            refundAllocationRepositoryFactory,
+            creditNoteRepositoryFactory,
+            paymentRepositoryFactory,
+            paymentAllocationRepositoryFactory,
+            paymentTransactionRepositoryFactory,
+            orgRepositoryFactory);
     this.fulfillmentService =
         new FulfillmentService(
             dsl,
@@ -217,7 +229,9 @@ public class AppConfig {
             inventoryRepositoryFactory,
             inventoryReservationRepositoryFactory,
             inventoryLogRepositoryFactory,
-            invoiceService);
+            paymentRepositoryFactory,
+            invoiceService,
+            refundService);
     this.salesOrderService =
         new SalesOrderService(
             dsl,
@@ -232,16 +246,6 @@ public class AppConfig {
             creditNoteRepositoryFactory,
             salesInvoiceRepositoryFactory,
             refundRepositoryFactory,
-            orgRepositoryFactory);
-    this.refundService =
-        new RefundService(
-            dsl,
-            refundRepositoryFactory,
-            refundAllocationRepositoryFactory,
-            creditNoteRepositoryFactory,
-            paymentRepositoryFactory,
-            paymentAllocationRepositoryFactory,
-            paymentTransactionRepositoryFactory,
             orgRepositoryFactory);
     this.orderCancellationService =
         new OrderCancellationService(

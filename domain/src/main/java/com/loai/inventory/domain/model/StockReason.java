@@ -6,7 +6,8 @@ public enum StockReason {
   SOLD("Sale Fulfilled", true),
   RESTOCK("Stock Replenishment", false),
   ADJUSTMENT("Manual Adjustment", false),
-  RETURNED("Customer Return", true);
+  RETURNED("Customer Return", true),
+  RESTOCKED_FAILED_FULFILLMENT("Restocked — Failed Fulfillment", true);
 
   private final String displayName;
   private final boolean requiresOrderId;

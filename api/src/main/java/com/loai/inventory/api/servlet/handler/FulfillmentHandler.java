@@ -3,14 +3,18 @@ package com.loai.inventory.api.servlet.handler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CreateFulfillmentRequest;
+import com.loai.inventory.api.dto.FailFulfillmentRequest;
+import com.loai.inventory.api.dto.RefundFulfillmentRequest;
 import com.loai.inventory.api.mapper.FulfillmentMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.FulfillmentService.DeliveredView;
+import com.loai.inventory.service.FulfillmentService.FailedRefundResult;
 import com.loai.inventory.service.FulfillmentService.FulfillmentView;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -27,10 +31,16 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code POST /fulfillments/{id}/ship} — mark it SHIPPED, decrementing stock (200)
  *   <li>{@code POST /fulfillments/{id}/deliver} — mark it DELIVERED: issue the SalesInvoice and
  *       auto-allocate prepayment (200)
+ *   <li>{@code POST /fulfillments/{id}/fail} — mark a SHIPPED fulfillment FAILED (200); body {@code
+ *       {reason?}}
+ *   <li>{@code POST /fulfillments/{id}/refund} — direct-refund a FAILED fulfillment's prepayment
+ *       (200); body {@code {refund_method?}}
+ *   <li>{@code POST /fulfillments/{id}/return} — record a FAILED fulfillment's goods back in stock
+ *       (200)
  * </ul>
  *
- * <p>All require STAFF in the org (system ADMIN bypasses); shipping and delivery are the most
- * consequential actions in the outbound flow.
+ * <p>Create/ship/deliver/fail require STAFF; the money-moving {@code refund} and the stock-moving
+ * {@code return} require MANAGER (system ADMIN bypasses).
  */
 public class FulfillmentHandler implements OrgResourceHandler {
 
@@ -65,12 +75,16 @@ public class FulfillmentHandler implements OrgResourceHandler {
       }
 
       String[] parts = tail.split("/");
-      if (parts.length == 2 && "ship".equals(parts[1])) {
-        doShip(req, resp, orgId, parseId(parts[0]));
-        return;
-      }
-      if (parts.length == 2 && "deliver".equals(parts[1])) {
-        doDeliver(req, resp, orgId, parseId(parts[0]));
+      if (parts.length == 2) {
+        UUID id = parseId(parts[0]);
+        switch (parts[1]) {
+          case "ship" -> doShip(req, resp, orgId, id);
+          case "deliver" -> doDeliver(req, resp, orgId, id);
+          case "fail" -> doFail(req, resp, orgId, id);
+          case "refund" -> doRefund(req, resp, orgId, id);
+          case "return" -> doReturn(req, resp, orgId, id);
+          default -> throw new ValidationException("Unknown route: POST /fulfillments/" + tail);
+        }
         return;
       }
       throw new ValidationException("Unknown route: POST /fulfillments/" + tail);
@@ -122,6 +136,54 @@ public class FulfillmentHandler implements OrgResourceHandler {
     writeJson(resp, 200, FulfillmentMapper.toDeliverResponse(view));
   }
 
+  /** {@code POST /{id}/fail} — SHIPPED → FAILED. STAFF+; no money or stock moves. */
+  private void doFail(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    FailFulfillmentRequest body = readBodyOrNull(req, FailFulfillmentRequest.class);
+    String reason = body == null ? null : body.getReason();
+
+    FulfillmentView view = service.markFailed(orgId, id, reason);
+
+    writeJson(resp, 200, FulfillmentMapper.toResponse(view));
+  }
+
+  /**
+   * {@code POST /{id}/refund} — direct-refund a FAILED fulfillment's prepayment. MANAGER+ (money
+   * may move); an above-threshold refund escalates to OWNER. System ADMIN bypasses.
+   */
+  private void doRefund(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
+    RefundFulfillmentRequest body = readBodyOrNull(req, RefundFulfillmentRequest.class);
+    PaymentProvider method =
+        body == null ? null : FulfillmentMapper.toRefundMethod(body.getRefundMethod());
+
+    FailedRefundResult result =
+        service.refundFailed(orgId, id, method, sc.actorId(), isOwnerOrAdmin(sc, orgId));
+
+    writeJson(resp, 200, FulfillmentMapper.toRefundResponse(result));
+  }
+
+  /** {@code POST /{id}/return} — record a FAILED fulfillment's goods back in stock. MANAGER+. */
+  private void doReturn(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
+
+    FulfillmentView view = service.recordReturn(orgId, id, sc.toActorContext());
+
+    writeJson(resp, 200, FulfillmentMapper.toResponse(view));
+  }
+
+  /** OWNER in the org (or system ADMIN) — gates an above-threshold failed-fulfillment refund. */
+  private static boolean isOwnerOrAdmin(SecurityContext sc, UUID orgId) {
+    if (sc.isSystemAdmin()) {
+      return true;
+    }
+    var roles = sc.orgRoles() == null ? null : sc.orgRoles().get(orgId);
+    return roles != null && roles.contains(OrgRole.OWNER);
+  }
+
   private static String normalize(String remainingPath) {
     if (remainingPath == null) {
       return "";
@@ -140,6 +202,18 @@ public class FulfillmentHandler implements OrgResourceHandler {
 
   private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {
     return mapper.readValue(req.getInputStream(), type);
+  }
+
+  /** Like {@link #readBody} but tolerates an absent/blank body, returning {@code null}. */
+  private <T> T readBodyOrNull(HttpServletRequest req, Class<T> type) throws IOException {
+    if (req.getInputStream() == null) {
+      return null;
+    }
+    byte[] bytes = req.getInputStream().readAllBytes();
+    if (bytes.length == 0) {
+      return null;
+    }
+    return mapper.readValue(bytes, type);
   }
 
   private void writeJson(HttpServletResponse resp, int status, Object body) throws IOException {
