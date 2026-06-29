@@ -11,8 +11,8 @@ import java.util.UUID;
  * stock actually decrements (reservations consumed, {@code inventory.on_hand} dropped). See {@code
  * sys-analysis/outbound/fulfillment.md}.
  *
- * <p>This slice models the PENDING → SHIPPED transition only; DELIVERED / CANCELLED / FAILED arrive
- * in later slices.
+ * <p>Lifecycle: PENDING → SHIPPED → DELIVERED, with a SHIPPED → FAILED branch when a shipment never
+ * arrives (and a post-failure {@code returnedAt} stamp once the goods come back).
  */
 public final class Fulfillment {
 
@@ -30,6 +30,7 @@ public final class Fulfillment {
   private OffsetDateTime cancelledAt;
   private OffsetDateTime failedAt;
   private String failedReason;
+  private OffsetDateTime returnedAt;
   private OffsetDateTime updatedAt;
 
   /** Build a fresh PENDING fulfillment. Carrier / tracking / notes are optional at this stage. */
@@ -54,6 +55,7 @@ public final class Fulfillment {
         carrier,
         trackingNumber,
         notes,
+        null,
         null,
         null,
         null,
@@ -94,6 +96,7 @@ public final class Fulfillment {
         null,
         null,
         null,
+        null,
         now);
   }
 
@@ -112,6 +115,7 @@ public final class Fulfillment {
       OffsetDateTime cancelledAt,
       OffsetDateTime failedAt,
       String failedReason,
+      OffsetDateTime returnedAt,
       OffsetDateTime updatedAt) {
     return new Fulfillment(
         id,
@@ -127,6 +131,7 @@ public final class Fulfillment {
         cancelledAt,
         failedAt,
         failedReason,
+        returnedAt,
         updatedAt);
   }
 
@@ -144,6 +149,7 @@ public final class Fulfillment {
       OffsetDateTime cancelledAt,
       OffsetDateTime failedAt,
       String failedReason,
+      OffsetDateTime returnedAt,
       OffsetDateTime updatedAt) {
     this.id = id;
     this.orgId = orgId;
@@ -158,6 +164,7 @@ public final class Fulfillment {
     this.cancelledAt = cancelledAt;
     this.failedAt = failedAt;
     this.failedReason = failedReason;
+    this.returnedAt = returnedAt;
     this.updatedAt = updatedAt;
   }
 
@@ -190,6 +197,46 @@ public final class Fulfillment {
     Objects.requireNonNull(now, "now required");
     this.status = FulfillmentStatus.DELIVERED;
     this.deliveredAt = now;
+    this.updatedAt = now;
+  }
+
+  /**
+   * Mark a SHIPPED fulfillment FAILED — the package never arrived (lost in transit, refused, or
+   * returned to sender). Guards the SHIPPED precondition: failure is only meaningful once stock has
+   * physically left the warehouse, and DELIVERED is terminal (a post-delivery problem is a
+   * CreditNote, not a failure). No stock moves here: the goods are still out there. If they later
+   * come back, the caller records that separately via {@link #markReturned}. See {@code
+   * state-machines.md} machine B.
+   */
+  public void markFailed(String reason, OffsetDateTime now) {
+    if (this.status != FulfillmentStatus.SHIPPED) {
+      throw new InvalidOrderTransitionException(
+          "cannot fail fulfillment " + id + " in status " + status + "; expected SHIPPED");
+    }
+    Objects.requireNonNull(now, "now required");
+    this.status = FulfillmentStatus.FAILED;
+    this.failedAt = now;
+    this.failedReason = reason;
+    this.updatedAt = now;
+  }
+
+  /**
+   * Record that a FAILED fulfillment's goods physically returned to the warehouse — the caller
+   * writes the {@code +stock} inventory movement in the same transaction. FAILED is terminal, so
+   * this is not a status change: it stamps {@code returnedAt} and is idempotent — a second return
+   * is rejected so stock can't be double-counted.
+   */
+  public void markReturned(OffsetDateTime now) {
+    if (this.status != FulfillmentStatus.FAILED) {
+      throw new InvalidOrderTransitionException(
+          "cannot return fulfillment " + id + " in status " + status + "; expected FAILED");
+    }
+    if (this.returnedAt != null) {
+      throw new InvalidOrderTransitionException(
+          "fulfillment " + id + " goods already returned at " + returnedAt);
+    }
+    Objects.requireNonNull(now, "now required");
+    this.returnedAt = now;
     this.updatedAt = now;
   }
 
@@ -243,6 +290,10 @@ public final class Fulfillment {
 
   public String getFailedReason() {
     return failedReason;
+  }
+
+  public OffsetDateTime getReturnedAt() {
+    return returnedAt;
   }
 
   public OffsetDateTime getUpdatedAt() {
