@@ -31,6 +31,8 @@ public final class Fulfillment {
   private OffsetDateTime failedAt;
   private String failedReason;
   private OffsetDateTime returnedAt;
+  private FulfillmentResolution resolution;
+  private final UUID replacesFulfillmentId;
   private OffsetDateTime updatedAt;
 
   /** Build a fresh PENDING fulfillment. Carrier / tracking / notes are optional at this stage. */
@@ -61,6 +63,47 @@ public final class Fulfillment {
         null,
         null,
         null,
+        null,
+        null,
+        now);
+  }
+
+  /**
+   * Build a PENDING fulfillment that <b>replaces</b> a FAILED one — same shape as {@link
+   * #createPending} but carrying {@code replacesFulfillmentId} for audit lineage back to the
+   * shipment it re-ships. See {@code fulfillment.md} §FAILED.
+   */
+  public static Fulfillment createReplacementPending(
+      UUID id,
+      UUID orgId,
+      UUID salesOrderId,
+      UUID replacesFulfillmentId,
+      String carrier,
+      String trackingNumber,
+      String notes,
+      OffsetDateTime now) {
+    Objects.requireNonNull(id, "id required");
+    Objects.requireNonNull(orgId, "orgId required");
+    Objects.requireNonNull(salesOrderId, "salesOrderId required");
+    Objects.requireNonNull(replacesFulfillmentId, "replacesFulfillmentId required");
+    Objects.requireNonNull(now, "now required");
+    return new Fulfillment(
+        id,
+        orgId,
+        salesOrderId,
+        now,
+        FulfillmentStatus.PENDING,
+        carrier,
+        trackingNumber,
+        notes,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        replacesFulfillmentId,
         now);
   }
 
@@ -97,6 +140,8 @@ public final class Fulfillment {
         null,
         null,
         null,
+        null,
+        null,
         now);
   }
 
@@ -116,6 +161,8 @@ public final class Fulfillment {
       OffsetDateTime failedAt,
       String failedReason,
       OffsetDateTime returnedAt,
+      FulfillmentResolution resolution,
+      UUID replacesFulfillmentId,
       OffsetDateTime updatedAt) {
     return new Fulfillment(
         id,
@@ -132,6 +179,8 @@ public final class Fulfillment {
         failedAt,
         failedReason,
         returnedAt,
+        resolution,
+        replacesFulfillmentId,
         updatedAt);
   }
 
@@ -150,6 +199,8 @@ public final class Fulfillment {
       OffsetDateTime failedAt,
       String failedReason,
       OffsetDateTime returnedAt,
+      FulfillmentResolution resolution,
+      UUID replacesFulfillmentId,
       OffsetDateTime updatedAt) {
     this.id = id;
     this.orgId = orgId;
@@ -165,6 +216,8 @@ public final class Fulfillment {
     this.failedAt = failedAt;
     this.failedReason = failedReason;
     this.returnedAt = returnedAt;
+    this.resolution = resolution;
+    this.replacesFulfillmentId = replacesFulfillmentId;
     this.updatedAt = updatedAt;
   }
 
@@ -240,6 +293,27 @@ public final class Fulfillment {
     this.updatedAt = now;
   }
 
+  /**
+   * Record how this FAILED fulfillment was resolved — REFUNDED or REPLACED. A failure is resolved
+   * at most once: guards {@code status == FAILED} and {@code resolution == null}, so refund and
+   * replacement are mutually exclusive and neither can run twice. See {@code fulfillment.md}
+   * §FAILED.
+   */
+  public void resolve(FulfillmentResolution resolution, OffsetDateTime now) {
+    Objects.requireNonNull(resolution, "resolution required");
+    Objects.requireNonNull(now, "now required");
+    if (this.status != FulfillmentStatus.FAILED) {
+      throw new InvalidOrderTransitionException(
+          "cannot resolve fulfillment " + id + " in status " + status + "; expected FAILED");
+    }
+    if (this.resolution != null) {
+      throw new InvalidOrderTransitionException(
+          "fulfillment " + id + " already resolved as " + this.resolution);
+    }
+    this.resolution = resolution;
+    this.updatedAt = now;
+  }
+
   public UUID getId() {
     return id;
   }
@@ -294,6 +368,14 @@ public final class Fulfillment {
 
   public OffsetDateTime getReturnedAt() {
     return returnedAt;
+  }
+
+  public FulfillmentResolution getResolution() {
+    return resolution;
+  }
+
+  public UUID getReplacesFulfillmentId() {
+    return replacesFulfillmentId;
   }
 
   public OffsetDateTime getUpdatedAt() {
