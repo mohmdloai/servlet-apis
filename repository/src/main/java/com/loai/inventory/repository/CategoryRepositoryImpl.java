@@ -61,6 +61,15 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
   }
 
   @Override
+  public List<Category> findAllByOrg(UUID orgId) {
+    return dsl.selectFrom(CATEGORY)
+        .where(CATEGORY.ORG_ID.eq(orgId))
+        .orderBy(CATEGORY.CREATED_AT.desc())
+        .fetch()
+        .map(this::toCategory);
+  }
+
+  @Override
   public long count(UUID orgId) {
     return dsl.fetchCount(dsl.selectFrom(CATEGORY).where(CATEGORY.ORG_ID.eq(orgId)));
   }

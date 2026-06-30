@@ -312,6 +312,21 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   }
 
   @Override
+  public List<ProductListingImage> findImagesForListings(java.util.Collection<UUID> listingIds) {
+    if (listingIds.isEmpty()) {
+      return List.of();
+    }
+    return dsl.selectFrom(PRODUCT_LISTING_IMAGE)
+        .where(PRODUCT_LISTING_IMAGE.LISTING_ID.in(listingIds))
+        .orderBy(
+            PRODUCT_LISTING_IMAGE.LISTING_ID.asc(),
+            PRODUCT_LISTING_IMAGE.SORT_ORDER.asc(),
+            PRODUCT_LISTING_IMAGE.CREATED_AT.asc())
+        .fetch()
+        .map(this::toImage);
+  }
+
+  @Override
   public void deleteImage(UUID orgId, UUID listingId, UUID imageId) {
     int deleted =
         dsl.deleteFrom(PRODUCT_LISTING_IMAGE)
