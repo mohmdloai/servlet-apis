@@ -1,5 +1,6 @@
 package com.loai.inventory.service;
 
+import com.loai.inventory.common.Pagination;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -35,10 +36,9 @@ public class CategoryService {
   }
 
   public List<Category> getAll(UUID orgId, int page, int size) {
-    if (page < 0) throw new ValidationException("page must be >= 0");
-    if (size < 1 || size > 100) throw new ValidationException("size must be 1-100");
+    int offset = Pagination.offset(page, size);
     CategoryRepository repo = repoFactory.create(rootDsl);
-    return repo.findAll(orgId, page * size, size);
+    return repo.findAll(orgId, offset, size);
   }
 
   public long count(UUID orgId) {

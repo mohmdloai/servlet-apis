@@ -1,12 +1,13 @@
 package com.loai.inventory.service;
 
+import com.loai.inventory.common.Pagination;
 import com.loai.inventory.common.exception.NotFoundException;
-import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.domain.model.Category;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.ProductListing;
+import com.loai.inventory.domain.model.ProductListingImage;
 import com.loai.inventory.domain.repository.CategoryRepository;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepository;
@@ -72,12 +73,10 @@ public class StorefrontService {
   // ───────── reads ─────────
 
   public ListingPage listPublished(String orgSlug, String categorySlug, int page, int size) {
-    if (page < 0) throw new ValidationException("page must be >= 0");
-    if (size < 1 || size > 100) throw new ValidationException("size must be 1-100");
+    int offset = Pagination.offset(page, size);
 
     UUID orgId = resolveOrg(orgSlug).getId();
     ProductListingRepository listings = listingRepoFactory.create(rootDsl);
-    int offset = page * size;
 
     List<ProductListing> rows;
     long total;
@@ -96,8 +95,30 @@ public class StorefrontService {
       total = listings.countByStatus(orgId, ListingStatus.PUBLISHED);
     }
 
-    // Grid items carry images but not category breadcrumbs (kept light; detail has them).
-    List<ListingView> items = rows.stream().map(l -> toView(listings, l, List.of())).toList();
+    // One batched image query for the whole page (avoids an N+1), and the grid presigns only each
+    // listing's primary image — full galleries and category breadcrumbs are a detail-view concern.
+    Map<UUID, ProductListingImage> primaryByListing = new HashMap<>();
+    for (ProductListingImage img :
+        listings.findImagesForListings(rows.stream().map(ProductListing::getId).toList())) {
+      // Ordered by sort_order asc, so the first one seen per listing is its primary image.
+      primaryByListing.putIfAbsent(img.getListingId(), img);
+    }
+    List<ListingView> items =
+        rows.stream()
+            .map(
+                l -> {
+                  ProductListingImage primary = primaryByListing.get(l.getId());
+                  List<PublicImage> images =
+                      primary == null ? List.of() : List.of(toPublicImage(primary));
+                  return new ListingView(
+                      l.getSlug(),
+                      l.getTitle(),
+                      l.getMarketingCopy(),
+                      l.getSalesPrice(),
+                      images,
+                      List.of());
+                })
+            .toList();
     return new ListingPage(items, total, page, size);
   }
 
@@ -120,7 +141,7 @@ public class StorefrontService {
   public List<CategoryNav> listCategories(String orgSlug) {
     UUID orgId = resolveOrg(orgSlug).getId();
     CategoryRepository repo = categoryRepoFactory.create(rootDsl);
-    List<Category> all = repo.findAll(orgId, 0, 1000);
+    List<Category> all = repo.findAllByOrg(orgId);
     Map<UUID, String> slugById = new HashMap<>();
     for (Category c : all) {
       slugById.put(c.getId(), c.getSlug());
@@ -148,15 +169,13 @@ public class StorefrontService {
   private ListingView toView(
       ProductListingRepository listings, ProductListing l, List<CategoryRef> categories) {
     List<PublicImage> images =
-        listings.findImages(l.getId()).stream()
-            .map(
-                img ->
-                    new PublicImage(
-                        storage.presignGet(img.getObjectKey()),
-                        img.getAltText(),
-                        img.getSortOrder()))
-            .toList();
+        listings.findImages(l.getId()).stream().map(this::toPublicImage).toList();
     return new ListingView(
         l.getSlug(), l.getTitle(), l.getMarketingCopy(), l.getSalesPrice(), images, categories);
+  }
+
+  private PublicImage toPublicImage(ProductListingImage img) {
+    return new PublicImage(
+        storage.presignGet(img.getObjectKey()), img.getAltText(), img.getSortOrder());
   }
 }
