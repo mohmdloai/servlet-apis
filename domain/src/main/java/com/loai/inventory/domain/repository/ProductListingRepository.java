@@ -14,13 +14,22 @@ public interface ProductListingRepository {
 
   Optional<ProductListing> findById(UUID orgId, UUID id);
 
+  /** Storefront read: a listing by its public slug, constrained to a status (e.g. PUBLISHED). */
+  Optional<ProductListing> findBySlugAndStatus(UUID orgId, String slug, ListingStatus status);
+
   List<ProductListing> findAll(UUID orgId, int offset, int limit);
 
   List<ProductListing> findAllByStatus(UUID orgId, ListingStatus status, int offset, int limit);
 
+  /** Storefront read: listings in a category with the given status (e.g. PUBLISHED). */
+  List<ProductListing> findByCategoryAndStatus(
+      UUID orgId, UUID categoryId, ListingStatus status, int offset, int limit);
+
   long count(UUID orgId);
 
   long countByStatus(UUID orgId, ListingStatus status);
+
+  long countByCategoryAndStatus(UUID orgId, UUID categoryId, ListingStatus status);
 
   ProductListing insert(ProductListing listing);
 
