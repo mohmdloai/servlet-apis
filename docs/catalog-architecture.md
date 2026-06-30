@@ -91,9 +91,8 @@ come from `S3_ACCESS_KEY` / `S3_SECRET_KEY` env vars.
 ## API surface (authenticated, org-scoped)
 
 All under `/api/orgs/{orgId}`. VIEWER read · STAFF write/lifecycle · MANAGER delete · ADMIN
-bypass. There is **no anonymous/public endpoint in this slice** — matching documented v1, where
-the storefront reads through an org-scoped service role. The two-table split means a future
-public `/api/public/{orgSlug}/listings` can be added safely (reads `product_listing` only).
+bypass. This is the **admin / back-office** surface. The public storefront read surface is
+separate (see below).
 
 | Method | Path | Role |
 |---|---|---|
@@ -108,7 +107,35 @@ public `/api/public/{orgSlug}/listings` can be added safely (reads `product_list
 | POST | `/product-listings/{id}/images` | STAFF |
 | DELETE | `/product-listings/{id}/images/{imageId}` | STAFF |
 
+## Public storefront read API (anonymous)
+
+A separate, **anonymous** read surface at `/api/public/*` — the CQRS query side, not an
+aggregate. It is mounted outside the JWT filter (`JwtAuthFilter` bypasses the `/api/public/`
+prefix) and enforces the safety guarantees **at the source of truth**, not in a proxy:
+
+- resolves the org by **public slug** (404 if missing or inactive);
+- serves **only PUBLISHED** listings — the status is hard-coded in `StorefrontService`, never a
+  caller-supplied parameter, so a draft can never be returned even by its exact slug;
+- returns a **whitelisted** shape (slug, title, marketing copy, `sales_price`, images,
+  category breadcrumbs) — never the internal id, `product_id`, status, timestamps or object
+  keys. The read path only ever touches `product_listing`, so there is no row from which cost or
+  margin *could* leak;
+- sets `Cache-Control: public, max-age=60` (safely below the presigned image-URL TTL), so it is
+  CDN-cacheable.
+
+| Method | Path |
+|---|---|
+| GET | `/api/public/{orgSlug}/listings` (paged; `?category=<slug>`, `?page`, `?size`) |
+| GET | `/api/public/{orgSlug}/listings/{listingSlug}` (one published listing + breadcrumbs) |
+| GET | `/api/public/{orgSlug}/categories` (nav: name, slug, parent slug) |
+
+Checkout intentionally does **not** live here: placing an order needs `product_id`, which is
+internal — that goes through the authenticated SalesOrder path via a service role, so the public
+surface never exposes the listing→product mapping.
+
 ## Out of scope (later slices)
-- Anonymous/public storefront read endpoint and org-slug resolution.
-- Production file hosting/CDN fronting (this slice presigns; hosting is the deployment's S3).
+- Public rate-limiting on `/api/public/*` (the `RateLimitFilter` currently guards only `/api/auth/*`).
+- Stable public-bucket/CDN image URLs (this slice serves short-lived presigned GET URLs; a
+  public-read bucket would allow longer cache TTLs).
+- Storefront search and price-range filters.
 - Exposing `product.barcode` on the Product API (column exists since V16, still unwired).
