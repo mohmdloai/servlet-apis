@@ -63,6 +63,7 @@ import com.loai.inventory.service.ProductService;
 import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReservationService;
 import com.loai.inventory.service.SalesOrderService;
+import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.zaxxer.hikari.HikariDataSource;
@@ -128,6 +129,7 @@ public class AppConfig {
   public final ProductService productService;
   public final CategoryService categoryService;
   public final ProductListingService productListingService;
+  public final StorefrontService storefrontService;
   public final CustomerService customerService;
   public final InventoryService inventoryService;
   public final ReservationService reservationService;
@@ -194,6 +196,13 @@ public class AppConfig {
     this.categoryService = new CategoryService(dsl, categoryRepositoryFactory);
     this.productListingService =
         new ProductListingService(dsl, productListingRepositoryFactory, objectStorage);
+    this.storefrontService =
+        new StorefrontService(
+            dsl,
+            orgRepositoryFactory,
+            productListingRepositoryFactory,
+            categoryRepositoryFactory,
+            objectStorage);
     this.customerService = new CustomerService(dsl, customerRepositoryFactory);
     this.inventoryService =
         new InventoryService(dsl, inventoryRepositoryFactory, inventoryLogRepositoryFactory);

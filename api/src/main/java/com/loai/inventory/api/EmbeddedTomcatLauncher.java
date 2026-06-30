@@ -7,6 +7,7 @@ import com.loai.inventory.api.filter.RateLimitFilter;
 import com.loai.inventory.api.servlet.AdminSweepServlet;
 import com.loai.inventory.api.servlet.AuthServlet;
 import com.loai.inventory.api.servlet.OrgServlet;
+import com.loai.inventory.api.servlet.PublicStorefrontServlet;
 import java.io.File;
 import org.apache.catalina.Context;
 import org.apache.catalina.startup.Tomcat;
@@ -43,6 +44,8 @@ public class EmbeddedTomcatLauncher {
       ctx.addServletMappingDecoded("/api/auth/*", "authServlet");
       Tomcat.addServlet(ctx, "orgServlet", new OrgServlet());
       ctx.addServletMappingDecoded("/api/orgs/*", "orgServlet");
+      Tomcat.addServlet(ctx, "publicStorefrontServlet", new PublicStorefrontServlet());
+      ctx.addServletMappingDecoded("/api/public/*", "publicStorefrontServlet");
       Tomcat.addServlet(ctx, "adminSweepServlet", new AdminSweepServlet());
       ctx.addServletMappingDecoded("/api/admin/*", "adminSweepServlet");
 
