@@ -58,7 +58,10 @@ public class JwtAuthFilter implements Filter {
 
     String path = req.getServletPath() + (req.getPathInfo() != null ? req.getPathInfo() : "");
 
-    if (path.equals("/api/auth/login") || path.equals("/api/auth/refresh")) {
+    // Anonymous surfaces: auth bootstrap + the public storefront read API.
+    if (path.equals("/api/auth/login")
+        || path.equals("/api/auth/refresh")
+        || path.startsWith("/api/public/")) {
       chain.doFilter(request, response);
       return;
     }

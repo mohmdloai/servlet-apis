@@ -5,6 +5,9 @@ import com.loai.inventory.api.job.OrderTtlSweeperJob;
 import com.loai.inventory.common.DataSourceFactory;
 import com.loai.inventory.common.RedisFactory;
 import com.loai.inventory.common.security.JwtUtil;
+import com.loai.inventory.common.storage.ObjectStorage;
+import com.loai.inventory.common.storage.ObjectStorageFactory;
+import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
@@ -15,6 +18,7 @@ import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
+import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
 import com.loai.inventory.domain.repository.RefundAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.RefundRepositoryFactory;
@@ -22,6 +26,7 @@ import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
+import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
@@ -32,6 +37,7 @@ import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
+import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
 import com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.RefundRepositoryFactoryImpl;
@@ -39,6 +45,7 @@ import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
+import com.loai.inventory.service.CategoryService;
 import com.loai.inventory.service.CreditNoteService;
 import com.loai.inventory.service.CustomerService;
 import com.loai.inventory.service.FulfillmentService;
@@ -51,10 +58,12 @@ import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.PaymentDisputeService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductService;
 import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReservationService;
 import com.loai.inventory.service.SalesOrderService;
+import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.zaxxer.hikari.HikariDataSource;
@@ -89,11 +98,14 @@ public class AppConfig {
   public final DSLContext dsl;
   public final ObjectMapper objectMapper;
   public final JwtUtil jwtUtil;
+  public final ObjectStorage objectStorage;
   public final boolean secureCookies;
 
   // Repositories (domain interface type, not the impl)
   public final ProductRepository productRepository;
   public final UserRepository userRepository;
+  public final CategoryRepositoryFactory categoryRepositoryFactory;
+  public final ProductListingRepositoryFactory productListingRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
   public final InventoryLogRepositoryFactory inventoryLogRepositoryFactory;
@@ -115,6 +127,9 @@ public class AppConfig {
   public final AuthService authService;
   public final OrgService orgService;
   public final ProductService productService;
+  public final CategoryService categoryService;
+  public final ProductListingService productListingService;
+  public final StorefrontService storefrontService;
   public final CustomerService customerService;
   public final InventoryService inventoryService;
   public final ReservationService reservationService;
@@ -152,9 +167,12 @@ public class AppConfig {
 
     this.jedisPool = RedisFactory.build();
     this.jwtUtil = new JwtUtil(jwtSecret, accessTtl);
+    this.objectStorage = ObjectStorageFactory.build();
 
     this.productRepository = new ProductRepositoryImpl(dsl);
     this.userRepository = new UserRepositoryImpl(dsl);
+    this.categoryRepositoryFactory = new CategoryRepositoryFactoryImpl();
+    this.productListingRepositoryFactory = new ProductListingRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
     this.inventoryLogRepositoryFactory = new InventoryLogRepositoryFactoryImpl();
@@ -175,6 +193,16 @@ public class AppConfig {
     this.authService = new AuthService(userRepository, refreshTokenStore, jwtUtil);
     this.orgService = new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory);
     this.productService = new ProductService(productRepository, dsl);
+    this.categoryService = new CategoryService(dsl, categoryRepositoryFactory);
+    this.productListingService =
+        new ProductListingService(dsl, productListingRepositoryFactory, objectStorage);
+    this.storefrontService =
+        new StorefrontService(
+            dsl,
+            orgRepositoryFactory,
+            productListingRepositoryFactory,
+            categoryRepositoryFactory,
+            objectStorage);
     this.customerService = new CustomerService(dsl, customerRepositoryFactory);
     this.inventoryService =
         new InventoryService(dsl, inventoryRepositoryFactory, inventoryLogRepositoryFactory);
@@ -313,6 +341,7 @@ public class AppConfig {
         log.warn("Error stopping JobRunr scheduler", e);
       }
     }
+    if (objectStorage != null) objectStorage.close();
     if (jedisPool != null) jedisPool.close();
     if (dataSource != null) dataSource.close();
   }

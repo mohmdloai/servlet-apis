@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.servlet.handler.CategoryHandler;
 import com.loai.inventory.api.servlet.handler.CreditNoteHandler;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
 import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
@@ -14,6 +15,7 @@ import com.loai.inventory.api.servlet.handler.OrgResourceHandler;
 import com.loai.inventory.api.servlet.handler.PaymentHandler;
 import com.loai.inventory.api.servlet.handler.PaymentTransactionHandler;
 import com.loai.inventory.api.servlet.handler.ProductHandler;
+import com.loai.inventory.api.servlet.handler.ProductListingHandler;
 import com.loai.inventory.api.servlet.handler.RefundHandler;
 import com.loai.inventory.api.servlet.handler.SalesOrderHandler;
 import com.loai.inventory.common.exception.AppException;
@@ -56,6 +58,10 @@ public class OrgServlet extends HttpServlet {
     this.subResources =
         Map.ofEntries(
             Map.entry("products", new ProductHandler(config.productService, mapper)),
+            Map.entry("categories", new CategoryHandler(config.categoryService, mapper)),
+            Map.entry(
+                "product-listings",
+                new ProductListingHandler(config.productListingService, mapper)),
             Map.entry("customers", new CustomerHandler(config.customerService, mapper)),
             Map.entry("inventory", new InventoryHandler(config.inventoryService, mapper)),
             Map.entry(
