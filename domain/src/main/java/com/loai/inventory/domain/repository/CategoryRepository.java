@@ -16,6 +16,13 @@ public interface CategoryRepository {
 
   List<Category> findAll(UUID orgId, int offset, int limit);
 
+  /**
+   * Every category in the org, unpaginated — for building the full nav tree, where a bounded page
+   * would both drop categories and mis-resolve parent slugs whose parent fell outside the window.
+   * Category counts are naturally small, so this is intentionally uncapped.
+   */
+  List<Category> findAllByOrg(UUID orgId);
+
   long count(UUID orgId);
 
   Category insert(Category category);

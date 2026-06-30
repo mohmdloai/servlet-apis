@@ -3,6 +3,7 @@ package com.loai.inventory.domain.repository;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -65,6 +66,12 @@ public interface ProductListingRepository {
   ProductListingImage insertImage(ProductListingImage image);
 
   List<ProductListingImage> findImages(UUID listingId);
+
+  /**
+   * Images for many listings in one query (storefront grid), ordered by listing then sort order, so
+   * the caller can group in memory instead of issuing one {@link #findImages} per listing (N+1).
+   */
+  List<ProductListingImage> findImagesForListings(Collection<UUID> listingIds);
 
   void deleteImage(UUID orgId, UUID listingId, UUID imageId);
 }
