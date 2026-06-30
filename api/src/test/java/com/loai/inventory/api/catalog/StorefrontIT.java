@@ -1,5 +1,6 @@
 package com.loai.inventory.api.catalog;
 
+import static com.loai.inventory.repository.generated.Tables.CATEGORY;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -8,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.storage.ObjectStorageFactory;
 import com.loai.inventory.domain.model.Category;
@@ -188,6 +190,87 @@ class StorefrontIT {
     assertNull(notebooks.parentSlug());
   }
 
+  // ───────── adversarial: review findings ─────────
+
+  /**
+   * Finding #1 — pagination offset overflow. {@code page * size} was computed in {@code int}. The
+   * adversarial value below is the nasty one: 67_108_864 * 64 == 2^32, which an int multiply wraps
+   * to exactly 0 — so before the fix this *silently* returned page 0 (the first listing) as if the
+   * caller had asked for it, with no error at all. Now it must be rejected as out-of-range.
+   */
+  @Test
+  void overflowingPage_isRejected_notSilentlyServedAsPageZero() {
+    Seed s = seed("acme", true);
+    publishedListing(s, "live-notebook", "cat-notebooks");
+
+    // 67_108_864 * 64 wraps to 0 in int; 1_100_000_000 * 2 wraps negative. Both must 400, not 200.
+    assertThrows(
+        ValidationException.class, () -> service.listPublished(s.slug, null, 67_108_864, 64));
+    assertThrows(
+        ValidationException.class, () -> service.listPublished(s.slug, null, 1_100_000_000, 2));
+
+    // Sanity: a genuinely empty far page (within range) is an empty result, never an error.
+    assertEquals(0, service.listPublished(s.slug, null, 5, 20).items().size());
+  }
+
+  /**
+   * Finding #2 — category nav mis-rooted past the first 1000. The parent is the oldest row, then
+   * &gt;1000 newer fillers, then the child. The old {@code findAll(orgId, 0, 1000)} window (1000
+   * newest by created_at desc) excluded the parent, so the child's parent slug resolved to null and
+   * it rendered as a root. The full-org fetch must resolve it correctly and drop nothing.
+   */
+  @Test
+  void categoryNav_resolvesParent_evenBeyondThe1000Window() {
+    Seed s = seed("acme", true);
+    OffsetDateTime t0 = OffsetDateTime.parse("2020-01-01T00:00:00Z");
+
+    // Parent is the single oldest category.
+    UUID parentId = insertCategoryAt(s.orgId, null, "Notebooks", "notebooks", t0);
+    // 1001 fillers, all newer than the parent — they fill (and overflow) the old 1000 window.
+    for (int i = 0; i < 1001; i++) {
+      insertCategoryAt(s.orgId, null, "Filler " + i, "filler-" + i, t0.plusSeconds(i + 1L));
+    }
+    // Child is the newest row; it is inside any recent window but its parent is not.
+    insertCategoryAt(s.orgId, parentId, "Spiral", "spiral", t0.plusSeconds(5000));
+
+    var nav = service.listCategories(s.slug);
+
+    assertEquals(1003, nav.size(), "nav must include every category, not just the newest 1000");
+    var spiral = nav.stream().filter(n -> n.slug().equals("spiral")).findFirst().orElseThrow();
+    assertEquals("notebooks", spiral.parentSlug(), "deep parent must resolve, not null");
+  }
+
+  /**
+   * Finding #3 — N+1 and over-presigning on the grid. A listing with 3 images: the grid (list) view
+   * must carry only the primary (sort_order 0) image, while the detail view still carries all
+   * three. A second listing with no images proves the in-memory grouping handles the empty case.
+   */
+  @Test
+  void grid_carriesOnlyPrimaryImage_detailCarriesAll() {
+    Seed s = seed("acme", true);
+    UUID withImages = insertListing(s.orgId, s.productId, "gallery", ListingStatus.PUBLISHED);
+    insertImage(s.orgId, withImages, "c.png", "third", 2);
+    insertImage(s.orgId, withImages, "a.png", "first", 0);
+    insertImage(s.orgId, withImages, "b.png", "second", 1);
+    // A second published listing with zero images.
+    insertListing(s.orgId, s.productId2, "bare", ListingStatus.PUBLISHED);
+
+    ListingPage page = service.listPublished(s.slug, null, 0, 20);
+    assertEquals(2, page.total());
+
+    ListingView gallery =
+        page.items().stream().filter(i -> i.slug().equals("gallery")).findFirst().orElseThrow();
+    assertEquals(1, gallery.images().size(), "grid shows only the primary image");
+    assertEquals(0, gallery.images().get(0).sortOrder(), "and it is the sort_order=0 one");
+
+    ListingView bare =
+        page.items().stream().filter(i -> i.slug().equals("bare")).findFirst().orElseThrow();
+    assertTrue(bare.images().isEmpty(), "a listing with no images yields an empty image list");
+
+    // The detail view is unchanged — it still presigns the full gallery.
+    assertEquals(3, service.getListing(s.slug, "gallery").images().size());
+  }
+
   // ───────── seeding helpers ─────────
 
   private record Seed(UUID orgId, String slug, UUID productId, UUID productId2) {}
@@ -222,6 +305,34 @@ class StorefrontIT {
     c.setName(name);
     c.setSlug(slug);
     return categoryRepo().insert(c).getId();
+  }
+
+  /**
+   * Insert a category with an explicit created_at so the >1000-window ordering is deterministic.
+   */
+  private UUID insertCategoryAt(
+      UUID orgId, UUID parentId, String name, String slug, OffsetDateTime createdAt) {
+    UUID id = UUID.randomUUID();
+    dsl.insertInto(CATEGORY)
+        .set(CATEGORY.ID, id)
+        .set(CATEGORY.ORG_ID, orgId)
+        .set(CATEGORY.PARENT_CATEGORY_ID, parentId)
+        .set(CATEGORY.NAME, name)
+        .set(CATEGORY.SLUG, slug)
+        .set(CATEGORY.CREATED_AT, createdAt)
+        .set(CATEGORY.UPDATED_AT, createdAt)
+        .execute();
+    return id;
+  }
+
+  private void insertImage(UUID orgId, UUID listingId, String file, String alt, int sortOrder) {
+    ProductListingImage img = new ProductListingImage();
+    img.setOrgId(orgId);
+    img.setListingId(listingId);
+    img.setObjectKey(ObjectStorage.keyPrefix(orgId, listingId) + file);
+    img.setAltText(alt);
+    img.setSortOrder(sortOrder);
+    listingRepo().insertImage(img);
   }
 
   /** A PUBLISHED listing with one category and one image. */
