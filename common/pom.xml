@@ -47,6 +47,11 @@
       <groupId>org.mindrot</groupId>
       <artifactId>jbcrypt</artifactId>
     </dependency>
+    <!-- Object storage: S3 presigner for product-listing image uploads (version from AWS BOM) -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+    </dependency>
     <!-- Test -->
     <dependency>
       <groupId>junit</groupId>
