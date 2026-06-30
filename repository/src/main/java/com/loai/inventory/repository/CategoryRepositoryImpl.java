@@ -31,6 +31,25 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
   }
 
   @Override
+  public Optional<Category> findBySlug(UUID orgId, String slug) {
+    return dsl.selectFrom(CATEGORY)
+        .where(CATEGORY.ORG_ID.eq(orgId).and(CATEGORY.SLUG.eq(slug)))
+        .fetchOptional()
+        .map(this::toCategory);
+  }
+
+  @Override
+  public List<Category> findByIds(UUID orgId, java.util.Collection<UUID> ids) {
+    if (ids.isEmpty()) {
+      return java.util.List.of();
+    }
+    return dsl.selectFrom(CATEGORY)
+        .where(CATEGORY.ORG_ID.eq(orgId).and(CATEGORY.ID.in(ids)))
+        .fetch()
+        .map(this::toCategory);
+  }
+
+  @Override
   public List<Category> findAll(UUID orgId, int offset, int limit) {
     return dsl.selectFrom(CATEGORY)
         .where(CATEGORY.ORG_ID.eq(orgId))

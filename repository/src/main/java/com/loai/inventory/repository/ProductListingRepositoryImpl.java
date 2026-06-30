@@ -43,6 +43,55 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   }
 
   @Override
+  public Optional<ProductListing> findBySlugAndStatus(
+      UUID orgId, String slug, ListingStatus status) {
+    return dsl.selectFrom(PRODUCT_LISTING)
+        .where(
+            PRODUCT_LISTING
+                .ORG_ID
+                .eq(orgId)
+                .and(PRODUCT_LISTING.SLUG.eq(slug))
+                .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status))))
+        .fetchOptional()
+        .map(this::toListing);
+  }
+
+  @Override
+  public List<ProductListing> findByCategoryAndStatus(
+      UUID orgId, UUID categoryId, ListingStatus status, int offset, int limit) {
+    return dsl.select(PRODUCT_LISTING.fields())
+        .from(PRODUCT_LISTING)
+        .join(PRODUCT_LISTING_CATEGORY)
+        .on(PRODUCT_LISTING_CATEGORY.LISTING_ID.eq(PRODUCT_LISTING.ID))
+        .where(
+            PRODUCT_LISTING
+                .ORG_ID
+                .eq(orgId)
+                .and(PRODUCT_LISTING_CATEGORY.CATEGORY_ID.eq(categoryId))
+                .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status))))
+        .orderBy(PRODUCT_LISTING.CREATED_AT.desc())
+        .offset(offset)
+        .limit(limit)
+        .fetchInto(PRODUCT_LISTING)
+        .map(this::toListing);
+  }
+
+  @Override
+  public long countByCategoryAndStatus(UUID orgId, UUID categoryId, ListingStatus status) {
+    return dsl.fetchCount(
+        dsl.select(PRODUCT_LISTING.ID)
+            .from(PRODUCT_LISTING)
+            .join(PRODUCT_LISTING_CATEGORY)
+            .on(PRODUCT_LISTING_CATEGORY.LISTING_ID.eq(PRODUCT_LISTING.ID))
+            .where(
+                PRODUCT_LISTING
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(PRODUCT_LISTING_CATEGORY.CATEGORY_ID.eq(categoryId))
+                    .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)))));
+  }
+
+  @Override
   public List<ProductListing> findAll(UUID orgId, int offset, int limit) {
     return dsl.selectFrom(PRODUCT_LISTING)
         .where(PRODUCT_LISTING.ORG_ID.eq(orgId))
