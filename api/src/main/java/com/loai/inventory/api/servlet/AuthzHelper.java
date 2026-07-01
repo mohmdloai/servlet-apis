@@ -104,14 +104,17 @@ public final class AuthzHelper {
     // suspended org to fix it.
     if (ctx.isSystemAdmin()) return ctx;
 
-    // A suspended org rejects all its normal members, whatever their role.
-    if (!orgStatusGate.isActive(orgId)) {
-      throw new AuthorizationException("Org suspended");
-    }
-
+    // Membership is checked before suspension so a non-member gets the same generic "No access"
+    // whether or not the org is suspended - otherwise an outsider could probe which orgs are
+    // suspended by comparing the two 403 messages.
     Set<OrgRole> roles = ctx.orgRoles() == null ? null : ctx.orgRoles().get(orgId);
     if (roles == null || roles.isEmpty()) {
       throw new AuthorizationException("No access to org " + orgId);
+    }
+
+    // A suspended org then rejects all its members, whatever their role.
+    if (!orgStatusGate.isActive(orgId)) {
+      throw new AuthorizationException("Org suspended");
     }
 
     int needed = RANK.get(minRole);

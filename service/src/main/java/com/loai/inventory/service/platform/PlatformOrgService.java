@@ -62,9 +62,10 @@ public class PlatformOrgService {
   public OrgPage list(int page, int size, Boolean active) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    int offset = safeOffset(p, s);
 
     OrgRepository orgRepo = orgRepoFactory.create(dsl);
-    List<Org> orgs = orgRepo.findAll(p * s, s, active);
+    List<Org> orgs = orgRepo.findAll(offset, s, active);
     long total = orgRepo.count(active);
 
     Map<UUID, Long> memberCounts =
@@ -90,15 +91,25 @@ public class PlatformOrgService {
    */
   public Org suspend(SecurityContext actor, Environment env, UUID orgId, String reason) {
     Org updated = toggle(actor, env, orgId, true, reason);
-    orgStatus.set(orgId, false); // write-through so enforcement is immediate
+    orgStatus.invalidate(orgId); // next hot-path read load-through's the committed suspension
     return updated;
   }
 
   /** Reactivate a suspended org. */
   public Org reactivate(SecurityContext actor, Environment env, UUID orgId) {
     Org updated = toggle(actor, env, orgId, false, null);
-    orgStatus.set(orgId, true);
+    orgStatus.invalidate(orgId);
     return updated;
+  }
+
+  /**
+   * {@code page * size} as an offset, computed in long and clamped to {@code Integer.MAX_VALUE} so
+   * a huge page number can never overflow into a negative OFFSET (which Postgres rejects). A page
+   * past the end simply returns no rows.
+   */
+  static int safeOffset(int page, int size) {
+    long offset = (long) page * size;
+    return offset > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) offset;
   }
 
   private Org toggle(

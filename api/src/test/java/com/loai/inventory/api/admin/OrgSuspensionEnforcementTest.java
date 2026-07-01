@@ -3,6 +3,7 @@ package com.loai.inventory.api.admin;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
 
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -78,6 +79,22 @@ class OrgSuspensionEnforcementTest {
     AuthzHelper.configureOrgStatusGate(orgId -> true);
     assertDoesNotThrow(
         () -> AuthzHelper.requireOrgAccess(reqWith(member(OrgRole.STAFF)), ORG, OrgRole.VIEWER));
+  }
+
+  @Test
+  void suspendedOrg_nonMemberGetsGenericNoAccess() {
+    // An outsider must not be able to tell a suspended org from one they simply don't belong to -
+    // both surface the same generic "No access", so suspension state can't be enumerated.
+    AuthzHelper.configureOrgStatusGate(orgId -> false);
+    SecurityContext outsider =
+        new SecurityContext(UUID.randomUUID(), ActorType.USER, Set.of(), Map.of(), Set.of(), 0);
+    AuthorizationException ex =
+        assertThrows(
+            AuthorizationException.class,
+            () -> AuthzHelper.requireOrgAccess(reqWith(outsider), ORG, OrgRole.VIEWER));
+    assertTrue(
+        ex.getMessage().startsWith("No access"),
+        "a non-member must not learn that the org is suspended");
   }
 
   @Test

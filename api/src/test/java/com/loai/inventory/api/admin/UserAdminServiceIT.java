@@ -138,6 +138,20 @@ class UserAdminServiceIT {
     return id;
   }
 
+  private UUID userWithActive(String email, boolean active) {
+    UUID id = UUID.randomUUID();
+    dsl.execute(
+        "INSERT INTO app_user(id,email,password_hash,actor_type,active,token_version)"
+            + " VALUES (?,?,?,?::actor_type,?,?)",
+        id,
+        email,
+        "x",
+        "USER",
+        active,
+        0);
+    return id;
+  }
+
   private void systemRole(UUID userId, SystemRole role) {
     dsl.execute(
         "INSERT INTO user_system_role(user_id,role) VALUES (?,?::system_role)",
@@ -242,6 +256,23 @@ class UserAdminServiceIT {
     assertTrue(userRepo.findById(soleAdmin).orElseThrow().isActive());
   }
 
+  @Test
+  void disable_lastActiveAdmin_ignoresDisabledAdmin_blocked() {
+    // A previously-disabled admin still carries the ADMIN role but must NOT count as a usable
+    // admin:
+    // otherwise disabling the sole *active* admin would sail through and lock the platform out.
+    UUID actor = user("actor@x.io");
+    UUID soleActiveAdmin = user("live-admin@x.io");
+    systemRole(soleActiveAdmin, SystemRole.ADMIN);
+    UUID disabledAdmin = userWithActive("dead-admin@x.io", false);
+    systemRole(disabledAdmin, SystemRole.ADMIN);
+
+    assertThrows(
+        ValidationException.class,
+        () -> service.setActive(admin(actor), env(), soleActiveAdmin, false));
+    assertTrue(userRepo.findById(soleActiveAdmin).orElseThrow().isActive());
+  }
+
   // ───────────────────────── system roles ─────────────────────────
 
   @Test
@@ -282,6 +313,20 @@ class UserAdminServiceIT {
         ValidationException.class,
         () -> service.revokeSystemRole(admin(actor), env(), actor, SystemRole.ADMIN));
     assertTrue(hasSystemRole(actor, SystemRole.ADMIN));
+  }
+
+  @Test
+  void revokeSystemRole_notHeld_isNoOpNoLogout() {
+    // Revoking a role the user never had must be an idempotent no-op: no audit row, and crucially
+    // no forced logout - otherwise a repeatable DELETE becomes an involuntary global-logout weapon.
+    UUID actor = user("admin@x.io");
+    systemRole(actor, SystemRole.ADMIN);
+    UUID target = user("t@x.io");
+
+    service.revokeSystemRole(admin(actor), env(), target, SystemRole.SUPPORT);
+
+    assertEquals(0, userRepo.getTokenVersion(target), "a no-op revoke must not force logout");
+    assertEquals(0, auditCount("SYSTEM_ROLE_REVOKE"));
   }
 
   @Test
@@ -333,6 +378,18 @@ class UserAdminServiceIT {
     assertTrue(userRepo.findOrgRoles(target).isEmpty());
     assertEquals(1, userRepo.getTokenVersion(target), "de-privilege must force logout-all");
     assertEquals(1, auditCount("ORG_ROLE_REVOKE"));
+  }
+
+  @Test
+  void revokeOrgRole_notHeld_isNoOpNoLogout() {
+    UUID actor = user("admin@x.io");
+    UUID target = user("t@x.io");
+    UUID orgId = org("acme");
+
+    service.revokeOrgRole(admin(actor), env(), target, orgId, OrgRole.STAFF);
+
+    assertEquals(0, userRepo.getTokenVersion(target), "a no-op revoke must not force logout");
+    assertEquals(0, auditCount("ORG_ROLE_REVOKE"));
   }
 
   // ───────────────────────── password reset ─────────────────────────

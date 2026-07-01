@@ -36,12 +36,18 @@ public final class OrgHealthRepositoryImpl implements OrgHealthRepository {
         dsl.fetchCount(
             SALES_ORDER,
             SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.STATUS.eq(OrderStatus.PENDING_PAYMENT)));
-    long disputes =
-        dsl.fetchCount(
-            PAYMENT, PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.STATUS.eq(PaymentStatus.DISPUTED)));
-    long unallocated =
-        dsl.fetchCount(
-            PAYMENT, PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.UNALLOCATED_AMOUNT.gt(BigDecimal.ZERO)));
+    // Both payment rollups come off the same table, so fold them into one scan with FILTER.
+    Field<Integer> disputed =
+        DSL.count().filterWhere(PAYMENT.STATUS.eq(PaymentStatus.DISPUTED)).as("disputed");
+    Field<Integer> unallocatedField =
+        DSL.count().filterWhere(PAYMENT.UNALLOCATED_AMOUNT.gt(BigDecimal.ZERO)).as("unallocated");
+    var payments =
+        dsl.select(disputed, unallocatedField)
+            .from(PAYMENT)
+            .where(PAYMENT.ORG_ID.eq(orgId))
+            .fetchOne();
+    long disputes = payments == null ? 0L : payments.get(disputed).longValue();
+    long unallocated = payments == null ? 0L : payments.get(unallocatedField).longValue();
     return new OrgHealth(members, pending, disputes, unallocated);
   }
 

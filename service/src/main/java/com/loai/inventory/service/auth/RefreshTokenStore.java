@@ -191,6 +191,17 @@ public class RefreshTokenStore {
     }
   }
 
+  /**
+   * Drop the cached token_version so the filter's cache-miss path treats every outstanding access
+   * token as invalid (fail closed). Used when a de-privilege has bumped the DB version but the
+   * write-through to the cache could not be trusted.
+   */
+  public void invalidateTokenVersion(UUID userId) {
+    try (Jedis jedis = jedisPool.getResource()) {
+      jedis.del("user:ver:" + userId);
+    }
+  }
+
   public Optional<Integer> getCachedTokenVersion(UUID userId) {
     try (Jedis jedis = jedisPool.getResource()) {
       String val = jedis.get("user:ver:" + userId);

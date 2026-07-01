@@ -82,8 +82,11 @@ public class UserAdminService {
   public UserPage list(int page, int size, String emailQuery) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    // Compute the offset in long and clamp so a huge page can't overflow to a negative OFFSET.
+    long rawOffset = (long) p * s;
+    int offset = rawOffset > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) rawOffset;
     UserRepository userRepo = userRepoFactory.create(dsl);
-    List<AppUser> users = userRepo.findAll(p * s, s, emailQuery);
+    List<AppUser> users = userRepo.findAll(offset, s, emailQuery);
     long total = userRepo.countAll(emailQuery);
     return new UserPage(users, total, p, s);
   }
@@ -152,18 +155,22 @@ public class UserAdminService {
 
   /** Enable or disable a user. Disabling forces an immediate global logout. */
   public AppUser setActive(SecurityContext actor, Environment env, UUID userId, boolean active) {
-    if (!active) {
-      if (actor.actorId().equals(userId)) {
-        throw new ValidationException("Cannot disable your own account");
-      }
-      assertNotLastAdmin(userId, "disable the last platform ADMIN");
+    if (!active && actor.actorId().equals(userId)) {
+      throw new ValidationException("Cannot disable your own account");
     }
 
-    AppUser updated =
+    // The last-admin guard, the flag flip, the audit row, and the token_version bump all commit as
+    // one transaction: the guard locks the active-admin rows (serializing concurrent disables) and
+    // the version bump rides along so a disabled user's live token dies atomically with the change.
+    Bumped result =
         dsl.transactionResult(
             cfg -> {
               DSLContext tx = DSL.using(cfg);
-              AppUser u = userRepoFactory.create(tx).setActive(userId, active);
+              UserRepository repo = userRepoFactory.create(tx);
+              if (!active) {
+                assertNotLastActiveAdmin(repo, userId, "disable the last platform ADMIN");
+              }
+              AppUser u = repo.setActive(userId, active);
               audit.recordInTx(
                   tx,
                   actor,
@@ -172,13 +179,13 @@ public class UserAdminService {
                   PlatformAuditEvent.Target.USER,
                   userId,
                   Map.of());
-              return u;
+              return new Bumped(u, active ? null : repo.incrementTokenVersion(userId));
             });
 
-    if (!active) {
-      authService.logoutAll(userId); // de-privilege → kill live tokens now
+    if (result.newTokenVersion() != null) {
+      authService.propagateLogoutAll(userId, result.newTokenVersion()); // de-privilege revokes now
     }
-    return updated;
+    return result.user();
   }
 
   public void grantSystemRole(
@@ -202,27 +209,37 @@ public class UserAdminService {
 
   public void revokeSystemRole(
       SecurityContext actor, Environment env, UUID userId, SystemRole role) {
-    if (role == SystemRole.ADMIN) {
-      if (actor.actorId().equals(userId)) {
-        throw new ValidationException("Cannot remove your own ADMIN role");
-      }
-      assertNotLastAdmin(userId, "remove the last platform ADMIN");
+    if (role == SystemRole.ADMIN && actor.actorId().equals(userId)) {
+      throw new ValidationException("Cannot remove your own ADMIN role");
     }
     ensureUserExists(userId);
-    dsl.transaction(
-        cfg -> {
-          DSLContext tx = DSL.using(cfg);
-          userRepoFactory.create(tx).deleteSystemRole(userId, role);
-          audit.recordInTx(
-              tx,
-              actor,
-              env,
-              "SYSTEM_ROLE_REVOKE",
-              PlatformAuditEvent.Target.USER,
-              userId,
-              Map.of("role", role.name()));
-        });
-    authService.logoutAll(userId); // de-privilege → revoke now
+    Integer newVersion =
+        dsl.transactionResult(
+            cfg -> {
+              DSLContext tx = DSL.using(cfg);
+              UserRepository repo = userRepoFactory.create(tx);
+              // Guard inside the txn (locking) so the count-then-delete is atomic against a
+              // concurrent revoke of a different admin.
+              if (role == SystemRole.ADMIN) {
+                assertNotLastActiveAdmin(repo, userId, "remove the last platform ADMIN");
+              }
+              int deleted = repo.deleteSystemRole(userId, role);
+              if (deleted == 0) {
+                return null; // idempotent no-op: user never held the role, so nothing to audit
+              }
+              audit.recordInTx(
+                  tx,
+                  actor,
+                  env,
+                  "SYSTEM_ROLE_REVOKE",
+                  PlatformAuditEvent.Target.USER,
+                  userId,
+                  Map.of("role", role.name()));
+              return repo.incrementTokenVersion(userId);
+            });
+    if (newVersion != null) {
+      authService.propagateLogoutAll(userId, newVersion); // de-privilege revokes now
+    }
   }
 
   public void grantOrgRole(
@@ -247,20 +264,28 @@ public class UserAdminService {
   public void revokeOrgRole(
       SecurityContext actor, Environment env, UUID userId, UUID orgId, OrgRole role) {
     ensureUserExists(userId);
-    dsl.transaction(
-        cfg -> {
-          DSLContext tx = DSL.using(cfg);
-          userRepoFactory.create(tx).deleteOrgRole(userId, orgId, role);
-          audit.recordInTx(
-              tx,
-              actor,
-              env,
-              "ORG_ROLE_REVOKE",
-              PlatformAuditEvent.Target.USER,
-              userId,
-              Map.of("org_id", orgId.toString(), "role", role.name()));
-        });
-    authService.logoutAll(userId); // de-privilege → revoke now
+    Integer newVersion =
+        dsl.transactionResult(
+            cfg -> {
+              DSLContext tx = DSL.using(cfg);
+              UserRepository repo = userRepoFactory.create(tx);
+              int deleted = repo.deleteOrgRole(userId, orgId, role);
+              if (deleted == 0) {
+                return null; // idempotent no-op: user never held the role, so no audit / no logout
+              }
+              audit.recordInTx(
+                  tx,
+                  actor,
+                  env,
+                  "ORG_ROLE_REVOKE",
+                  PlatformAuditEvent.Target.USER,
+                  userId,
+                  Map.of("org_id", orgId.toString(), "role", role.name()));
+              return repo.incrementTokenVersion(userId);
+            });
+    if (newVersion != null) {
+      authService.propagateLogoutAll(userId, newVersion); // de-privilege revokes now
+    }
   }
 
   /** Force-set a user's password. Also revokes all their sessions. */
@@ -271,14 +296,24 @@ public class UserAdminService {
     }
     ensureUserExists(userId);
     String hash = PasswordHasher.hash(rawPassword);
-    dsl.transaction(
-        cfg -> {
-          DSLContext tx = DSL.using(cfg);
-          userRepoFactory.create(tx).updatePasswordHash(userId, hash);
-          audit.recordInTx(
-              tx, actor, env, "PASSWORD_RESET", PlatformAuditEvent.Target.USER, userId, Map.of());
-        });
-    authService.logoutAll(userId); // an admin-forced reset invalidates existing sessions
+    int newVersion =
+        dsl.transactionResult(
+            cfg -> {
+              DSLContext tx = DSL.using(cfg);
+              UserRepository repo = userRepoFactory.create(tx);
+              repo.updatePasswordHash(userId, hash);
+              audit.recordInTx(
+                  tx,
+                  actor,
+                  env,
+                  "PASSWORD_RESET",
+                  PlatformAuditEvent.Target.USER,
+                  userId,
+                  Map.of());
+              return repo.incrementTokenVersion(userId);
+            });
+    // an admin-forced reset invalidates existing sessions
+    authService.propagateLogoutAll(userId, newVersion);
   }
 
   // ───────────────────────── guards ─────────────────────────
@@ -296,12 +331,21 @@ public class UserAdminService {
     }
   }
 
-  /** Block an action that would leave zero platform ADMINs, if {@code userId} is currently one. */
-  private void assertNotLastAdmin(UUID userId, String actionDescription) {
-    UserRepository userRepo = userRepoFactory.create(dsl);
-    boolean targetIsAdmin = userRepo.findSystemRoles(userId).contains(SystemRole.ADMIN);
-    if (targetIsAdmin && userRepo.countUsersWithSystemRole(SystemRole.ADMIN) <= 1) {
+  /**
+   * Block an action that would leave zero *usable* (active) platform ADMINs. Must run on the
+   * transaction-bound {@code repo}: {@link UserRepository#activeAdminIdsForUpdate()} takes a row
+   * lock so the check and the following mutation are atomic against a concurrent de-privilege of a
+   * different admin, and it counts only active admins so a previously-disabled admin can never make
+   * this guard pass by inflating the tally.
+   */
+  private void assertNotLastActiveAdmin(
+      UserRepository repo, UUID userId, String actionDescription) {
+    Set<UUID> activeAdmins = repo.activeAdminIdsForUpdate();
+    if (activeAdmins.contains(userId) && activeAdmins.size() == 1) {
       throw new ValidationException("Cannot " + actionDescription);
     }
   }
+
+  /** Carries a mutation's result plus the new token_version when the change forced a logout. */
+  private record Bumped(AppUser user, Integer newTokenVersion) {}
 }

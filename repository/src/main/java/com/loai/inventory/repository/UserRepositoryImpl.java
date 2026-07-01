@@ -156,8 +156,8 @@ public final class UserRepositoryImpl implements UserRepository {
   }
 
   @Override
-  public void deleteSystemRole(UUID userId, SystemRole role) {
-    dsl.deleteFrom(USER_SYSTEM_ROLE)
+  public int deleteSystemRole(UUID userId, SystemRole role) {
+    return dsl.deleteFrom(USER_SYSTEM_ROLE)
         .where(USER_SYSTEM_ROLE.USER_ID.eq(userId))
         .and(
             USER_SYSTEM_ROLE.ROLE.eq(
@@ -167,8 +167,8 @@ public final class UserRepositoryImpl implements UserRepository {
   }
 
   @Override
-  public void deleteOrgRole(UUID userId, UUID orgId, OrgRole role) {
-    dsl.deleteFrom(USER_ORG_ROLE)
+  public int deleteOrgRole(UUID userId, UUID orgId, OrgRole role) {
+    return dsl.deleteFrom(USER_ORG_ROLE)
         .where(USER_ORG_ROLE.USER_ID.eq(userId))
         .and(USER_ORG_ROLE.ORG_ID.eq(orgId))
         .and(
@@ -230,11 +230,21 @@ public final class UserRepositoryImpl implements UserRepository {
   }
 
   @Override
-  public long countUsersWithSystemRole(SystemRole role) {
-    return dsl.fetchCount(
-        USER_SYSTEM_ROLE,
-        USER_SYSTEM_ROLE.ROLE.eq(
-            com.loai.inventory.repository.generated.enums.SystemRole.lookupLiteral(role.name())));
+  public Set<UUID> activeAdminIdsForUpdate() {
+    // Join user_system_role to app_user so we count only *active* admins, and FOR UPDATE so two
+    // concurrent de-privileges contend on the same admin rows and serialize - closing the race
+    // where both read "2 admins", both pass the guard, and both commit down to zero.
+    return dsl.select(USER_SYSTEM_ROLE.USER_ID)
+        .from(USER_SYSTEM_ROLE)
+        .join(APP_USER)
+        .on(APP_USER.ID.eq(USER_SYSTEM_ROLE.USER_ID))
+        .where(
+            USER_SYSTEM_ROLE.ROLE.eq(
+                com.loai.inventory.repository.generated.enums.SystemRole.lookupLiteral(
+                    SystemRole.ADMIN.name())))
+        .and(APP_USER.ACTIVE.isTrue())
+        .forUpdate()
+        .fetchSet(USER_SYSTEM_ROLE.USER_ID);
   }
 
   private AppUser toAppUser(AppUserRecord r) {
