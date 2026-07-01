@@ -34,11 +34,11 @@ public interface UserRepository {
   /** Grant a platform role. Idempotent (no-op if the row already exists). */
   void insertSystemRole(UUID userId, SystemRole role);
 
-  /** Revoke a platform role. No-op if the user does not hold it. */
-  void deleteSystemRole(UUID userId, SystemRole role);
+  /** Revoke a platform role. Returns the number of rows deleted (0 if the user lacked it). */
+  int deleteSystemRole(UUID userId, SystemRole role);
 
-  /** Revoke one org role. No-op if the user does not hold it. */
-  void deleteOrgRole(UUID userId, UUID orgId, OrgRole role);
+  /** Revoke one org role. Returns the number of rows deleted (0 if the user lacked it). */
+  int deleteOrgRole(UUID userId, UUID orgId, OrgRole role);
 
   /**
    * Paged user list, optionally filtered by a case-insensitive email prefix ({@code null} = all).
@@ -54,6 +54,11 @@ public interface UserRepository {
   /** Overwrite a user's password hash. */
   void updatePasswordHash(UUID userId, String passwordHash);
 
-  /** Count users holding the given platform role - backs the last-admin guard. */
-  long countUsersWithSystemRole(SystemRole role);
+  /**
+   * Lock and return the ids of every currently *active* platform ADMIN, taking a {@code FOR UPDATE}
+   * row lock so concurrent de-privileges serialize. Backs the last-admin guard: it counts only
+   * usable (active) admins and, by locking, makes the guard's check-then-mutate atomic. Must be
+   * called on a transaction-bound repository.
+   */
+  Set<UUID> activeAdminIdsForUpdate();
 }

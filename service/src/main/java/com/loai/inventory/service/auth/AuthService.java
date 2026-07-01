@@ -169,9 +169,29 @@ public class AuthService {
 
   public void logoutAll(UUID userId) {
     int newVersion = userRepo.incrementTokenVersion(userId);
-    refreshTokenStore.cacheTokenVersion(userId, newVersion);
-    refreshTokenStore.revokeAllForUser(userId);
+    propagateLogoutAll(userId, newVersion);
     log.info("Logged out all sessions for user id={}, new token_version={}", userId, newVersion);
+  }
+
+  /**
+   * Propagate a logout-all whose {@code token_version} bump has *already* been committed to the DB
+   * (typically inside a de-privilege transaction). Caches the new version and revokes every refresh
+   * family. If Redis cannot be trusted, drops the cached version instead so the filter's cache-miss
+   * path rejects outstanding tokens - fail closed, never fail open, so a demoted user's live token
+   * cannot outlive the change.
+   */
+  public void propagateLogoutAll(UUID userId, int newTokenVersion) {
+    try {
+      refreshTokenStore.cacheTokenVersion(userId, newTokenVersion);
+      refreshTokenStore.revokeAllForUser(userId);
+    } catch (RuntimeException e) {
+      log.warn(
+          "logout-all cache write failed for user id={}; dropping cached token_version to fail"
+              + " closed",
+          userId,
+          e);
+      refreshTokenStore.invalidateTokenVersion(userId);
+    }
   }
 
   public List<RefreshTokenStore.SessionInfo> listSessions(UUID userId) {

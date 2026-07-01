@@ -250,7 +250,8 @@ public class UserAdminHandler implements AdminResourceHandler {
           throw new ValidationException("family id is required in the path");
         }
         UUID familyId = parseUuid(rest.get(0), "family id");
-        authService.revokeSession(userId, familyId); // 404 if not the target's session
+        // Intent-first: write the audit row before the irreversible Redis revoke, so a security
+        // op can never leave the session killed but untraceable if the audit write fails.
         audit.record(
             ctx,
             env(req),
@@ -258,6 +259,7 @@ public class UserAdminHandler implements AdminResourceHandler {
             PlatformAuditEvent.Target.SESSION,
             familyId,
             Map.of("user_id", userId.toString()));
+        authService.revokeSession(userId, familyId); // 404 if not the target's session
         resp.setStatus(204);
       }
       default -> writeError(resp, 405, "Method not allowed");
@@ -272,9 +274,10 @@ public class UserAdminHandler implements AdminResourceHandler {
       return;
     }
     SecurityContext ctx = AuthzHelper.requireAdmin(req);
-    authService.logoutAll(userId);
+    // Intent-first: audit the forced logout before it takes effect (see revoke above).
     audit.record(
         ctx, env(req), "FORCE_LOGOUT_ALL", PlatformAuditEvent.Target.USER, userId, Map.of());
+    authService.logoutAll(userId);
     resp.setStatus(204);
   }
 

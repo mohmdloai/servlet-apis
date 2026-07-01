@@ -11,14 +11,16 @@ import redis.clients.jedis.JedisPool;
  * Answers "is this org active?" for the authorization hot path (see {@code
  * docs/platform-admin-plan.md}, slice 5). Every org-scoped request consults this, so the answer is
  * cached in Redis (a mirror of {@code org.active}) rather than hitting Postgres each time -
- * matching the {@code token_version} cache pattern. Suspend/reactivate write the new value straight
- * into the cache, so enforcement takes effect immediately with no invalidation window.
+ * matching the {@code token_version} cache pattern. Suspend/reactivate *invalidate* the entry (they
+ * do not write a value): the next read then load-through's the freshly-committed DB row and
+ * re-caches it. Invalidating rather than writing avoids leaving a stale value behind if the toggle
+ * and the cache update race - a missing key is always re-derived from the source of truth.
  */
 public class OrgStatusService {
 
   private static final String KEY_PREFIX = "org:active:";
-  // Short TTL: the cache is authoritative right after a toggle (we write through), and self-heals
-  // from the DB on expiry, so a stale entry can never outlive the TTL even if a write is missed.
+  // Short TTL: on a cache miss we load-through from the DB, so a stale entry can never outlive the
+  // TTL even if an invalidation is somehow missed.
   private static final long TTL_SECONDS = 300;
 
   private final JedisPool jedisPool;
@@ -45,10 +47,14 @@ public class OrgStatusService {
     }
   }
 
-  /** Write the active flag through to the cache so a suspend/reactivate takes effect at once. */
-  public void set(UUID orgId, boolean active) {
+  /**
+   * Invalidate the cached flag after a suspend/reactivate has committed. The next {@link #isActive}
+   * load-through's the new DB value, so enforcement flips on the following request with no risk of
+   * a stale write lingering for the TTL.
+   */
+  public void invalidate(UUID orgId) {
     try (Jedis jedis = jedisPool.getResource()) {
-      jedis.setex(KEY_PREFIX + orgId, TTL_SECONDS, active ? "1" : "0");
+      jedis.del(KEY_PREFIX + orgId);
     }
   }
 }
