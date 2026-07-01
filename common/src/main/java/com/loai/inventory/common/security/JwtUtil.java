@@ -37,6 +37,69 @@ public class JwtUtil {
       Set<String> systemRoles,
       Set<String> allowedActions,
       int tokenVersion) {
+    return generateAccessToken(
+        userId,
+        actorType,
+        orgRoles,
+        systemRoles,
+        allowedActions,
+        tokenVersion,
+        null,
+        null,
+        null,
+        null,
+        null,
+        accessTtlMillis);
+  }
+
+  /**
+   * Mint a device-bound access token — carries a {@code fam} claim (the refresh-token family = one
+   * device) so the filter can enforce a per-device access-token kill-switch. Used by login/refresh.
+   */
+  public String generateAccessToken(
+      UUID userId,
+      String actorType,
+      Map<UUID, Set<String>> orgRoles,
+      Set<String> systemRoles,
+      Set<String> allowedActions,
+      int tokenVersion,
+      UUID familyId) {
+    return generateAccessToken(
+        userId,
+        actorType,
+        orgRoles,
+        systemRoles,
+        allowedActions,
+        tokenVersion,
+        familyId,
+        null,
+        null,
+        null,
+        null,
+        accessTtlMillis);
+  }
+
+  /**
+   * Mint an impersonation-overlay access token. {@code sub} is the target ({@code userId}); the
+   * {@code act*} claims record the real driver, the tier, the confined org (ORG tier), and the
+   * read-only flag (SUPPORT view-as). Any {@code act*} arg left null omits its claim, so passing
+   * all nulls with {@code ttlMillis == accessTtlMillis} is exactly a normal token. An overlay
+   * passes {@code familyId == null} — it is device-less, killed by TTL or the target's logout-all,
+   * not by a per-device revoke.
+   */
+  public String generateAccessToken(
+      UUID userId,
+      String actorType,
+      Map<UUID, Set<String>> orgRoles,
+      Set<String> systemRoles,
+      Set<String> allowedActions,
+      int tokenVersion,
+      UUID familyId,
+      UUID actId,
+      String actTier,
+      UUID actScopeOrg,
+      String actMode,
+      long ttlMillis) {
 
     long now = System.currentTimeMillis();
     var builder =
@@ -45,7 +108,11 @@ public class JwtUtil {
             .claim("actor_type", actorType)
             .claim("token_version", tokenVersion)
             .issuedAt(new Date(now))
-            .expiration(new Date(now + accessTtlMillis));
+            .expiration(new Date(now + ttlMillis));
+
+    if (familyId != null) {
+      builder.claim("fam", familyId.toString());
+    }
 
     if (systemRoles != null && !systemRoles.isEmpty()) {
       builder.claim("system_roles", List.copyOf(systemRoles));
@@ -55,6 +122,18 @@ public class JwtUtil {
     }
     if (allowedActions != null && !allowedActions.isEmpty()) {
       builder.claim("allowed_actions", List.copyOf(allowedActions));
+    }
+    if (actId != null) {
+      builder.claim("act", actId.toString());
+    }
+    if (actTier != null) {
+      builder.claim("act_tier", actTier);
+    }
+    if (actScopeOrg != null) {
+      builder.claim("act_scope_org", actScopeOrg.toString());
+    }
+    if (actMode != null) {
+      builder.claim("act_mode", actMode);
     }
 
     return builder.signWith(key).compact();

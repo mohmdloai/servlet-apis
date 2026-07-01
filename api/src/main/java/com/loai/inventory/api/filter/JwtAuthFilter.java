@@ -7,6 +7,7 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.common.security.JwtUtil;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.Environment;
+import com.loai.inventory.domain.model.ImpersonationTier;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
@@ -82,14 +83,37 @@ public class JwtAuthFilter implements Filter {
         return;
       }
 
+      // Per-device access-token kill-switch: a revoked device's outstanding token dies here, even
+      // before it expires. Device-less overlay tokens carry no fam claim and skip this check.
+      UUID familyId = parseUuidClaim(claims, "fam");
+      if (familyId != null && authService.isDeviceRevoked(familyId)) {
+        writeUnauthorized(resp, "Session revoked");
+        return;
+      }
+
       ActorType actorType = ActorType.valueOf(claims.get("actor_type", String.class));
       Set<SystemRole> systemRoles = parseSystemRoles(claims);
       Map<UUID, Set<OrgRole>> orgRoles = parseOrgRoles(claims);
       Set<String> allowedActions = parseAllowedActions(claims);
 
+      UUID impersonatorId = parseUuidClaim(claims, "act");
+      ImpersonationTier impersonationTier =
+          impersonatorId == null ? null : parseTier(claims.get("act_tier", String.class));
+      UUID impersonationScopeOrg = parseUuidClaim(claims, "act_scope_org");
+      boolean impersonationReadOnly = "READONLY".equals(claims.get("act_mode", String.class));
+
       SecurityContext secCtx =
           new SecurityContext(
-              userId, actorType, systemRoles, orgRoles, allowedActions, tokenVersion);
+              userId,
+              actorType,
+              systemRoles,
+              orgRoles,
+              allowedActions,
+              tokenVersion,
+              impersonatorId,
+              impersonationTier,
+              impersonationScopeOrg,
+              impersonationReadOnly);
       Environment env =
           new Environment(Instant.now(), req.getRemoteAddr(), req.getHeader("User-Agent"));
 
@@ -147,6 +171,15 @@ public class JwtAuthFilter implements Filter {
       result.put(orgId, roles);
     }
     return result;
+  }
+
+  private UUID parseUuidClaim(Claims claims, String name) {
+    String raw = claims.get(name, String.class);
+    return raw == null ? null : UUID.fromString(raw);
+  }
+
+  private ImpersonationTier parseTier(String raw) {
+    return raw == null ? null : ImpersonationTier.valueOf(raw);
   }
 
   @SuppressWarnings("unchecked")

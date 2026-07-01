@@ -1,11 +1,21 @@
 package com.loai.inventory.service.auth;
 
 import com.loai.inventory.common.exception.AuthenticationException;
+import com.loai.inventory.common.exception.AuthorizationException;
+import com.loai.inventory.common.exception.ConflictException;
+import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.security.JwtUtil;
 import com.loai.inventory.common.security.PasswordHasher;
 import com.loai.inventory.domain.model.AppUser;
+import com.loai.inventory.domain.model.Environment;
+import com.loai.inventory.domain.model.ImpersonationEvent;
+import com.loai.inventory.domain.model.ImpersonationTier;
+import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.domain.model.UserOrgRole;
+import com.loai.inventory.domain.repository.ImpersonationEventRepository;
 import com.loai.inventory.domain.repository.UserRepository;
 import java.time.Instant;
 import java.util.HashMap;
@@ -25,16 +35,31 @@ public class AuthService {
   private final UserRepository userRepo;
   private final RefreshTokenStore refreshTokenStore;
   private final JwtUtil jwtUtil;
+  private final ImpersonationEventRepository impersonationEventRepo;
+  private final long impersonationTtlMillis;
 
   public AuthService(
-      UserRepository userRepo, RefreshTokenStore refreshTokenStore, JwtUtil jwtUtil) {
+      UserRepository userRepo,
+      RefreshTokenStore refreshTokenStore,
+      JwtUtil jwtUtil,
+      ImpersonationEventRepository impersonationEventRepo,
+      long impersonationTtlMillis) {
     this.userRepo = userRepo;
     this.refreshTokenStore = refreshTokenStore;
     this.jwtUtil = jwtUtil;
+    this.impersonationEventRepo = impersonationEventRepo;
+    this.impersonationTtlMillis = impersonationTtlMillis;
   }
 
   public record LoginResult(
       String accessToken, String refreshToken, long expiresIn, AppUser user) {}
+
+  public record ImpersonationResult(
+      String accessToken,
+      long expiresIn,
+      UUID impersonatorId,
+      ImpersonationTier tier,
+      boolean readOnly) {}
 
   public LoginResult login(String email, String rawPassword, String deviceInfo, String sourceIp) {
     AppUser user =
@@ -55,6 +80,7 @@ public class AuthService {
     Set<String> systemRoles = buildSystemRolesSet(userRepo.findSystemRoles(user.getId()));
     int tokenVersion = userRepo.getTokenVersion(user.getId());
 
+    UUID familyId = UUID.randomUUID();
     String accessToken =
         jwtUtil.generateAccessToken(
             user.getId(),
@@ -62,9 +88,9 @@ public class AuthService {
             orgRoles,
             systemRoles,
             Set.of(),
-            tokenVersion);
+            tokenVersion,
+            familyId);
 
-    UUID familyId = UUID.randomUUID();
     String rawRefreshToken = UUID.randomUUID().toString();
     String tokenHash = RefreshTokenStore.hashToken(rawRefreshToken);
 
@@ -114,7 +140,8 @@ public class AuthService {
             orgRoles,
             systemRoles,
             Set.of(),
-            tokenVersion);
+            tokenVersion,
+            data.familyId());
 
     String newRawRefreshToken = UUID.randomUUID().toString();
     String newTokenHash = RefreshTokenStore.hashToken(newRawRefreshToken);
@@ -133,6 +160,10 @@ public class AuthService {
 
   public void logout(String rawRefreshToken) {
     String tokenHash = RefreshTokenStore.hashToken(rawRefreshToken);
+    // Kill this device's access token immediately too, not just its ability to refresh.
+    refreshTokenStore
+        .find(tokenHash)
+        .ifPresent(d -> refreshTokenStore.denyFamilyAccess(d.familyId(), accessTtlSeconds()));
     refreshTokenStore.revoke(tokenHash);
   }
 
@@ -153,11 +184,178 @@ public class AuthService {
       throw new com.loai.inventory.common.exception.NotFoundException(
           "Session not found: " + familyId);
     }
+    // Per-device access-token kill-switch: this device's outstanding access token dies on its next
+    // request, not just when it can no longer refresh.
+    refreshTokenStore.denyFamilyAccess(familyId, accessTtlSeconds());
   }
 
   public boolean isTokenVersionValid(UUID userId, int claimedVersion) {
     Optional<Integer> cached = refreshTokenStore.getCachedTokenVersion(userId);
     return cached.isPresent() && cached.get() == claimedVersion;
+  }
+
+  /** Filter passthrough for the per-device access-token kill-switch. */
+  public boolean isDeviceRevoked(UUID familyId) {
+    return refreshTokenStore.isFamilyAccessRevoked(familyId);
+  }
+
+  private long accessTtlSeconds() {
+    return jwtUtil.getAccessTtlMillis() / 1000;
+  }
+
+  /**
+   * Start an impersonation overlay. Mints an access token only (no refresh token) whose {@code sub}
+   * is the target and whose {@code act} claim is the caller. See {@code docs/impersonation.md} and
+   * {@code stories/impersonate_user.md} for the guard rails enforced here.
+   */
+  public ImpersonationResult impersonate(
+      SecurityContext caller,
+      UUID targetId,
+      ImpersonationTier tier,
+      UUID scopeOrgId,
+      String reason,
+      Environment env) {
+
+    if (caller.isImpersonating()) {
+      throw new ConflictException("Already impersonating; stop the current session first");
+    }
+    UUID callerId = caller.actorId();
+    if (callerId.equals(targetId)) {
+      throw new ValidationException("Cannot impersonate yourself");
+    }
+
+    boolean readOnly = false;
+    if (tier == ImpersonationTier.PLATFORM) {
+      if (scopeOrgId != null) {
+        throw new ValidationException("Platform impersonation is not org-scoped");
+      }
+      boolean admin = caller.hasSystemRole(SystemRole.ADMIN);
+      boolean support = caller.hasSystemRole(SystemRole.SUPPORT);
+      if (!admin && !support) {
+        throw new AuthorizationException("Requires platform ADMIN or SUPPORT role");
+      }
+      readOnly = support && !admin; // SUPPORT gets view-as; ADMIN gets full write.
+    } else {
+      if (scopeOrgId == null) {
+        throw new ValidationException("Org impersonation requires an org id");
+      }
+      // Caller's REAL OWNER role in the scope org — the system-admin bypass is not honored here.
+      Set<OrgRole> callerRoles =
+          caller.orgRoles() == null ? null : caller.orgRoles().get(scopeOrgId);
+      if (callerRoles == null || !callerRoles.contains(OrgRole.OWNER)) {
+        throw new AuthorizationException("Requires OWNER role in org " + scopeOrgId);
+      }
+    }
+
+    AppUser target =
+        userRepo.findById(targetId).orElseThrow(() -> new NotFoundException("User", targetId));
+    if (!target.isActive()) {
+      throw new AuthorizationException("Target account is disabled");
+    }
+
+    Map<UUID, Set<String>> overlayOrgRoles;
+    if (tier == ImpersonationTier.PLATFORM) {
+      if (userRepo.findSystemRoles(targetId).contains(SystemRole.ADMIN)) {
+        throw new AuthorizationException("Cannot impersonate a system admin");
+      }
+      overlayOrgRoles = buildOrgRolesMap(userRepo.findOrgRoles(targetId));
+    } else {
+      // Scope the overlay to the one org — never leak the target's access to their other orgs.
+      Set<String> rolesInScope = new HashSet<>();
+      for (UserOrgRole r : userRepo.findOrgRoles(targetId)) {
+        if (r.getOrgId().equals(scopeOrgId)) {
+          rolesInScope.add(r.getRole().name());
+        }
+      }
+      if (rolesInScope.isEmpty()) {
+        throw new NotFoundException("Target is not a member of org " + scopeOrgId);
+      }
+      if (rolesInScope.contains(OrgRole.OWNER.name())) {
+        throw new AuthorizationException("Cannot impersonate an OWNER of org " + scopeOrgId);
+      }
+      overlayOrgRoles = Map.of(scopeOrgId, rolesInScope);
+    }
+
+    int targetTokenVersion = userRepo.getTokenVersion(targetId);
+    // The overlay's sub is the target, so JwtAuthFilter validates the token against the TARGET's
+    // cached token_version. A target who is not currently logged in has no cached version, and the
+    // filter treats a cache miss as revoked — so without priming, every overlay request 401s. This
+    // also preserves revocation: the target's logout-all re-caches a higher version, killing it.
+    if (refreshTokenStore != null) {
+      refreshTokenStore.cacheTokenVersion(targetId, targetTokenVersion);
+    }
+    String token =
+        jwtUtil.generateAccessToken(
+            target.getId(),
+            target.getActorType().name(),
+            overlayOrgRoles,
+            null, // an overlay never carries system_roles
+            Set.of(),
+            targetTokenVersion,
+            null, // device-less: an overlay carries no fam claim
+            callerId,
+            tier.name(),
+            tier == ImpersonationTier.ORG ? scopeOrgId : null,
+            readOnly ? "READONLY" : null,
+            impersonationTtlMillis);
+
+    impersonationEventRepo.insert(
+        ImpersonationEvent.start(
+            callerId,
+            targetId,
+            tier,
+            tier == ImpersonationTier.ORG ? scopeOrgId : null,
+            reason,
+            env));
+
+    log.info(
+        "Impersonation START tier={} driver={} target={} readOnly={}",
+        tier,
+        callerId,
+        targetId,
+        readOnly);
+    return new ImpersonationResult(token, impersonationTtlMillis / 1000, callerId, tier, readOnly);
+  }
+
+  /**
+   * End an overlay by re-minting the real driver's own access token (no {@code act} claim). The
+   * driver's refresh session was never touched, so this is purely additive; letting the short
+   * overlay token expire also works.
+   */
+  public ImpersonationResult stopImpersonating(SecurityContext caller, Environment env) {
+    if (!caller.isImpersonating()) {
+      throw new ValidationException("Not impersonating");
+    }
+    UUID impersonatorId = caller.impersonatorId();
+    UUID targetId = caller.actorId();
+    ImpersonationTier tier = caller.impersonationTier();
+    UUID scopeOrgId = caller.impersonationScopeOrg();
+
+    AppUser driver =
+        userRepo
+            .findById(impersonatorId)
+            .orElseThrow(() -> new AuthenticationException("Impersonator no longer exists"));
+    if (!driver.isActive()) {
+      throw new AuthorizationException("Impersonator account is disabled");
+    }
+
+    // The re-minted token reflects the driver's CURRENT roles, so no further role re-check is
+    // needed.
+    String token = mintAccessToken(driver);
+    impersonationEventRepo.insert(
+        ImpersonationEvent.stop(impersonatorId, targetId, tier, scopeOrgId, env));
+
+    log.info("Impersonation STOP tier={} driver={} target={}", tier, impersonatorId, targetId);
+    return new ImpersonationResult(token, jwtUtil.getAccessTtlMillis() / 1000, null, tier, false);
+  }
+
+  /** Mint a normal (non-overlay) access token for a user, reflecting their current roles. */
+  private String mintAccessToken(AppUser user) {
+    Map<UUID, Set<String>> orgRoles = buildOrgRolesMap(userRepo.findOrgRoles(user.getId()));
+    Set<String> systemRoles = buildSystemRolesSet(userRepo.findSystemRoles(user.getId()));
+    int tokenVersion = userRepo.getTokenVersion(user.getId());
+    return jwtUtil.generateAccessToken(
+        user.getId(), user.getActorType().name(), orgRoles, systemRoles, Set.of(), tokenVersion);
   }
 
   private Map<UUID, Set<String>> buildOrgRolesMap(List<UserOrgRole> roles) {

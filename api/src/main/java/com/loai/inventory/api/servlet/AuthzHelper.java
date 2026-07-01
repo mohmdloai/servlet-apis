@@ -63,6 +63,10 @@ public final class AuthzHelper {
   public static SecurityContext requireOrgAccess(
       HttpServletRequest req, UUID orgId, OrgRole minRole) {
     SecurityContext ctx = requireAuth(req);
+    // A read-only (SUPPORT view-as) overlay may read but never write, whatever the target could do.
+    if (ctx.impersonationReadOnly() && RANK.get(minRole) > RANK.get(OrgRole.VIEWER)) {
+      throw new AuthorizationException("Read-only impersonation cannot perform writes");
+    }
     if (ctx.isSystemAdmin()) return ctx;
 
     Set<OrgRole> roles = ctx.orgRoles() == null ? null : ctx.orgRoles().get(orgId);

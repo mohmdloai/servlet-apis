@@ -5,11 +5,13 @@ import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.AuthResponse;
+import com.loai.inventory.api.dto.ImpersonationResponse;
 import com.loai.inventory.api.dto.LoginRequest;
 import com.loai.inventory.api.dto.SessionResponse;
 import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
@@ -50,6 +52,7 @@ public class AuthServlet extends HttpServlet {
         case "/refresh" -> handleRefresh(req, resp);
         case "/logout" -> handleLogout(req, resp);
         case "/logout-all" -> handleLogoutAll(req, resp);
+        case "/stop-impersonating" -> handleStopImpersonating(req, resp);
         default -> {
           resp.setStatus(404);
           writeJson(resp, 404, ApiError.of(404, "Unknown auth endpoint"));
@@ -120,23 +123,9 @@ public class AuthServlet extends HttpServlet {
     AuthService.LoginResult result =
         authService.login(body.getEmail(), body.getPassword(), deviceInfo, sourceIp);
 
-    // Set access token cookie
-    Cookie accessCookie = new Cookie("access_token", result.accessToken());
-    accessCookie.setHttpOnly(true);
-    accessCookie.setSecure(secureCookies);
-    accessCookie.setPath("/");
-    accessCookie.setMaxAge(900); // 15 min
-    accessCookie.setAttribute("SameSite", "Strict");
-    resp.addCookie(accessCookie);
-
-    // Set refresh token cookie (scoped to /api/auth)
-    Cookie refreshCookie = new Cookie("refresh_token", result.refreshToken());
-    refreshCookie.setHttpOnly(true);
-    refreshCookie.setSecure(secureCookies);
-    refreshCookie.setPath("/api/auth");
-    refreshCookie.setMaxAge(604800); // 7 days
-    refreshCookie.setAttribute("SameSite", "Strict");
-    resp.addCookie(refreshCookie);
+    AuthCookies.writeAccess(resp, result.accessToken(), (int) result.expiresIn(), secureCookies);
+    AuthCookies.writeRefresh(
+        resp, result.refreshToken(), AuthCookies.REFRESH_MAX_AGE, secureCookies);
 
     writeJson(
         resp,
@@ -154,29 +143,25 @@ public class AuthServlet extends HttpServlet {
     String sourceIp = req.getRemoteAddr();
     AuthService.LoginResult result = authService.refresh(rawRefreshToken, sourceIp);
 
-    // Set new access token cookie
-    Cookie accessCookie = new Cookie("access_token", result.accessToken());
-    accessCookie.setHttpOnly(true);
-    accessCookie.setSecure(secureCookies);
-    accessCookie.setPath("/");
-    accessCookie.setMaxAge(900);
-    accessCookie.setAttribute("SameSite", "Strict");
-    resp.addCookie(accessCookie);
-
-    // Set new refresh token cookie
-    Cookie refreshCookie = new Cookie("refresh_token", result.refreshToken());
-    refreshCookie.setHttpOnly(true);
-    refreshCookie.setSecure(secureCookies);
-    refreshCookie.setPath("/api/auth");
-    refreshCookie.setMaxAge(604800);
-    refreshCookie.setAttribute("SameSite", "Strict");
-    resp.addCookie(refreshCookie);
+    AuthCookies.writeAccess(resp, result.accessToken(), (int) result.expiresIn(), secureCookies);
+    AuthCookies.writeRefresh(
+        resp, result.refreshToken(), AuthCookies.REFRESH_MAX_AGE, secureCookies);
 
     writeJson(
         resp,
         200,
         new AuthResponse(
             result.expiresIn(), result.user().getId(), result.user().getActorType().name()));
+  }
+
+  private void handleStopImpersonating(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    SecurityContext ctx = requireAuth(req);
+    Environment env = (Environment) req.getAttribute(JwtAuthFilter.ENVIRONMENT_ATTR);
+    AuthService.ImpersonationResult result = authService.stopImpersonating(ctx, env);
+    // Access cookie only — the driver's refresh cookie was never touched.
+    AuthCookies.writeAccess(resp, result.accessToken(), (int) result.expiresIn(), secureCookies);
+    writeJson(resp, 200, ImpersonationResponse.stopped());
   }
 
   private void handleLogout(HttpServletRequest req, HttpServletResponse resp) throws IOException {

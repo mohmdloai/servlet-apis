@@ -11,6 +11,7 @@ import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
+import com.loai.inventory.domain.repository.ImpersonationEventRepository;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
@@ -30,6 +31,7 @@ import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
+import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
@@ -91,6 +93,7 @@ public class AppConfig {
 
   private static final Logger log = LoggerFactory.getLogger(AppConfig.class);
   private static final long DEFAULT_ACCESS_TTL_MILLIS = 15 * 60 * 1000L;
+  private static final long DEFAULT_IMPERSONATION_TTL_MILLIS = 5 * 60 * 1000L;
 
   // Infrastructure
   public final HikariDataSource dataSource;
@@ -104,6 +107,7 @@ public class AppConfig {
   // Repositories (domain interface type, not the impl)
   public final ProductRepository productRepository;
   public final UserRepository userRepository;
+  public final ImpersonationEventRepository impersonationEventRepository;
   public final CategoryRepositoryFactory categoryRepositoryFactory;
   public final ProductListingRepositoryFactory productListingRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
@@ -171,6 +175,7 @@ public class AppConfig {
 
     this.productRepository = new ProductRepositoryImpl(dsl);
     this.userRepository = new UserRepositoryImpl(dsl);
+    this.impersonationEventRepository = new ImpersonationEventRepositoryImpl(dsl);
     this.categoryRepositoryFactory = new CategoryRepositoryFactoryImpl();
     this.productListingRepositoryFactory = new ProductListingRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
@@ -189,8 +194,16 @@ public class AppConfig {
     this.refundRepositoryFactory = new RefundRepositoryFactoryImpl();
     this.refundAllocationRepositoryFactory = new RefundAllocationRepositoryFactoryImpl();
 
+    long impersonationTtl =
+        parseLong(System.getenv("IMPERSONATION_TTL_MILLIS"), DEFAULT_IMPERSONATION_TTL_MILLIS);
     this.refreshTokenStore = new RefreshTokenStore(jedisPool);
-    this.authService = new AuthService(userRepository, refreshTokenStore, jwtUtil);
+    this.authService =
+        new AuthService(
+            userRepository,
+            refreshTokenStore,
+            jwtUtil,
+            impersonationEventRepository,
+            impersonationTtl);
     this.orgService = new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory);
     this.productService = new ProductService(productRepository, dsl);
     this.categoryService = new CategoryService(dsl, categoryRepositoryFactory);
