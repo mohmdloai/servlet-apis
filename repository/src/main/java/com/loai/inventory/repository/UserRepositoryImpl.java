@@ -17,7 +17,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.jooq.Condition;
 import org.jooq.DSLContext;
+import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -140,6 +142,99 @@ public final class UserRepositoryImpl implements UserRepository {
             com.loai.inventory.repository.generated.enums.OrgRole.lookupLiteral(role.name()))
         .onConflictDoNothing()
         .execute();
+  }
+
+  @Override
+  public void insertSystemRole(UUID userId, SystemRole role) {
+    dsl.insertInto(USER_SYSTEM_ROLE)
+        .set(USER_SYSTEM_ROLE.USER_ID, userId)
+        .set(
+            USER_SYSTEM_ROLE.ROLE,
+            com.loai.inventory.repository.generated.enums.SystemRole.lookupLiteral(role.name()))
+        .onConflictDoNothing()
+        .execute();
+  }
+
+  @Override
+  public void deleteSystemRole(UUID userId, SystemRole role) {
+    dsl.deleteFrom(USER_SYSTEM_ROLE)
+        .where(USER_SYSTEM_ROLE.USER_ID.eq(userId))
+        .and(
+            USER_SYSTEM_ROLE.ROLE.eq(
+                com.loai.inventory.repository.generated.enums.SystemRole.lookupLiteral(
+                    role.name())))
+        .execute();
+  }
+
+  @Override
+  public void deleteOrgRole(UUID userId, UUID orgId, OrgRole role) {
+    dsl.deleteFrom(USER_ORG_ROLE)
+        .where(USER_ORG_ROLE.USER_ID.eq(userId))
+        .and(USER_ORG_ROLE.ORG_ID.eq(orgId))
+        .and(
+            USER_ORG_ROLE.ROLE.eq(
+                com.loai.inventory.repository.generated.enums.OrgRole.lookupLiteral(role.name())))
+        .execute();
+  }
+
+  @Override
+  public List<AppUser> findAll(int offset, int limit, String emailQuery) {
+    Condition condition =
+        (emailQuery == null || emailQuery.isBlank())
+            ? DSL.noCondition()
+            : APP_USER.EMAIL.likeIgnoreCase(emailQuery.trim() + "%");
+    return dsl.selectFrom(APP_USER)
+        .where(condition)
+        .orderBy(APP_USER.CREATED_AT.desc())
+        .offset(offset)
+        .limit(limit)
+        .fetch()
+        .map(this::toAppUser);
+  }
+
+  @Override
+  public long countAll(String emailQuery) {
+    Condition condition =
+        (emailQuery == null || emailQuery.isBlank())
+            ? DSL.noCondition()
+            : APP_USER.EMAIL.likeIgnoreCase(emailQuery.trim() + "%");
+    return dsl.fetchCount(APP_USER, condition);
+  }
+
+  @Override
+  public AppUser setActive(UUID userId, boolean active) {
+    AppUserRecord record =
+        dsl.update(APP_USER)
+            .set(APP_USER.ACTIVE, active)
+            .set(APP_USER.UPDATED_AT, OffsetDateTime.now())
+            .where(APP_USER.ID.eq(userId))
+            .returning()
+            .fetchOne();
+    if (record == null) {
+      throw new com.loai.inventory.common.exception.NotFoundException("User", userId);
+    }
+    return toAppUser(record);
+  }
+
+  @Override
+  public void updatePasswordHash(UUID userId, String passwordHash) {
+    int updated =
+        dsl.update(APP_USER)
+            .set(APP_USER.PASSWORD_HASH, passwordHash)
+            .set(APP_USER.UPDATED_AT, OffsetDateTime.now())
+            .where(APP_USER.ID.eq(userId))
+            .execute();
+    if (updated == 0) {
+      throw new com.loai.inventory.common.exception.NotFoundException("User", userId);
+    }
+  }
+
+  @Override
+  public long countUsersWithSystemRole(SystemRole role) {
+    return dsl.fetchCount(
+        USER_SYSTEM_ROLE,
+        USER_SYSTEM_ROLE.ROLE.eq(
+            com.loai.inventory.repository.generated.enums.SystemRole.lookupLiteral(role.name())));
   }
 
   private AppUser toAppUser(AppUserRecord r) {
