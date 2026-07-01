@@ -99,7 +99,7 @@ public class UserAdminService {
         user,
         userRepo.findSystemRoles(userId),
         userRepo.findOrgRoles(userId),
-        authService.listSessions(userId).size());
+        authService.countSessions(userId));
   }
 
   // ───────────────────────── mutations ─────────────────────────

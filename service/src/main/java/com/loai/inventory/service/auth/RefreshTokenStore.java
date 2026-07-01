@@ -149,6 +149,19 @@ public class RefreshTokenStore {
     }
   }
 
+  /**
+   * O(1) count of a user's active session families (devices) via {@code SCARD} — for callers that
+   * need only the number and not each {@link SessionInfo}, avoiding the per-token GET + deserialize
+   * that {@link #listSessions} does. May transiently over-count a family whose tokens have all
+   * expired but whose id has not yet been pruned from the set; adequate for an "active devices"
+   * badge.
+   */
+  public long countSessions(UUID userId) {
+    try (Jedis jedis = jedisPool.getResource()) {
+      return jedis.scard("rt:user:" + userId);
+    }
+  }
+
   public List<SessionInfo> listSessions(UUID userId) {
     String userKey = "rt:user:" + userId;
     List<SessionInfo> sessions = new ArrayList<>();

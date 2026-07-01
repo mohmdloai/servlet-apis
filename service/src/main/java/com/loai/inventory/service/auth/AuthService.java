@@ -198,6 +198,11 @@ public class AuthService {
     return refreshTokenStore.listSessions(userId);
   }
 
+  /** O(1) count of a user's active session families — for callers that need only the number. */
+  public long countSessions(UUID userId) {
+    return refreshTokenStore.countSessions(userId);
+  }
+
   public void revokeSession(UUID userId, UUID familyId) {
     boolean revoked = refreshTokenStore.revokeFamily(familyId, userId);
     if (!revoked) {
