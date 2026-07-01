@@ -81,6 +81,24 @@ public class RefreshTokenStore {
     }
   }
 
+  /**
+   * Per-device access-token kill-switch. Denylists one refresh-token family so any already-issued
+   * access token carrying that {@code fam} claim is rejected by the filter on its next request. The
+   * entry self-expires after {@code ttlSeconds} (set to the access-token TTL) — once the access
+   * token would have expired anyway, keeping the denylist bounded and self-cleaning.
+   */
+  public void denyFamilyAccess(UUID familyId, long ttlSeconds) {
+    try (Jedis jedis = jedisPool.getResource()) {
+      jedis.setex("rt:revoked-fam:" + familyId, ttlSeconds, "1");
+    }
+  }
+
+  public boolean isFamilyAccessRevoked(UUID familyId) {
+    try (Jedis jedis = jedisPool.getResource()) {
+      return jedis.exists("rt:revoked-fam:" + familyId);
+    }
+  }
+
   public boolean familyExists(UUID familyId) {
     try (Jedis jedis = jedisPool.getResource()) {
       return jedis.exists("rt:family:" + familyId);

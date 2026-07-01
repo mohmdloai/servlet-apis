@@ -10,6 +10,23 @@
 
 ---
 
+## §Post-plan additions (impersonation + per-device kill-switch)
+
+> Two later slices extend this design on the same spine (JwtAuthFilter → AuthService →
+> RefreshTokenStore → SecurityContext) without changing its posture (cookies-only, Redis-authoritative,
+> 401-no-fallback, fail-closed). Full designs: `docs/impersonation.md` and `stories/impersonate_user.md`.
+> The items below amend specific contracts stated later in this doc.
+
+**1. `token_version` now has a THIRD warm-path — this amends the "login/refresh only" invariant (lines 29, 181, 190).** An impersonation overlay's `sub` is the *target*, so `JwtAuthFilter` validates it against the **target's** cached `token_version`. A target who never logged in has no `user:ver:{target}` key, and "cache miss ⇒ invalid" would 401 every overlay request (an overlay has no refresh token to re-login with). So `AuthService.impersonate()` primes `cacheTokenVersion(targetId, version)` when minting. This *preserves* revocation: the target's `logout-all` re-caches a higher version and kills the overlay. (This gap was caught by end-to-end testing, not the unit layer.)
+
+**2. New Redis key + `logout`/`revokeSession` behavior change (amends lines 163–171, 186, 189).** Per-device access-token kill-switch. New key `rt:revoked-fam:{familyId} → "1"` with **TTL = access-token TTL** (default 900s; self-expiring, so the denylist stays bounded and clears once the token would have expired anyway). Access tokens minted on login/refresh now carry a `fam` claim (= the family id = one device). `JwtAuthFilter` rejects with `401 "Session revoked"` when a token's `fam` is denylisted. `revokeSession()` (`DELETE /api/auth/sessions/{familyId}`) **and** `logout()` now call `denyFamilyAccess(...)` — so a single-device revoke kills that device's outstanding **access** token immediately, not just its ability to refresh. New store methods: `denyFamilyAccess`, `isFamilyAccessRevoked`. `logoutAll` is unchanged (still the per-user `token_version` bump).
+
+**3. New JWT claims (amends `generateAccessToken`, line 99).** `fam` (device binding, above) on login/refresh tokens; `act` / `act_tier` / `act_scope_org` / `act_mode` on impersonation overlays. An overlay carries **no `fam`** (device-less — killed by its ~5-min TTL or the target's `logout-all`, not by a per-device revoke) and **never** carries `system_roles`; org-tier overlays scope `org_roles` to the one authorized org.
+
+**4. New endpoints (extends AuthServlet, lines 235–241) and wiring.** `POST /api/auth/stop-impersonating`; `POST /api/admin/impersonate/{userId}` (platform ADMIN full-write / SUPPORT read-only); `POST /api/orgs/{orgId}/impersonate/{userId}` (real org OWNER only — the system-admin bypass is deliberately not honored here). `AuthService` constructor grows to `(UserRepository, RefreshTokenStore, JwtUtil, ImpersonationEventRepository, impersonationTtlMillis)`. New migration `V41` adds `impersonation_event` (Layer-1 audit) and `inventory_log.impersonator_id` (Layer-2 stamping). Cookie writing is extracted to `AuthCookies` (impersonation writes the access cookie **only** — never a refresh cookie).
+
+---
+
 ## Context
 
 The inventory API currently has zero authentication — anyone can send `X-Actor-Id` headers and claim any identity. This plan adds JWT-based authn/authz with Redis-backed refresh token rotation (family-based theft detection), unified identity (Option A: customers + staff in one `app_user` table), and ABAC policies as Java code.

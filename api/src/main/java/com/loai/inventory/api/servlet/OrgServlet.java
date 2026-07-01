@@ -8,6 +8,7 @@ import com.loai.inventory.api.servlet.handler.CategoryHandler;
 import com.loai.inventory.api.servlet.handler.CreditNoteHandler;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
 import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
+import com.loai.inventory.api.servlet.handler.ImpersonationHandler;
 import com.loai.inventory.api.servlet.handler.InventoryHandler;
 import com.loai.inventory.api.servlet.handler.InvoiceHandler;
 import com.loai.inventory.api.servlet.handler.OrgHandler;
@@ -75,7 +76,10 @@ public class OrgServlet extends HttpServlet {
             Map.entry("fulfillments", new FulfillmentHandler(config.fulfillmentService, mapper)),
             Map.entry("credit-notes", new CreditNoteHandler(config.creditNoteService, mapper)),
             Map.entry("refunds", new RefundHandler(config.refundService, mapper)),
-            Map.entry("invoices", new InvoiceHandler(config.invoiceAdminService, mapper)));
+            Map.entry("invoices", new InvoiceHandler(config.invoiceAdminService, mapper)),
+            Map.entry(
+                "impersonate",
+                new ImpersonationHandler(config.authService, mapper, config.secureCookies)));
   }
 
   @Override

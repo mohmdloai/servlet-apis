@@ -15,6 +15,7 @@ public class InventoryLog {
   private UUID orderId;
   private String actorId;
   private ActorType actorType;
+  private UUID impersonatorId;
   private OffsetDateTime createdAt;
 
   public InventoryLog() {}
@@ -113,6 +114,14 @@ public class InventoryLog {
 
   public void setCreatedAt(OffsetDateTime createdAt) {
     this.createdAt = createdAt;
+  }
+
+  public UUID getImpersonatorId() {
+    return impersonatorId;
+  }
+
+  public void setImpersonatorId(UUID impersonatorId) {
+    this.impersonatorId = impersonatorId;
   }
 
   @Override

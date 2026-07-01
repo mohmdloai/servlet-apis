@@ -7,6 +7,7 @@ import com.loai.inventory.api.filter.RateLimitFilter;
 import com.loai.inventory.api.servlet.AdminSweepServlet;
 import com.loai.inventory.api.servlet.AuthServlet;
 import com.loai.inventory.api.servlet.OrgServlet;
+import com.loai.inventory.api.servlet.PlatformImpersonationServlet;
 import com.loai.inventory.api.servlet.PublicStorefrontServlet;
 import java.io.File;
 import org.apache.catalina.Context;
@@ -48,6 +49,9 @@ public class EmbeddedTomcatLauncher {
       ctx.addServletMappingDecoded("/api/public/*", "publicStorefrontServlet");
       Tomcat.addServlet(ctx, "adminSweepServlet", new AdminSweepServlet());
       ctx.addServletMappingDecoded("/api/admin/*", "adminSweepServlet");
+      // More specific than /api/admin/* — Tomcat longest-path match routes impersonation here.
+      Tomcat.addServlet(ctx, "platformImpersonationServlet", new PlatformImpersonationServlet());
+      ctx.addServletMappingDecoded("/api/admin/impersonate/*", "platformImpersonationServlet");
 
       Runtime.getRuntime().addShutdownHook(new Thread(config::shutdown));
 

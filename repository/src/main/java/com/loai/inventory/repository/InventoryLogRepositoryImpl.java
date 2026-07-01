@@ -54,6 +54,7 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
                     ? com.loai.inventory.repository.generated.enums.ActorType.lookupLiteral(
                         actor.actorType().name())
                     : null)
+            .set(INVENTORY_LOG.IMPERSONATOR_ID, actor != null ? actor.impersonatorId() : null)
             .returning()
             .fetchOne();
 
@@ -94,6 +95,7 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
     if (r.getActorType() != null) {
       l.setActorType(ActorType.valueOf(r.getActorType().getLiteral()));
     }
+    l.setImpersonatorId(r.getImpersonatorId());
     l.setCreatedAt(r.getCreatedAt());
     return l;
   }
