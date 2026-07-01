@@ -2,6 +2,7 @@ package com.loai.inventory.api.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.job.OrderTtlSweeperJob;
+import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.DataSourceFactory;
 import com.loai.inventory.common.RedisFactory;
 import com.loai.inventory.common.security.JwtUtil;
@@ -15,10 +16,12 @@ import com.loai.inventory.domain.repository.ImpersonationEventRepository;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
+import com.loai.inventory.domain.repository.PlatformAuditRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
 import com.loai.inventory.domain.repository.RefundAllocationRepositoryFactory;
@@ -35,10 +38,12 @@ import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgHealthRepositoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
+import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
 import com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl;
@@ -68,6 +73,10 @@ import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
+import com.loai.inventory.service.platform.OrgStatusService;
+import com.loai.inventory.service.platform.PlatformAuditService;
+import com.loai.inventory.service.platform.PlatformOrgService;
+import com.loai.inventory.service.platform.UserAdminService;
 import com.zaxxer.hikari.HikariDataSource;
 import org.flywaydb.core.Flyway;
 import org.jobrunr.configuration.JobRunr;
@@ -115,6 +124,8 @@ public class AppConfig {
   public final InventoryLogRepositoryFactory inventoryLogRepositoryFactory;
   public final UserRepositoryFactory userRepositoryFactory;
   public final OrgRepositoryFactory orgRepositoryFactory;
+  public final OrgHealthRepository orgHealthRepository;
+  public final PlatformAuditRepositoryFactory platformAuditRepositoryFactory;
   public final SalesOrderRepositoryFactory salesOrderRepositoryFactory;
   public final InventoryReservationRepositoryFactory inventoryReservationRepositoryFactory;
   public final PaymentTransactionRepositoryFactory paymentTransactionRepositoryFactory;
@@ -130,6 +141,10 @@ public class AppConfig {
   public final RefreshTokenStore refreshTokenStore;
   public final AuthService authService;
   public final OrgService orgService;
+  public final PlatformAuditService platformAuditService;
+  public final OrgStatusService orgStatusService;
+  public final PlatformOrgService platformOrgService;
+  public final UserAdminService userAdminService;
   public final ProductService productService;
   public final CategoryService categoryService;
   public final ProductListingService productListingService;
@@ -183,6 +198,8 @@ public class AppConfig {
     this.inventoryLogRepositoryFactory = new InventoryLogRepositoryFactoryImpl();
     this.userRepositoryFactory = new UserRepositoryFactoryImpl();
     this.orgRepositoryFactory = new OrgRepositoryFactoryImpl();
+    this.orgHealthRepository = new OrgHealthRepositoryImpl(dsl);
+    this.platformAuditRepositoryFactory = new PlatformAuditRepositoryFactoryImpl();
     this.salesOrderRepositoryFactory = new SalesOrderRepositoryFactoryImpl();
     this.inventoryReservationRepositoryFactory = new InventoryReservationRepositoryFactoryImpl();
     this.paymentTransactionRepositoryFactory = new PaymentTransactionRepositoryFactoryImpl();
@@ -205,6 +222,16 @@ public class AppConfig {
             impersonationEventRepository,
             impersonationTtl);
     this.orgService = new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory);
+    this.platformAuditService = new PlatformAuditService(dsl, platformAuditRepositoryFactory);
+    this.orgStatusService = new OrgStatusService(jedisPool, dsl, orgRepositoryFactory);
+    // Enforce org suspension on the hot authorization path, backed by the Redis-mirrored gate.
+    AuthzHelper.configureOrgStatusGate(orgStatusService::isActive);
+    this.platformOrgService =
+        new PlatformOrgService(
+            dsl, orgRepositoryFactory, orgHealthRepository, platformAuditService, orgStatusService);
+    this.userAdminService =
+        new UserAdminService(
+            dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);
     this.productService = new ProductService(productRepository, dsl);
     this.categoryService = new CategoryService(dsl, categoryRepositoryFactory);
     this.productListingService =

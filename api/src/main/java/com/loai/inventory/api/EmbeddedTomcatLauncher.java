@@ -4,7 +4,7 @@ import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.filter.CorsFilter;
 import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.api.filter.RateLimitFilter;
-import com.loai.inventory.api.servlet.AdminSweepServlet;
+import com.loai.inventory.api.servlet.AdminServlet;
 import com.loai.inventory.api.servlet.AuthServlet;
 import com.loai.inventory.api.servlet.OrgServlet;
 import com.loai.inventory.api.servlet.PlatformImpersonationServlet;
@@ -47,8 +47,8 @@ public class EmbeddedTomcatLauncher {
       ctx.addServletMappingDecoded("/api/orgs/*", "orgServlet");
       Tomcat.addServlet(ctx, "publicStorefrontServlet", new PublicStorefrontServlet());
       ctx.addServletMappingDecoded("/api/public/*", "publicStorefrontServlet");
-      Tomcat.addServlet(ctx, "adminSweepServlet", new AdminSweepServlet());
-      ctx.addServletMappingDecoded("/api/admin/*", "adminSweepServlet");
+      Tomcat.addServlet(ctx, "adminServlet", new AdminServlet());
+      ctx.addServletMappingDecoded("/api/admin/*", "adminServlet");
       // More specific than /api/admin/* — Tomcat longest-path match routes impersonation here.
       Tomcat.addServlet(ctx, "platformImpersonationServlet", new PlatformImpersonationServlet());
       ctx.addServletMappingDecoded("/api/admin/impersonate/*", "platformImpersonationServlet");

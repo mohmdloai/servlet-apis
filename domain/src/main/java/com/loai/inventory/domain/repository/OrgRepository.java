@@ -12,13 +12,26 @@ public interface OrgRepository {
 
   List<Org> findAll(int offset, int limit);
 
+  /** Paged list, optionally filtered by active status. {@code active == null} returns all. */
+  List<Org> findAll(int offset, int limit, Boolean active);
+
   List<Org> findAllByIds(List<UUID> ids);
 
   long count();
 
+  /** Total count, optionally filtered by active status. {@code active == null} counts all. */
+  long count(Boolean active);
+
   Org insert(Org org);
 
   Org update(Org org);
+
+  /**
+   * Suspend ({@code suspended=true}: sets {@code active=false}, stamps {@code suspended_at} +
+   * reason) or reactivate ({@code suspended=false}: sets {@code active=true}, clears both). Returns
+   * the updated org.
+   */
+  Org setSuspension(UUID orgId, boolean suspended, String reason);
 
   void deleteById(UUID id);
 

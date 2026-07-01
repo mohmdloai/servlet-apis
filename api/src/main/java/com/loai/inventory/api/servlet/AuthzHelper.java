@@ -5,6 +5,7 @@ import com.loai.inventory.common.exception.AuthenticationException;
 import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
+import com.loai.inventory.domain.model.SystemRole;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Set;
 import java.util.UUID;
@@ -22,6 +23,24 @@ public final class AuthzHelper {
           OrgRole.MANAGER, 3,
           OrgRole.OWNER, 4);
 
+  /** Answers "is this org active?" - pluggable so the hot-path check can read a Redis mirror. */
+  @FunctionalInterface
+  public interface OrgStatusGate {
+    boolean isActive(UUID orgId);
+  }
+
+  // Default: no suspension enforcement (every org active). AppConfig installs the real,
+  // Redis-backed gate at boot; unit tests that don't configure it keep their existing behaviour.
+  private static volatile OrgStatusGate orgStatusGate = orgId -> true;
+
+  /**
+   * Install the org-active gate consulted by {@link #requireOrgAccess}. Null resets to "all
+   * active".
+   */
+  public static void configureOrgStatusGate(OrgStatusGate gate) {
+    orgStatusGate = gate == null ? (orgId -> true) : gate;
+  }
+
   private AuthzHelper() {}
 
   public static SecurityContext requireAuth(HttpServletRequest req) {
@@ -36,6 +55,20 @@ public final class AuthzHelper {
     SecurityContext ctx = requireAuth(req);
     if (!ctx.isSystemAdmin()) {
       throw new AuthorizationException("Requires ADMIN role");
+    }
+    return ctx;
+  }
+
+  /**
+   * Platform read tier: caller holds {@link SystemRole#ADMIN} or {@link SystemRole#SUPPORT}. This
+   * is the VIEWER-equivalent at the platform tier - it gates the cross-org read console and finally
+   * gives SUPPORT a purpose beyond read-only impersonation. Mutations still use {@link
+   * #requireAdmin}.
+   */
+  public static SecurityContext requirePlatformRead(HttpServletRequest req) {
+    SecurityContext ctx = requireAuth(req);
+    if (!ctx.hasSystemRole(SystemRole.ADMIN) && !ctx.hasSystemRole(SystemRole.SUPPORT)) {
+      throw new AuthorizationException("Requires ADMIN or SUPPORT role");
     }
     return ctx;
   }
@@ -67,7 +100,14 @@ public final class AuthzHelper {
     if (ctx.impersonationReadOnly() && RANK.get(minRole) > RANK.get(OrgRole.VIEWER)) {
       throw new AuthorizationException("Read-only impersonation cannot perform writes");
     }
+    // Platform ADMIN bypasses org checks entirely - including suspension, so an admin can enter a
+    // suspended org to fix it.
     if (ctx.isSystemAdmin()) return ctx;
+
+    // A suspended org rejects all its normal members, whatever their role.
+    if (!orgStatusGate.isActive(orgId)) {
+      throw new AuthorizationException("Org suspended");
+    }
 
     Set<OrgRole> roles = ctx.orgRoles() == null ? null : ctx.orgRoles().get(orgId);
     if (roles == null || roles.isEmpty()) {

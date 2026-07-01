@@ -10,7 +10,9 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.jooq.Condition;
 import org.jooq.DSLContext;
+import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,6 +45,18 @@ public final class OrgRepositoryImpl implements OrgRepository {
   }
 
   @Override
+  public List<Org> findAll(int offset, int limit, Boolean active) {
+    Condition condition = active == null ? DSL.noCondition() : ORG.ACTIVE.eq(active);
+    return dsl.selectFrom(ORG)
+        .where(condition)
+        .orderBy(ORG.CREATED_AT.desc())
+        .offset(offset)
+        .limit(limit)
+        .fetch()
+        .map(this::toOrg);
+  }
+
+  @Override
   public List<Org> findAllByIds(List<UUID> ids) {
     if (ids == null || ids.isEmpty()) return List.of();
     return dsl.selectFrom(ORG).where(ORG.ID.in(ids)).fetch().map(this::toOrg);
@@ -51,6 +65,12 @@ public final class OrgRepositoryImpl implements OrgRepository {
   @Override
   public long count() {
     return dsl.fetchCount(ORG);
+  }
+
+  @Override
+  public long count(Boolean active) {
+    Condition condition = active == null ? DSL.noCondition() : ORG.ACTIVE.eq(active);
+    return dsl.fetchCount(ORG, condition);
   }
 
   @Override
@@ -84,6 +104,24 @@ public final class OrgRepositoryImpl implements OrgRepository {
       throw new NotFoundException("Org", org.getId());
     }
     log.debug("Updated org id={}", record.getId());
+    return toOrg(record);
+  }
+
+  @Override
+  public Org setSuspension(UUID orgId, boolean suspended, String reason) {
+    OrgRecord record =
+        dsl.update(ORG)
+            .set(ORG.ACTIVE, !suspended)
+            .set(ORG.SUSPENDED_AT, suspended ? OffsetDateTime.now() : null)
+            .set(ORG.SUSPENDED_REASON, suspended ? reason : null)
+            .set(ORG.UPDATED_AT, OffsetDateTime.now())
+            .where(ORG.ID.eq(orgId))
+            .returning()
+            .fetchOne();
+    if (record == null) {
+      throw new NotFoundException("Org", orgId);
+    }
+    log.debug("Org id={} suspension set to {}", orgId, suspended);
     return toOrg(record);
   }
 
