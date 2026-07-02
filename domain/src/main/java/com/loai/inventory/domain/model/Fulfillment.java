@@ -11,7 +11,8 @@ import java.util.UUID;
  * stock actually decrements (reservations consumed, {@code inventory.on_hand} dropped). See {@code
  * sys-analysis/outbound/fulfillment.md}.
  *
- * <p>Lifecycle: PENDING → SHIPPED → DELIVERED, with a SHIPPED → FAILED branch when a shipment never
+ * <p>Lifecycle: PENDING → SHIPPED → DELIVERED, with a PENDING → CANCELLED branch when the shipment
+ * is called off before leaving the warehouse and a SHIPPED → FAILED branch when a shipment never
  * arrives (and a post-failure {@code returnedAt} stamp once the goods come back).
  */
 public final class Fulfillment {
@@ -234,6 +235,24 @@ public final class Fulfillment {
     Objects.requireNonNull(now, "now required");
     this.status = FulfillmentStatus.SHIPPED;
     this.shippedAt = now;
+    this.updatedAt = now;
+  }
+
+  /**
+   * Cancel a PENDING fulfillment — the shipment will not happen (order cancelled, payment disputed,
+   * or the goods became unshippable before ship-out). Only PENDING can cancel: once SHIPPED the
+   * stock has left the warehouse and the branch is FAILED, not CANCELLED (see {@code
+   * state-machines.md} machine B). No stock moves here; the caller releases the lines' linked
+   * reservations back to {@code available} in the same transaction.
+   */
+  public void cancel(OffsetDateTime now) {
+    if (this.status != FulfillmentStatus.PENDING) {
+      throw new InvalidOrderTransitionException(
+          "cannot cancel fulfillment " + id + " in status " + status + "; expected PENDING");
+    }
+    Objects.requireNonNull(now, "now required");
+    this.status = FulfillmentStatus.CANCELLED;
+    this.cancelledAt = now;
     this.updatedAt = now;
   }
 

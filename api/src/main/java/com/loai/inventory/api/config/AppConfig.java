@@ -369,6 +369,7 @@ public class AppConfig {
             dsl,
             salesOrderRepositoryFactory,
             paymentRepositoryFactory,
+            fulfillmentRepositoryFactory,
             reservationService,
             refundService);
 

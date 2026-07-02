@@ -522,6 +522,74 @@ public final class FulfillmentService {
   }
 
   /**
+   * Cancel a PENDING fulfillment — the shipment is called off before anything leaves the warehouse
+   * (order being cancelled, payment disputed, goods unshippable). PENDING → CANCELLED, releasing
+   * the reservations its lines link to back to {@code available} ({@code fulfillment.md}
+   * §CANCELLED; state-machines.md B "Enter CANCELLED before SHIPPED"). No stock moved at PENDING,
+   * so nothing else unwinds. Only PENDING cancels: SHIPPED goods are FAILED, not cancelled (409).
+   *
+   * <p>Note the consequence of the released reservations: the lines cannot be re-fulfilled
+   * afterwards (fulfillment creation requires an ACTIVE reservation per line), so cancelling a
+   * fulfillment is giving up on shipping those lines — the money path out is an order cancel
+   * (direct refund of the un-invoiced prepayment), not a re-ship.
+   */
+  public FulfillmentView cancelPending(UUID orgId, UUID fulfillmentId, ActorContext actor) {
+    if (orgId == null) {
+      throw new ValidationException("orgId is required");
+    }
+    if (fulfillmentId == null) {
+      throw new ValidationException("fulfillmentId is required");
+    }
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+          FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
+
+          Fulfillment fulfillment =
+              fulfillmentRepo
+                  .findByIdForUpdate(orgId, fulfillmentId)
+                  .orElseThrow(() -> new NotFoundException("Fulfillment", fulfillmentId));
+          // Domain guard also enforces PENDING; pre-check for a clean 409 instead of a 500.
+          if (fulfillment.getStatus() != FulfillmentStatus.PENDING) {
+            throw new ConflictException(
+                "fulfillment "
+                    + fulfillmentId
+                    + " is "
+                    + fulfillment.getStatus()
+                    + ", not PENDING; a shipped fulfillment fails, it does not cancel");
+          }
+
+          List<FulfillmentLine> lines = fulfillmentRepo.findLinesByFulfillmentId(fulfillmentId);
+          List<UUID> reservationIds = new ArrayList<>(lines.size());
+          for (FulfillmentLine line : lines) {
+            if (line.getInventoryReservationId() != null) {
+              reservationIds.add(line.getInventoryReservationId());
+            }
+          }
+          ReservationService.ReleaseResult released =
+              reservationService.releaseByIds(
+                  txDsl,
+                  fulfillment.getSalesOrderId(),
+                  reservationIds,
+                  "FULFILLMENT_CANCELLED",
+                  actor,
+                  now);
+
+          fulfillment.cancel(now);
+          fulfillmentRepo.updateStatus(fulfillment);
+
+          log.info(
+              "Cancelled PENDING fulfillment id={} orgId={} order={} reservationsReleased={}",
+              fulfillmentId,
+              orgId,
+              fulfillment.getSalesOrderId(),
+              released.released());
+          return new FulfillmentView(fulfillment, lines);
+        });
+  }
+
+  /**
    * Mark a SHIPPED fulfillment FAILED — the shipment never arrived (lost, refused, returned to
    * sender). Locks the fulfillment, guards SHIPPED → FAILED, and stamps {@code failed_at}/{@code
    * failed_reason}. Nothing else moves: the stock is still out there and the order keeps its

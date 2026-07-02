@@ -172,6 +172,43 @@ public final class ReservationService {
     InventoryReservationRepository reservationRepo = reservationRepoFactory.create(txDsl);
 
     List<InventoryReservation> active = reservationRepo.findActiveByOrderId(orderId);
+    return releaseReservations(txDsl, orderId, active, reason, actor, now);
+  }
+
+  /**
+   * Release a specific set of reservations (by id) back to {@code available} — the targeted variant
+   * of {@link #releaseForOrder}, used when cancelling one PENDING fulfillment releases only the
+   * reservations its lines link to ({@code fulfillment.md} §CANCELLED) while the order's other
+   * reservations stay ACTIVE. Ids that are no longer ACTIVE are skipped. Runs in the caller's
+   * {@code txDsl}; {@code orderId} is only used for the {@code inventory_log} source reference.
+   */
+  public ReleaseResult releaseByIds(
+      DSLContext txDsl,
+      UUID orderId,
+      List<UUID> reservationIds,
+      String reason,
+      ActorContext actor,
+      OffsetDateTime now) {
+
+    InventoryReservationRepository reservationRepo = reservationRepoFactory.create(txDsl);
+
+    List<InventoryReservation> active =
+        reservationRepo.findByIds(reservationIds).stream()
+            .filter(r -> r.getStatus() == com.loai.inventory.domain.model.ReservationStatus.ACTIVE)
+            .toList();
+    return releaseReservations(txDsl, orderId, active, reason, actor, now);
+  }
+
+  /** Shared release body: aggregate per product, lock, adjust, log, flip rows to RELEASED. */
+  private ReleaseResult releaseReservations(
+      DSLContext txDsl,
+      UUID orderId,
+      List<InventoryReservation> active,
+      String reason,
+      ActorContext actor,
+      OffsetDateTime now) {
+
+    InventoryReservationRepository reservationRepo = reservationRepoFactory.create(txDsl);
     if (active.isEmpty()) {
       return ReleaseResult.NONE;
     }

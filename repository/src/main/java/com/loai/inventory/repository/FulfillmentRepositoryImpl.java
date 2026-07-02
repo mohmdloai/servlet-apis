@@ -97,6 +97,36 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
   }
 
   @Override
+  public List<Fulfillment> findByOrderId(UUID orgId, UUID salesOrderId) {
+    return dsl.selectFrom(FULFILLMENT)
+        .where(FULFILLMENT.ORG_ID.eq(orgId).and(FULFILLMENT.SALES_ORDER_ID.eq(salesOrderId)))
+        .orderBy(FULFILLMENT.CREATED_AT.asc())
+        .fetch()
+        .map(this::toFulfillment);
+  }
+
+  @Override
+  public int cancelIfPending(UUID orgId, UUID fulfillmentId, java.time.OffsetDateTime now) {
+    // The WHERE status='PENDING' clause IS the concurrency guard — atomic, DB-enforced. 0 rows
+    // means a concurrent ship/cancel moved the fulfillment off PENDING first.
+    return dsl.update(FULFILLMENT)
+        .set(
+            FULFILLMENT.STATUS,
+            com.loai.inventory.repository.generated.enums.FulfillmentStatus.CANCELLED)
+        .set(FULFILLMENT.CANCELLED_AT, now)
+        .set(FULFILLMENT.UPDATED_AT, now)
+        .where(
+            FULFILLMENT
+                .ID
+                .eq(fulfillmentId)
+                .and(FULFILLMENT.ORG_ID.eq(orgId))
+                .and(
+                    FULFILLMENT.STATUS.eq(
+                        com.loai.inventory.repository.generated.enums.FulfillmentStatus.PENDING)))
+        .execute();
+  }
+
+  @Override
   public void updateStatus(Fulfillment fulfillment) {
     dsl.update(FULFILLMENT)
         .set(
