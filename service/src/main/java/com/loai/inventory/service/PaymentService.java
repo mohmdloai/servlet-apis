@@ -31,12 +31,15 @@ import org.slf4j.LoggerFactory;
  * PaymentTransactionService}) owns the transaction boundary so the txn-verify and the
  * payment-creation commit (or roll back) together.
  *
- * <p>Classification (this slice — only MATCHED produces a {@link Payment}):
+ * <p>Classification:
  *
  * <ul>
- *   <li>no/blank order ref, order not found, or order not in {@code PENDING_PAYMENT} → ORPHAN
- *   <li>{@code amount < grand_total − prepaid} → UNDERPAID
- *   <li>{@code amount > grand_total − prepaid} → OVERPAID
+ *   <li>no/blank order ref, order not found, or order not in {@code PENDING_PAYMENT} → ORPHAN (no
+ *       Payment; admin resolves from the orphan queue)
+ *   <li>{@code amount < grand_total − prepaid} → UNDERPAID (create Payment, accumulate {@code
+ *       prepaid_amount}, order stays PENDING_PAYMENT)
+ *   <li>{@code amount > grand_total − prepaid} → OVERPAID (create Payment, mark order PAID; excess
+ *       stays on {@code payment.unallocated_amount} for a later direct refund)
  *   <li>{@code amount == grand_total − prepaid} → MATCHED (create Payment, mark order PAID)
  * </ul>
  */
@@ -140,14 +143,26 @@ public final class PaymentService {
       return new Reconciliation(PaymentReconciliationStatus.UNDERPAID, payment, order);
     }
     if (cmp > 0) {
-      // OVERPAID — deferred to the overpaid slice (Payment created + order → PAID with the excess
-      // sitting on payment.unallocated_amount). For now record the outcome without a Payment.
+      // OVERPAID — per the documented model (state-machines.md E / payment.md §Overpaid online):
+      // the order is fully covered, so still create the Payment for the full amount and flip the
+      // order to PAID. The excess (amount − outstanding) sits on payment.unallocated_amount —
+      // invoice issuance at delivery allocates only up to the invoice total (InvoiceService FIFO),
+      // and the admin refunds the leftover directly from the Payment (no CreditNote).
+      OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+      Payment payment = createPrepayment(txDsl, orgId, order, txn, now);
+      BigDecimal newPrepaid = order.getPrepaidAmount().add(txn.getAmount());
+      order.markPaid(newPrepaid, now); // domain guard allows prepaid > grand_total
+      orderRepo.updatePaymentState(order);
       log.info(
-          "Reconcile OVERPAID: order {} outstanding {} < amount {}",
+          "Reconcile OVERPAID: order {} → PAID (prepaid={} > grandTotal={}), payment {} RECEIVED"
+              + " amount={} excess={}",
           order.getOrderNumber(),
-          outstanding,
-          txn.getAmount());
-      return new Reconciliation(PaymentReconciliationStatus.OVERPAID, null, order);
+          order.getPrepaidAmount(),
+          order.getGrandTotal(),
+          payment.getId(),
+          payment.getAmount(),
+          txn.getAmount().subtract(outstanding));
+      return new Reconciliation(PaymentReconciliationStatus.OVERPAID, payment, order);
     }
 
     // MATCHED — exact cover. Create the payment, then flip the order to PAID in the same txn.

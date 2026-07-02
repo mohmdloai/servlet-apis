@@ -3,14 +3,17 @@ package com.loai.inventory.api.customer;
 import static com.loai.inventory.repository.generated.Tables.APP_USER;
 import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
+import static com.loai.inventory.repository.generated.Tables.INVENTORY_RESERVATION;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
+import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.USER_ORG_ROLE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
@@ -36,6 +39,8 @@ import com.loai.inventory.service.SalesOrderService.Placed;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
@@ -377,6 +382,79 @@ class CustomerResolutionAtPlacementIT {
     assertEquals(0, customerCount(org));
   }
 
+  /**
+   * Empirical proof of the "no backorder" gap: ordering more than is in stock is a hard 409 ({@link
+   * InsufficientStockException} extends {@code ConflictException}) and the whole placement rolls
+   * back — no order, no reservation, reserved_qty untouched. There is no backorder/queue row
+   * because no such concept exists.
+   */
+  @Test
+  void onlineOrder_insufficientStock_isHard409_rollsBack_noBackorder() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("staff@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 5, 0); // only 5 in stock
+
+    assertThrows(
+        InsufficientStockException.class,
+        () ->
+            service.placeOnlineOrder(
+                org,
+                new CustomerInput("Nadia", "nadia@acme.test", null, null),
+                List.of(new OrderLineInput(product, 6)), // want 6 > 5
+                UUID.randomUUID().toString(),
+                null,
+                actor(staff)));
+
+    // Nothing persisted: no order, no reservation, stock reservation untouched — no backorder.
+    assertEquals(0, salesOrderCount(org));
+    assertEquals(0, reservationCount(org));
+    assertEquals(0, reservedQty(org, product));
+  }
+
+  /**
+   * Empirical proof of the "reservation TTL is not per-org" gap: the hold window is the hardcoded
+   * {@code ONLINE_TTL = 24h} for every org — expires_at is always exactly placed_at + 24h, and two
+   * different orgs get an identical window (no per-org override feeds it).
+   */
+  @Test
+  void reservationTtl_isFixed24h_identicalAcrossOrgs() {
+    UUID orgA = createOrg("acme");
+    UUID orgB = createOrg("globex");
+    UUID staffA = createUser("a@acme.test");
+    UUID staffB = createUser("b@globex.test");
+    UUID pa = createProduct(orgA, "A");
+    UUID pb = createProduct(orgB, "B");
+    createInventory(orgA, pa, 10, 0);
+    createInventory(orgB, pb, 10, 0);
+
+    UUID orderA =
+        service
+            .placeOnlineOrder(
+                orgA,
+                new CustomerInput("Shared", "s@a.test", null, null),
+                List.of(new OrderLineInput(pa, 1)),
+                UUID.randomUUID().toString(),
+                null,
+                actor(staffA))
+            .order()
+            .getId();
+    UUID orderB =
+        service
+            .placeOnlineOrder(
+                orgB,
+                new CustomerInput("Shared", "s@b.test", null, null),
+                List.of(new OrderLineInput(pb, 1)),
+                UUID.randomUUID().toString(),
+                null,
+                actor(staffB))
+            .order()
+            .getId();
+
+    assertEquals(Duration.ofHours(24), holdWindow(orderA));
+    assertEquals(Duration.ofHours(24), holdWindow(orderB), "every org gets the same fixed 24h TTL");
+  }
+
   // ───────────────────────────── seed helpers ─────────────────────────────
 
   private static ActorContext actor(UUID userId) {
@@ -429,6 +507,36 @@ class CustomerResolutionAtPlacementIT {
 
   private int customerCount(UUID org) {
     return dsl.fetchCount(dsl.selectFrom(CUSTOMER).where(CUSTOMER.ORG_ID.eq(org)));
+  }
+
+  private int salesOrderCount(UUID org) {
+    return dsl.fetchCount(dsl.selectFrom(SALES_ORDER).where(SALES_ORDER.ORG_ID.eq(org)));
+  }
+
+  private int reservationCount(UUID org) {
+    return dsl.fetchCount(
+        dsl.selectFrom(INVENTORY_RESERVATION).where(INVENTORY_RESERVATION.ORG_ID.eq(org)));
+  }
+
+  private int reservedQty(UUID org, UUID product) {
+    return dsl.select(INVENTORY.RESERVED_QTY)
+        .from(INVENTORY)
+        .where(INVENTORY.ORG_ID.eq(org).and(INVENTORY.PRODUCT_ID.eq(product)))
+        .fetchOne(INVENTORY.RESERVED_QTY);
+  }
+
+  private Duration holdWindow(UUID orderId) {
+    OffsetDateTime placed =
+        dsl.select(SALES_ORDER.PLACED_AT)
+            .from(SALES_ORDER)
+            .where(SALES_ORDER.ID.eq(orderId))
+            .fetchOne(SALES_ORDER.PLACED_AT);
+    OffsetDateTime expires =
+        dsl.select(SALES_ORDER.EXPIRES_AT)
+            .from(SALES_ORDER)
+            .where(SALES_ORDER.ID.eq(orderId))
+            .fetchOne(SALES_ORDER.EXPIRES_AT);
+    return Duration.between(placed, expires);
   }
 
   private String customerEmail(UUID id) {

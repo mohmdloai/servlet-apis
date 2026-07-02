@@ -1,5 +1,6 @@
 package com.loai.inventory.api.fulfillment;
 
+import static com.loai.inventory.repository.generated.Tables.FULFILLMENT_LINE;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY_LOG;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY_RESERVATION;
@@ -268,7 +269,52 @@ class FulfillmentShipIT {
                 org, order.id(), List.of(new LineInput(line.lineId())), null, null, null, actor));
   }
 
+  /**
+   * Empirical proof of the "partial-quantity within a line (short-ship)" gap. A line of qty 5 can
+   * only be shipped <em>whole</em>: {@link LineInput} carries no quantity, so the created
+   * fulfillment line always claims the line's entire ACTIVE reservation (5). There is no way to
+   * ship 3 and backorder 2 — after the ship the reservation is CONSUMED and nothing is left over to
+   * fulfill.
+   */
+  @Test
+  void shipsWholeLineOnly_cannotShortShipPartOfALine() {
+    UUID org = createOrg("acme");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 5);
+    Order order = seedPaidOrder(org, List.of(new Want(product, 5)));
+    Line line = order.lines().get(0);
+
+    // The only fulfillment we can construct ships the whole line — LineInput exposes no qty field.
+    FulfillmentView created =
+        service.create(
+            org, order.id(), List.of(new LineInput(line.lineId())), null, null, null, actor);
+    service.ship(org, created.fulfillment().getId(), actor);
+
+    // The fulfillment line claimed the full reserved quantity (5), never a partial 3.
+    assertEquals(5, fulfillmentLineQty(created.fulfillment().getId()));
+
+    // Whole line gone: stock 10→5, reserved 5→0, reservation CONSUMED — no leftover 2 to backorder.
+    assertEquals(5, stockQty(org, product));
+    assertEquals(0, reservedQty(org, product));
+    assertEquals("CONSUMED", reservationStatus(line.reservationId()));
+
+    // A second fulfillment for the same line has nothing left to claim — there is no partial
+    // remainder.
+    assertThrows(
+        ValidationException.class,
+        () ->
+            service.create(
+                org, order.id(), List.of(new LineInput(line.lineId())), null, null, null, actor));
+  }
+
   // ───────────────────────────── helpers ─────────────────────────────
+
+  private int fulfillmentLineQty(UUID fulfillmentId) {
+    return dsl.select(FULFILLMENT_LINE.QUANTITY)
+        .from(FULFILLMENT_LINE)
+        .where(FULFILLMENT_LINE.FULFILLMENT_ID.eq(fulfillmentId))
+        .fetchAny(FULFILLMENT_LINE.QUANTITY);
+  }
 
   private record Want(UUID productId, int qty) {}
 

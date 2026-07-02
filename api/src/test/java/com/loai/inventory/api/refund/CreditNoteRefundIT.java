@@ -14,6 +14,7 @@ import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.loai.inventory.common.exception.AuthorizationException;
@@ -449,6 +450,58 @@ class CreditNoteRefundIT {
     assertEquals(1, debitTxnCount(f.org)); // exactly one DEBIT in the org
   }
 
+  /**
+   * Empirical proof of the "refund-execution failure has no operational trail" gap. We force
+   * execute() to fail deterministically — a DEBIT with the same {@code (provider, provider_ref)}
+   * already exists, so {@code insertIfAbsent} reports not-inserted and the whole execute() txn
+   * rolls back. The refund is correctly left PENDING (retry-able), but there is <em>nowhere</em> to
+   * record why it failed: the {@code refund} table (V26) has no {@code last_error} / retry-count /
+   * next-attempt column, so the only trace the failure ever happened is the thrown exception —
+   * nothing is persisted for an operator to see or drive a retry from.
+   */
+  @Test
+  void refundExecuteFailure_leavesPending_withNoPersistedErrorTrail() {
+    UUID org = createOrg("acme");
+    UUID paymentId = seedOrphanPayment(org, null, "100.00");
+    UUID refundId =
+        refundService
+            .create(
+                org,
+                new CreateCommand(
+                    null,
+                    paymentId,
+                    new BigDecimal("100.00"),
+                    "EGP",
+                    PaymentProvider.INSTAPAY_MANUAL,
+                    null),
+                false)
+            .getId();
+    assertEquals("PENDING", refundStatus(refundId));
+
+    // Pre-seed the exact DEBIT (provider, provider_ref) execute() will attempt → forced
+    // ConflictException.
+    dsl.insertInto(PAYMENT_TRANSACTION)
+        .set(PAYMENT_TRANSACTION.ID, UUID.randomUUID())
+        .set(
+            PAYMENT_TRANSACTION.PROVIDER,
+            com.loai.inventory.repository.generated.enums.PaymentProvider.instapay_manual)
+        .set(PAYMENT_TRANSACTION.ORG_ID, org)
+        .set(PAYMENT_TRANSACTION.PROVIDER_REF, "COLLIDE-1")
+        .set(PAYMENT_TRANSACTION.DIRECTION, PaymentDirection.DEBIT)
+        .set(PAYMENT_TRANSACTION.AMOUNT, new BigDecimal("100.00"))
+        .set(PAYMENT_TRANSACTION.VERIFICATION_STATUS, PaymentVerificationStatus.VERIFIED)
+        .set(PAYMENT_TRANSACTION.OCCURRED_AT, now().minusHours(1))
+        .execute();
+
+    assertThrows(
+        ConflictException.class, () -> refundService.execute(org, refundId, "COLLIDE-1", actorId));
+
+    // Left exactly PENDING with executed_at/txn unset — good for retry, but ZERO persisted trail of
+    // the failure (no last_error column exists to assert against; its absence is the gap).
+    assertEquals("PENDING", refundStatus(refundId));
+    assertNull(refundTxnId(refundId));
+  }
+
   /** Voiding: blocked once a refund has executed; allowed for an unused ISSUED note. */
   @Test
   void voidGuards() {
@@ -759,6 +812,13 @@ class CreditNoteRefundIT {
         .where(REFUND.ID.eq(id))
         .fetchOne(REFUND.STATUS)
         .getLiteral();
+  }
+
+  private UUID refundTxnId(UUID id) {
+    return dsl.select(REFUND.PAYMENT_TRANSACTION_ID)
+        .from(REFUND)
+        .where(REFUND.ID.eq(id))
+        .fetchOne(REFUND.PAYMENT_TRANSACTION_ID);
   }
 
   private String creditNoteStatus(UUID id) {
