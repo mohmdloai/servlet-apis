@@ -76,7 +76,12 @@ class NotificationDeliveryIT {
     dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
     service =
         new NotificationService(
-            dsl, new NotificationRepositoryFactoryImpl(), new UserRepositoryFactoryImpl());
+            dsl,
+            new NotificationRepositoryFactoryImpl(),
+            new UserRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
+            new com.loai.inventory.service.email.LoggingEmailSender(),
+            NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS);
   }
 
   @AfterAll

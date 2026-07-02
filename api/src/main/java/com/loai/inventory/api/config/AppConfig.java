@@ -11,6 +11,7 @@ import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.storage.ObjectStorageFactory;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
+import com.loai.inventory.domain.repository.CustomerMagicTokenRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
 import com.loai.inventory.domain.repository.ImpersonationEventRepository;
@@ -34,6 +35,7 @@ import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
+import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
@@ -62,6 +64,7 @@ import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceService;
+import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.NotificationService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderExpiryService;
@@ -77,11 +80,14 @@ import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
+import com.loai.inventory.service.email.EmailSender;
+import com.loai.inventory.service.email.EmailSenderFactory;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
 import com.loai.inventory.service.platform.UserAdminService;
 import com.zaxxer.hikari.HikariDataSource;
+import java.time.Duration;
 import org.flywaydb.core.Flyway;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.scheduling.JobScheduler;
@@ -115,6 +121,7 @@ public class AppConfig {
   public final ObjectMapper objectMapper;
   public final JwtUtil jwtUtil;
   public final ObjectStorage objectStorage;
+  public final EmailSender emailSender;
   public final boolean secureCookies;
 
   // Repositories (domain interface type, not the impl)
@@ -123,6 +130,7 @@ public class AppConfig {
   public final ImpersonationEventRepository impersonationEventRepository;
   public final CategoryRepositoryFactory categoryRepositoryFactory;
   public final NotificationRepositoryFactory notificationRepositoryFactory;
+  public final CustomerMagicTokenRepositoryFactory customerMagicTokenRepositoryFactory;
   public final ProductListingRepositoryFactory productListingRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
@@ -153,6 +161,7 @@ public class AppConfig {
   public final ProductService productService;
   public final CategoryService categoryService;
   public final NotificationService notificationService;
+  public final MagicLinkService magicLinkService;
   public final ProductListingService productListingService;
   public final StorefrontService storefrontService;
   public final CustomerService customerService;
@@ -194,12 +203,14 @@ public class AppConfig {
     this.jedisPool = RedisFactory.build();
     this.jwtUtil = new JwtUtil(jwtSecret, accessTtl);
     this.objectStorage = ObjectStorageFactory.build();
+    this.emailSender = EmailSenderFactory.build();
 
     this.productRepository = new ProductRepositoryImpl(dsl);
     this.userRepository = new UserRepositoryImpl(dsl);
     this.impersonationEventRepository = new ImpersonationEventRepositoryImpl(dsl);
     this.categoryRepositoryFactory = new CategoryRepositoryFactoryImpl();
     this.notificationRepositoryFactory = new NotificationRepositoryFactoryImpl();
+    this.customerMagicTokenRepositoryFactory = new CustomerMagicTokenRepositoryFactoryImpl();
     this.productListingRepositoryFactory = new ProductListingRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
@@ -242,8 +253,24 @@ public class AppConfig {
             dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);
     this.productService = new ProductService(productRepository, dsl);
     this.categoryService = new CategoryService(dsl, categoryRepositoryFactory);
+    int emailMaxAttempts =
+        (int)
+            parseLong(
+                System.getenv("EMAIL_MAX_ATTEMPTS"),
+                NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS);
     this.notificationService =
-        new NotificationService(dsl, notificationRepositoryFactory, userRepositoryFactory);
+        new NotificationService(
+            dsl,
+            notificationRepositoryFactory,
+            userRepositoryFactory,
+            customerRepositoryFactory,
+            emailSender,
+            emailMaxAttempts);
+    String publicBaseUrl = getenvOrDefault("PUBLIC_BASE_URL", "http://localhost:8080");
+    long magicTtlDays = parseLong(System.getenv("MAGIC_LINK_TTL_DAYS"), 30L);
+    this.magicLinkService =
+        new MagicLinkService(
+            dsl, customerMagicTokenRepositoryFactory, publicBaseUrl, Duration.ofDays(magicTtlDays));
     this.productListingService =
         new ProductListingService(dsl, productListingRepositoryFactory, objectStorage);
     this.storefrontService =
@@ -319,7 +346,8 @@ public class AppConfig {
             fulfillmentService,
             paymentService,
             invoiceService,
-            notificationService);
+            notificationService,
+            magicLinkService);
     this.creditNoteService =
         new CreditNoteService(
             dsl,

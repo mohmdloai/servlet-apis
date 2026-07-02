@@ -25,10 +25,15 @@ public final class NotificationDeliverySweeperJob {
 
   @Job(name = "notification-delivery-sweeper")
   public void run() {
-    NotificationService.DeliverySummary summary =
+    NotificationService.DeliverySummary inApp =
         notificationService.dispatchPendingInApp(batchLimit);
-    if (summary.picked() > 0) {
-      log.info("Notification delivery tick: {}", summary);
+    NotificationService.DeliverySummary email =
+        notificationService.dispatchPendingEmail(batchLimit);
+    if (inApp.picked() > 0) {
+      log.info("Notification delivery tick (in_app): {}", inApp);
+    }
+    if (email.picked() > 0) {
+      log.info("Notification delivery tick (email): {}", email);
     }
   }
 }

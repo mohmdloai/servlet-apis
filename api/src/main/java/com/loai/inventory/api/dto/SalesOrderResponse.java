@@ -32,6 +32,22 @@ public class SalesOrderResponse {
   private SalesOrderResponse() {}
 
   public static SalesOrderResponse from(SalesOrder order, List<SalesOrderLine> lines) {
+    return build(order, lines, /* includeInternal= */ true);
+  }
+
+  /**
+   * The order as shown to the customer over the anonymous magic-link route ({@code
+   * /api/public/orders/{token}}). Excludes staff-facing fields: {@code notes} is entered by staff
+   * on a STAFF-gated placement endpoint and may hold internal/operational text, so it is withheld
+   * from an unauthenticated audience. (A proper customer_note / internal_note split is the durable
+   * fix — tracked as follow-up.)
+   */
+  public static SalesOrderResponse forCustomerView(SalesOrder order, List<SalesOrderLine> lines) {
+    return build(order, lines, /* includeInternal= */ false);
+  }
+
+  private static SalesOrderResponse build(
+      SalesOrder order, List<SalesOrderLine> lines, boolean includeInternal) {
     SalesOrderResponse r = new SalesOrderResponse();
     r.id = order.getId();
     r.orgId = order.getOrgId();
@@ -49,7 +65,8 @@ public class SalesOrderResponse {
     r.expiresAt = order.getExpiresAt();
     r.createdAt = order.getCreatedAt();
     r.updatedAt = order.getUpdatedAt();
-    r.notes = order.getNotes();
+    // notes is staff-facing — omit it from the customer view (Jackson drops nulls).
+    r.notes = includeInternal ? order.getNotes() : null;
     r.lines = lines.stream().map(SalesOrderLineResponse::from).toList();
     return r;
   }

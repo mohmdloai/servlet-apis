@@ -30,4 +30,26 @@ final class NotificationTemplates {
     Object v = payload == null ? null : payload.get(key);
     return v == null ? "" : v.toString();
   }
+
+  /**
+   * Wrap a channel-agnostic {@code body} into a minimal HTML email, appending a call-to-action link
+   * when {@code linkUrl} is present. Deliberately plain — org-branded templates are a later slice.
+   */
+  static String emailHtml(String body, String linkUrl) {
+    StringBuilder sb = new StringBuilder("<p>").append(escape(body)).append("</p>");
+    if (linkUrl != null && !linkUrl.isBlank()) {
+      sb.append("<p><a href=\"").append(escape(linkUrl)).append("\">View your order</a></p>");
+    }
+    return sb.toString();
+  }
+
+  private static String escape(String s) {
+    if (s == null) {
+      return "";
+    }
+    return s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;");
+  }
 }
