@@ -16,7 +16,8 @@ external dependency is an **SMTP sender** (Gmail). Two decisions are settled by 
 email provider = **Gmail SMTP**; customer recipients are **email-only** (customers have no in-app
 feed — they are not `app_user` rows).
 
-Next migration number: **V46** (V44 = notification tables, V45 = customer_magic_token, both shipped).
+Next migration number: **V47** (V44 = notification tables, V45 = customer_magic_token, V46 =
+notification_preference, all shipped).
 
 ---
 
@@ -248,7 +249,13 @@ each calling `notify(...)` inside its business txn.
    customer email carrying the order magic link (fired inside the online-placement txn). Covered by
    `CustomerEmailDeliveryIT` (produce → sweep → SENT/FAILED/retry) + `OrderMagicLinkIT` (mint/resolve,
    expiry, isolation). Story: `stories/deliver_customer_email_notifications.md`.
-4. **Phase 3 — Preferences:** `V46` + resolution + staff prefs endpoints + customer unsubscribe token.
+4. **Phase 3 — Preferences:** ✅ **done** — `V46 notification_preference` (opt-out; polymorphic
+   subject × `type`/`ALL` × `channel`), resolution in `notify()` (exact → `ALL` → default-enabled; a
+   fully-suppressed notification is recorded and finalized `DISPATCHED` with zero deliveries), staff
+   `GET/PUT /api/orgs/{orgId}/notification-preferences` (own-only), and customer one-click
+   unsubscribe (`UNSUBSCRIBE` magic token in every email → `POST|GET /api/public/unsubscribe/{token}`
+   → email off for the org). Covered by `NotificationPreferenceIT`. Story:
+   `stories/notification_preferences.md`.
 5. **Phase 4 — Explicit sends:** admin→org and org→customer producers.
 6. **Later:** customer-session magic links / portal (own slice), SMS/WhatsApp subtypes, ESP webhooks
    for true DELIVERED, org template customization, broadcast model.
