@@ -10,6 +10,7 @@ import com.loai.inventory.api.servlet.OrgServlet;
 import com.loai.inventory.api.servlet.PlatformImpersonationServlet;
 import com.loai.inventory.api.servlet.PublicOrderServlet;
 import com.loai.inventory.api.servlet.PublicStorefrontServlet;
+import com.loai.inventory.api.servlet.PublicUnsubscribeServlet;
 import java.io.File;
 import org.apache.catalina.Context;
 import org.apache.catalina.startup.Tomcat;
@@ -51,6 +52,9 @@ public class EmbeddedTomcatLauncher {
       // More specific than /api/public/* — the anonymous order-view magic-link route.
       Tomcat.addServlet(ctx, "publicOrderServlet", new PublicOrderServlet());
       ctx.addServletMappingDecoded("/api/public/orders/*", "publicOrderServlet");
+      // Anonymous one-click unsubscribe magic-link route.
+      Tomcat.addServlet(ctx, "publicUnsubscribeServlet", new PublicUnsubscribeServlet());
+      ctx.addServletMappingDecoded("/api/public/unsubscribe/*", "publicUnsubscribeServlet");
       Tomcat.addServlet(ctx, "adminServlet", new AdminServlet());
       ctx.addServletMappingDecoded("/api/admin/*", "adminServlet");
       // More specific than /api/admin/* — Tomcat longest-path match routes impersonation here.

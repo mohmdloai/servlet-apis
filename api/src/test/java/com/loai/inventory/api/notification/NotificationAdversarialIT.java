@@ -326,7 +326,13 @@ class NotificationAdversarialIT {
         new NotificationRepositoryFactoryImpl(),
         new UserRepositoryFactoryImpl(),
         new CustomerRepositoryFactoryImpl(),
+        new com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl(),
         sender,
+        new com.loai.inventory.service.MagicLinkService(
+            dsl,
+            new com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl(),
+            "http://localhost:8080",
+            java.time.Duration.ofDays(30)),
         maxAttempts);
   }
 

@@ -137,6 +137,12 @@ class InStoreSaleIT {
             new PaymentRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl());
+    com.loai.inventory.service.MagicLinkService magicLink =
+        new com.loai.inventory.service.MagicLinkService(
+            dsl,
+            new com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl(),
+            "http://localhost:8080",
+            java.time.Duration.ofDays(30));
     service =
         new SalesOrderService(
             dsl,
@@ -150,13 +156,11 @@ class InStoreSaleIT {
                 new com.loai.inventory.repository.NotificationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.UserRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl(),
                 new com.loai.inventory.service.email.LoggingEmailSender(),
+                magicLink,
                 com.loai.inventory.service.NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS),
-            new com.loai.inventory.service.MagicLinkService(
-                dsl,
-                new com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl(),
-                "http://localhost:8080",
-                java.time.Duration.ofDays(30)));
+            magicLink);
   }
 
   @AfterAll

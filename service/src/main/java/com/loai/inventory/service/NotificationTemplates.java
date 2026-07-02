@@ -32,13 +32,20 @@ final class NotificationTemplates {
   }
 
   /**
-   * Wrap a channel-agnostic {@code body} into a minimal HTML email, appending a call-to-action link
-   * when {@code linkUrl} is present. Deliberately plain — org-branded templates are a later slice.
+   * Wrap a channel-agnostic {@code body} into a minimal HTML email: the message, an optional
+   * call-to-action link, and (when present) a footer unsubscribe link. Deliberately plain —
+   * org-branded templates are a later slice.
    */
-  static String emailHtml(String body, String linkUrl) {
+  static String emailHtml(String body, String linkUrl, String unsubscribeUrl) {
     StringBuilder sb = new StringBuilder("<p>").append(escape(body)).append("</p>");
     if (linkUrl != null && !linkUrl.isBlank()) {
       sb.append("<p><a href=\"").append(escape(linkUrl)).append("\">View your order</a></p>");
+    }
+    if (unsubscribeUrl != null && !unsubscribeUrl.isBlank()) {
+      sb.append("<hr><p style=\"font-size:12px;color:#888\">Don't want these emails? ")
+          .append("<a href=\"")
+          .append(escape(unsubscribeUrl))
+          .append("\">Unsubscribe</a>.</p>");
     }
     return sb.toString();
   }

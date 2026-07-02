@@ -48,6 +48,9 @@ public class MagicLinkService {
   /** Where a resolved order view lives — the token's org + the order it unlocks. */
   public record ResolvedOrderView(UUID orgId, UUID orderId) {}
 
+  /** The subject of a resolved unsubscribe token — the customer whose email to switch off. */
+  public record ResolvedUnsubscribe(UUID orgId, UUID customerId) {}
+
   /**
    * Mint a VIEW_ORDER token for {@code (orgId, customerId, orderId)} inside the caller's txn and
    * return the absolute public URL carrying the raw token. Because it runs in {@code txDsl}, a
@@ -87,6 +90,37 @@ public class MagicLinkService {
     return repo.findActiveByHash(RefreshTokenStore.hashToken(rawToken), now)
         .filter(t -> t.purpose() == MagicTokenPurpose.VIEW_ORDER && t.resourceId() != null)
         .map(t -> new ResolvedOrderView(t.orgId(), t.resourceId()));
+  }
+
+  /**
+   * Mint an UNSUBSCRIBE token for {@code customerId} inside the caller's txn and return the
+   * absolute public URL. Not order-scoped ({@code resource_id} null) — it turns the customer's
+   * email off for the org. Minted in {@code txDsl} so a rolled-back producer leaves no token.
+   */
+  public String issueUnsubscribeLink(
+      DSLContext txDsl, UUID orgId, UUID customerId, OffsetDateTime now) {
+    String rawToken = generateRawToken();
+    String tokenHash = RefreshTokenStore.hashToken(rawToken);
+    tokenRepoFactory
+        .create(txDsl)
+        .insert(
+            CustomerMagicToken.forInsert(
+                orgId, customerId, tokenHash, MagicTokenPurpose.UNSUBSCRIBE, null, now.plus(ttl)));
+    return publicBaseUrl + "/api/public/unsubscribe/" + rawToken;
+  }
+
+  /**
+   * Resolve a raw token to the customer whose email it unsubscribes: live and an UNSUBSCRIBE token.
+   * Empty for anything else — the caller answers 404 without distinguishing cases.
+   */
+  public Optional<ResolvedUnsubscribe> resolveUnsubscribe(String rawToken, OffsetDateTime now) {
+    if (rawToken == null || rawToken.isBlank()) {
+      return Optional.empty();
+    }
+    CustomerMagicTokenRepository repo = tokenRepoFactory.create(rootDsl);
+    return repo.findActiveByHash(RefreshTokenStore.hashToken(rawToken), now)
+        .filter(t -> t.purpose() == MagicTokenPurpose.UNSUBSCRIBE)
+        .map(t -> new ResolvedUnsubscribe(t.orgId(), t.customerId()));
   }
 
   private static String generateRawToken() {

@@ -18,6 +18,7 @@ import com.loai.inventory.domain.repository.ImpersonationEventRepository;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
+import com.loai.inventory.domain.repository.NotificationPreferenceRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
@@ -42,6 +43,7 @@ import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
@@ -130,6 +132,7 @@ public class AppConfig {
   public final ImpersonationEventRepository impersonationEventRepository;
   public final CategoryRepositoryFactory categoryRepositoryFactory;
   public final NotificationRepositoryFactory notificationRepositoryFactory;
+  public final NotificationPreferenceRepositoryFactory notificationPreferenceRepositoryFactory;
   public final CustomerMagicTokenRepositoryFactory customerMagicTokenRepositoryFactory;
   public final ProductListingRepositoryFactory productListingRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
@@ -210,6 +213,8 @@ public class AppConfig {
     this.impersonationEventRepository = new ImpersonationEventRepositoryImpl(dsl);
     this.categoryRepositoryFactory = new CategoryRepositoryFactoryImpl();
     this.notificationRepositoryFactory = new NotificationRepositoryFactoryImpl();
+    this.notificationPreferenceRepositoryFactory =
+        new NotificationPreferenceRepositoryFactoryImpl();
     this.customerMagicTokenRepositoryFactory = new CustomerMagicTokenRepositoryFactoryImpl();
     this.productListingRepositoryFactory = new ProductListingRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
@@ -253,6 +258,13 @@ public class AppConfig {
             dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);
     this.productService = new ProductService(productRepository, dsl);
     this.categoryService = new CategoryService(dsl, categoryRepositoryFactory);
+    // MagicLinkService is built before NotificationService — the producer mints an unsubscribe
+    // link for every customer email through it.
+    String publicBaseUrl = getenvOrDefault("PUBLIC_BASE_URL", "http://localhost:8080");
+    long magicTtlDays = parseLong(System.getenv("MAGIC_LINK_TTL_DAYS"), 30L);
+    this.magicLinkService =
+        new MagicLinkService(
+            dsl, customerMagicTokenRepositoryFactory, publicBaseUrl, Duration.ofDays(magicTtlDays));
     int emailMaxAttempts =
         (int)
             parseLong(
@@ -264,13 +276,10 @@ public class AppConfig {
             notificationRepositoryFactory,
             userRepositoryFactory,
             customerRepositoryFactory,
+            notificationPreferenceRepositoryFactory,
             emailSender,
+            magicLinkService,
             emailMaxAttempts);
-    String publicBaseUrl = getenvOrDefault("PUBLIC_BASE_URL", "http://localhost:8080");
-    long magicTtlDays = parseLong(System.getenv("MAGIC_LINK_TTL_DAYS"), 30L);
-    this.magicLinkService =
-        new MagicLinkService(
-            dsl, customerMagicTokenRepositoryFactory, publicBaseUrl, Duration.ofDays(magicTtlDays));
     this.productListingService =
         new ProductListingService(dsl, productListingRepositoryFactory, objectStorage);
     this.storefrontService =
