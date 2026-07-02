@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.loai.inventory.common.exception.AuthorizationException;
-import com.loai.inventory.common.exception.InvalidOrderTransitionException;
+import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
@@ -24,6 +24,7 @@ import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.generated.enums.ActorType;
+import com.loai.inventory.repository.generated.enums.FulfillmentStatus;
 import com.loai.inventory.repository.generated.enums.OrderChannel;
 import com.loai.inventory.repository.generated.enums.OrderStatus;
 import com.loai.inventory.repository.generated.enums.PaymentDirection;
@@ -124,6 +125,7 @@ class OrderCancellationAdversarialIT {
             dsl,
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl(),
             reservationService,
             refundService);
   }
@@ -372,14 +374,12 @@ class OrderCancellationAdversarialIT {
   }
 
   /**
-   * A FULFILLING order has a shipment in flight (its reservation CONSUMED, beyond {@code
-   * releaseForOrder}'s reach), so a blanket cancel would refund the full prepayment while the goods
-   * are gone. The {@link com.loai.inventory.domain.model.SalesOrder#cancel} guard now rejects
-   * FULFILLING; the cancel rolls back entirely (no refund, reservation untouched). Crediting a
-   * partially-fulfilled order is the deferred partial-delivery-cancel slice.
+   * A SHIPPED (in-flight) fulfillment blocks the cancel: the goods are neither in the warehouse nor
+   * with the customer, so the shipment must first resolve to DELIVERED or FAILED. The cancel rolls
+   * back entirely (no refund, reservation untouched, order stays FULFILLING).
    */
   @Test
-  void fulfillingOrder_cancelIsRejected_andRollsBack() {
+  void fulfillingOrder_shipmentInFlight_cancelRejected_andRollsBack() {
     UUID orgId = createOrg();
     UUID adminId = createUser();
     UUID customerId = createCustomer(orgId);
@@ -387,16 +387,82 @@ class OrderCancellationAdversarialIT {
     createInventory(orgId, productId, 40, 25);
     UUID orderId = seedOrder(orgId, customerId, OrderStatus.FULFILLING, "250.00", "250.00");
     seedLineWithReservation(orgId, orderId, productId, 25);
+    seedFulfillment(orgId, orderId, FulfillmentStatus.SHIPPED);
     UUID payId =
         seedPayment(orgId, customerId, orderId, "250.00", "250.00", PaymentStatus.RECEIVED);
 
     assertThrows(
-        InvalidOrderTransitionException.class,
-        () -> service.cancel(orgId, orderId, "mid-fulfillment", null, adminId, false));
+        ConflictException.class,
+        () -> service.cancel(orgId, orderId, "mid-flight", null, adminId, false));
 
     assertEquals("FULFILLING", orderStatus(orderId), "order must stay FULFILLING");
     assertEquals(25, reservedQty(orgId, productId), "reservation untouched");
     assertEquals(0, pendingRefundCount(payId), "no refund created");
+  }
+
+  /**
+   * Partial-delivery cancel ({@code salesOrder.md} "→ CANCELLED (post-PAID, partial delivery)"): a
+   * FULFILLING order whose only shipment was DELIVERED (and invoiced — its share of the prepayment
+   * allocated) cancels cleanly. The un-shipped line's reservation releases and the refund is the
+   * UNALLOCATED remainder only — the delivered goods stay sold.
+   */
+  @Test
+  void fulfillingOrder_partialDelivery_cancelRefundsUnallocatedRemainderOnly() {
+    UUID orgId = createOrg();
+    UUID adminId = createUser();
+    UUID customerId = createCustomer(orgId);
+    UUID productId = createProduct(orgId);
+    createInventory(orgId, productId, 40, 15);
+    UUID orderId = seedOrder(orgId, customerId, OrderStatus.FULFILLING, "250.00", "250.00");
+    // The un-shipped line still holds its ACTIVE reservation; the delivered line's reservation was
+    // consumed at ship, so only this one exists as ACTIVE.
+    seedLineWithReservation(orgId, orderId, productId, 15);
+    seedFulfillment(orgId, orderId, FulfillmentStatus.DELIVERED);
+    // Payment 250; 100 was allocated to the delivered fulfillment's invoice → 150 unallocated.
+    // Status is what delivery-time allocation really leaves behind (PARTIALLY_ALLOCATED, not
+    // RECEIVED) — pins that findUnallocatedByOrderForUpdate keys on unallocated_amount, not status.
+    UUID payId =
+        seedPayment(
+            orgId, customerId, orderId, "250.00", "150.00", PaymentStatus.PARTIALLY_ALLOCATED);
+
+    CancelResult result = service.cancel(orgId, orderId, "cancel the rest", null, adminId, false);
+
+    assertEquals("CANCELLED", orderStatus(orderId));
+    assertEquals(1, result.refunds().size());
+    assertEquals(
+        0,
+        new BigDecimal("150.00").compareTo(result.pendingRefundTotal()),
+        "refund is the never-invoiced remainder (150), not the full prepayment (250)");
+    assertEquals(1, pendingRefundCount(payId));
+    assertEquals(0, reservedQty(orgId, productId), "un-shipped reservation released");
+    assertEquals(0, debitTxnCount(orgId), "no money moved — refund is PENDING");
+  }
+
+  /**
+   * A PENDING (not yet shipped) fulfillment is cascade-cancelled by the order cancel: the order
+   * must not leave a live fulfillment behind that could still ship after CANCELLED.
+   */
+  @Test
+  void pendingFulfillment_cascadeCancelledByOrderCancel() {
+    UUID orgId = createOrg();
+    UUID adminId = createUser();
+    UUID customerId = createCustomer(orgId);
+    UUID productId = createProduct(orgId);
+    createInventory(orgId, productId, 40, 25);
+    UUID orderId = seedOrder(orgId, customerId, OrderStatus.PAID, "250.00", "250.00");
+    seedLineWithReservation(orgId, orderId, productId, 25);
+    UUID fulfillmentId = seedFulfillment(orgId, orderId, FulfillmentStatus.PENDING);
+    UUID payId =
+        seedPayment(orgId, customerId, orderId, "250.00", "250.00", PaymentStatus.RECEIVED);
+
+    CancelResult result = service.cancel(orgId, orderId, "changed mind", null, adminId, false);
+
+    assertEquals("CANCELLED", orderStatus(orderId));
+    assertEquals("CANCELLED", fulfillmentStatus(fulfillmentId), "PENDING fulfillment cascaded");
+    assertTrue(fulfillmentCancelledAt(fulfillmentId) != null, "cancelled_at stamped");
+    assertEquals(0, reservedQty(orgId, productId));
+    assertEquals(1, result.refunds().size());
+    assertEquals(1, pendingRefundCount(payId));
   }
 
   // ───────────────────────────── seeding ─────────────────────────────
@@ -441,6 +507,25 @@ class OrderCancellationAdversarialIT {
         .set(INVENTORY_RESERVATION.STATUS, ReservationStatus.ACTIVE)
         .set(INVENTORY_RESERVATION.EXPIRES_AT, OffsetDateTime.now(ZoneOffset.UTC).plusHours(24))
         .execute();
+  }
+
+  /** Seed a bare fulfillment row in {@code status} (lines not needed by the cancel logic). */
+  private UUID seedFulfillment(UUID orgId, UUID orderId, FulfillmentStatus status) {
+    UUID id = UUID.randomUUID();
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    dsl.insertInto(com.loai.inventory.repository.generated.Tables.FULFILLMENT)
+        .set(com.loai.inventory.repository.generated.Tables.FULFILLMENT.ID, id)
+        .set(com.loai.inventory.repository.generated.Tables.FULFILLMENT.ORG_ID, orgId)
+        .set(com.loai.inventory.repository.generated.Tables.FULFILLMENT.SALES_ORDER_ID, orderId)
+        .set(com.loai.inventory.repository.generated.Tables.FULFILLMENT.STATUS, status)
+        .set(
+            com.loai.inventory.repository.generated.Tables.FULFILLMENT.SHIPPED_AT,
+            status == FulfillmentStatus.PENDING ? null : now)
+        .set(
+            com.loai.inventory.repository.generated.Tables.FULFILLMENT.DELIVERED_AT,
+            status == FulfillmentStatus.DELIVERED ? now : null)
+        .execute();
+    return id;
   }
 
   /**
@@ -546,6 +631,21 @@ class OrderCancellationAdversarialIT {
         .where(SALES_ORDER.ID.eq(orderId))
         .fetchOne(SALES_ORDER.STATUS)
         .getLiteral();
+  }
+
+  private String fulfillmentStatus(UUID fulfillmentId) {
+    return dsl.select(com.loai.inventory.repository.generated.Tables.FULFILLMENT.STATUS)
+        .from(com.loai.inventory.repository.generated.Tables.FULFILLMENT)
+        .where(com.loai.inventory.repository.generated.Tables.FULFILLMENT.ID.eq(fulfillmentId))
+        .fetchOne(com.loai.inventory.repository.generated.Tables.FULFILLMENT.STATUS)
+        .getLiteral();
+  }
+
+  private OffsetDateTime fulfillmentCancelledAt(UUID fulfillmentId) {
+    return dsl.select(com.loai.inventory.repository.generated.Tables.FULFILLMENT.CANCELLED_AT)
+        .from(com.loai.inventory.repository.generated.Tables.FULFILLMENT)
+        .where(com.loai.inventory.repository.generated.Tables.FULFILLMENT.ID.eq(fulfillmentId))
+        .fetchOne(com.loai.inventory.repository.generated.Tables.FULFILLMENT.CANCELLED_AT);
   }
 
   private int reservedQty(UUID orgId, UUID productId) {

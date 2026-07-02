@@ -1,13 +1,18 @@
 package com.loai.inventory.service;
 
 import com.loai.inventory.common.exception.AuthorizationException;
+import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
+import com.loai.inventory.domain.model.Fulfillment;
+import com.loai.inventory.domain.model.FulfillmentStatus;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesOrder;
+import com.loai.inventory.domain.repository.FulfillmentRepository;
+import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
@@ -34,13 +39,19 @@ import org.slf4j.LoggerFactory;
  *   <li><b>Underpaid cancel</b> (PENDING_PAYMENT with a partial Payment) — release reservations and
  *       direct-refund the partial prepayment.
  *   <li><b>Cancel post-PAID, no fulfillment delivered</b> (PAID, no invoice) — release reservations
- *       and direct-refund the full prepayment.
+ *       and direct-refund the full prepayment. Any PENDING fulfillment is cascade-cancelled.
+ *   <li><b>Partial-delivery cancel</b> (FULFILLING with every shipment either DELIVERED or FAILED —
+ *       {@code salesOrder.md} "→ CANCELLED (post-PAID, partial delivery)") — cascade-cancel PENDING
+ *       fulfillments, release the un-fulfilled reservations, and direct-refund the
+ *       <b>unallocated</b> prepayment, which is exactly the never-invoiced remainder: delivered
+ *       lines were allocated to their invoice at delivery and are untouched (the customer keeps
+ *       those goods; returning them afterwards is the separate CreditNote + Refund flow).
  * </ul>
  *
- * <p>Out of scope here (needs the CreditNote path): cancelling once any shipment is in flight —
- * {@link SalesOrder#cancel} rejects FULFILLING/FULFILLED/CLOSED. A FULFILLING order has stock
- * already shipped (its reservation CONSUMED, beyond {@code releaseForOrder}'s reach) and possibly
- * an invoiced line, so its lines must be credited rather than blanket-refunded from Payment.
+ * <p>Still rejected: a SHIPPED (in-flight) fulfillment blocks the cancel (409) — the goods are
+ * neither in the warehouse nor with the customer, so the shipment must first resolve to DELIVERED
+ * or FAILED. FULFILLED/CLOSED orders don't cancel at all: everything was delivered, so the remedy
+ * is a CreditNote per invoice ({@link SalesOrder#cancel} rejects them).
  *
  * <p>Approval gate: a cancel whose refunds sum above the org threshold needs OWNER — gated on the
  * <b>aggregate</b>, not per refund, so splitting a payout across several sub-threshold prepayments
@@ -70,6 +81,7 @@ public final class OrderCancellationService {
   private final DSLContext rootDsl;
   private final SalesOrderRepositoryFactory salesOrderRepoFactory;
   private final PaymentRepositoryFactory paymentRepoFactory;
+  private final FulfillmentRepositoryFactory fulfillmentRepoFactory;
   private final ReservationService reservationService;
   private final RefundService refundService;
 
@@ -77,11 +89,13 @@ public final class OrderCancellationService {
       DSLContext rootDsl,
       SalesOrderRepositoryFactory salesOrderRepoFactory,
       PaymentRepositoryFactory paymentRepoFactory,
+      FulfillmentRepositoryFactory fulfillmentRepoFactory,
       ReservationService reservationService,
       RefundService refundService) {
     this.rootDsl = rootDsl;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.paymentRepoFactory = paymentRepoFactory;
+    this.fulfillmentRepoFactory = fulfillmentRepoFactory;
     this.reservationService = reservationService;
     this.refundService = refundService;
   }
@@ -128,6 +142,18 @@ public final class OrderCancellationService {
           OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
           SalesOrderRepository orderRepo = salesOrderRepoFactory.create(txDsl);
           PaymentRepository paymentRepo = paymentRepoFactory.create(txDsl);
+          FulfillmentRepository fulfillmentRepo = fulfillmentRepoFactory.create(txDsl);
+
+          // Cascade-cancel PENDING fulfillments BEFORE taking the order lock. Everything else in
+          // the codebase locks fulfillment → order (ship, deliver, replace), so touching
+          // fulfillment rows while already holding the order lock would create an AB/BA deadlock;
+          // the guarded UPDATE (… WHERE status='PENDING') keeps this race-safe without a re-order.
+          // Their reservations are still ACTIVE and get released by releaseForOrder below.
+          for (Fulfillment f : fulfillmentRepo.findByOrderId(orgId, orderId)) {
+            if (f.getStatus() == FulfillmentStatus.PENDING) {
+              fulfillmentRepo.cancelIfPending(orgId, f.getId(), now);
+            }
+          }
 
           // Lock the order, then run the domain guard (rejects FULFILLED/CLOSED/already-terminal).
           SalesOrder order =
@@ -135,6 +161,29 @@ public final class OrderCancellationService {
                   .findByIdForUpdate(orgId, orderId)
                   .orElseThrow(() -> new NotFoundException("SalesOrder", orderId));
           order.cancel(now);
+
+          // With the order locked, re-read the fulfillments and enforce the cancel precondition:
+          // every shipment must be settled. SHIPPED means goods in flight — neither in the
+          // warehouse nor with the customer — so the shipment must first deliver or fail. A
+          // leftover PENDING means a fulfillment was created/shipped concurrently (its creator
+          // held the order lock); rolling back un-does the cascade above, so nothing is half-done.
+          for (Fulfillment f : fulfillmentRepo.findByOrderId(orgId, orderId)) {
+            if (f.getStatus() == FulfillmentStatus.SHIPPED) {
+              throw new ConflictException(
+                  "fulfillment "
+                      + f.getId()
+                      + " is SHIPPED (in flight); deliver or fail it before cancelling order "
+                      + order.getOrderNumber());
+            }
+            if (f.getStatus() == FulfillmentStatus.PENDING) {
+              throw new ConflictException(
+                  "fulfillment "
+                      + f.getId()
+                      + " changed concurrently while cancelling order "
+                      + order.getOrderNumber()
+                      + "; retry the cancel");
+            }
+          }
 
           // Release the order's ACTIVE reservations (shared with TTL expiry).
           ActorContext actor = ActorContext.user(actorId.toString());

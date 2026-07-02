@@ -27,6 +27,19 @@ public interface FulfillmentRepository {
 
   List<FulfillmentLine> findLinesByFulfillmentId(UUID fulfillmentId);
 
+  /** All fulfillments of {@code salesOrderId}, any status. Non-locking. */
+  List<Fulfillment> findByOrderId(UUID orgId, UUID salesOrderId);
+
+  /**
+   * Atomically cancel a fulfillment iff it is still PENDING — {@code UPDATE … WHERE status =
+   * 'PENDING'}; the WHERE clause is the concurrency guard (same pattern as {@code
+   * SalesOrderRepository#markExpiredIfPending}). Returns rows updated: {@code 0} means a concurrent
+   * ship (or cancel) moved it off PENDING first. Used by the order-cancel cascade, which must not
+   * take fulfillment row locks while holding the order lock (lock order is fulfillment → order
+   * everywhere else).
+   */
+  int cancelIfPending(UUID orgId, UUID fulfillmentId, java.time.OffsetDateTime now);
+
   /**
    * Persist the mutable lifecycle state of a fulfillment: {@code status} and its {@code *_at}
    * timestamps + {@code updated_at}. Scoped by {@code (org_id, id)}.

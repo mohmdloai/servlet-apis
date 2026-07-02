@@ -308,16 +308,12 @@ public class SalesOrder {
       throw new InvalidOrderTransitionException(
           "cannot cancel order in status " + status + " — issue a CreditNote instead");
     }
-    if (status == OrderStatus.FULFILLING) {
-      // A shipment is already in flight: stock for the shipped line was decremented and its
-      // reservation CONSUMED (releaseForOrder, ACTIVE-only, can't claw it back), so a plain cancel
-      // would direct-refund the whole prepayment while the goods are gone — and would skip the
-      // CreditNote owed for any already-invoiced line. Crediting/refunding a partially-fulfilled
-      // order is the deferred partial-delivery-cancel slice, not this primitive.
-      throw new InvalidOrderTransitionException(
-          "cannot cancel order in status FULFILLING — a shipment is already in flight; "
-              + "issue a CreditNote for the delivered/shipped lines instead");
-    }
+    // FULFILLING is cancellable — the partial-delivery cancel (salesOrder.md side-effects table:
+    // "→ CANCELLED (post-PAID, partial delivery)"). The domain can't see the order's fulfillments,
+    // so the one precondition that needs them — no SHIPPED (in-flight) fulfillment — is enforced by
+    // OrderCancellationService before this transition runs. Delivered lines keep their invoice and
+    // allocation (crediting returned goods stays on the CreditNote+Refund flow); the un-invoiced
+    // remainder of the prepayment is direct-refunded by the service.
     if (status == OrderStatus.CANCELLED || status == OrderStatus.EXPIRED) {
       throw new InvalidOrderTransitionException("order is already terminal: " + status);
     }

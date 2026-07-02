@@ -84,6 +84,7 @@ public class FulfillmentHandler implements OrgResourceHandler {
         switch (parts[1]) {
           case "ship" -> doShip(req, resp, orgId, id);
           case "deliver" -> doDeliver(req, resp, orgId, id);
+          case "cancel" -> doCancel(req, resp, orgId, id);
           case "fail" -> doFail(req, resp, orgId, id);
           case "refund" -> doRefund(req, resp, orgId, id);
           case "return" -> doReturn(req, resp, orgId, id);
@@ -139,6 +140,19 @@ public class FulfillmentHandler implements OrgResourceHandler {
     DeliveredView view = service.markDelivered(orgId, id, sc.toActorContext());
 
     writeJson(resp, 200, FulfillmentMapper.toDeliverResponse(view));
+  }
+
+  /**
+   * {@code POST /{id}/cancel} — PENDING → CANCELLED, releasing the lines' reservations back to
+   * available. STAFF+ ({@code fulfillment.md} §Authorization); no stock or money moves.
+   */
+  private void doCancel(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+
+    FulfillmentView view = service.cancelPending(orgId, id, sc.toActorContext());
+
+    writeJson(resp, 200, FulfillmentMapper.toResponse(view));
   }
 
   /** {@code POST /{id}/fail} — SHIPPED → FAILED. STAFF+; no money or stock moves. */
