@@ -48,6 +48,12 @@
       <artifactId>jackson-datatype-jsr310</artifactId>
   </dependency>
 
+  <!-- Transactional email (Gmail SMTP) — notifications Phase 2, §6. -->
+  <dependency>
+      <groupId>org.eclipse.angus</groupId>
+      <artifactId>angus-mail</artifactId>
+  </dependency>
+
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
