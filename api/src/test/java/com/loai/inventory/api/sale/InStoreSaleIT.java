@@ -144,7 +144,11 @@ class InStoreSaleIT {
             reservationService,
             fulfillmentService,
             paymentService,
-            invoiceService);
+            invoiceService,
+            new com.loai.inventory.service.NotificationService(
+                dsl,
+                new com.loai.inventory.repository.NotificationRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.UserRepositoryFactoryImpl()));
   }
 
   @AfterAll
