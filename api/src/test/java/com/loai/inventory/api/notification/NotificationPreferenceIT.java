@@ -4,6 +4,7 @@ import static com.loai.inventory.repository.generated.Tables.APP_USER;
 import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY;
+import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_PREFERENCE;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -35,6 +36,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.flywaydb.core.Flyway;
 import org.jooq.DSLContext;
 import org.jooq.SQLDialect;
@@ -51,6 +58,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * Phase 3 preferences (opt-out): a preference row suppresses a {@code (subject, type, channel)}
  * delivery; absence means enabled; an exact-type row beats an {@code ALL} wildcard. Plus the staff
  * CRUD round-trip and the customer unsubscribe flow (token → apply → email suppressed).
+ *
+ * <p>Also pins the invariants a single-threaded happy path can't: the opt-out upsert is atomic
+ * under concurrency, magic tokens are bound to their purpose, and resolution is isolated by
+ * subject-type, org, and channel.
  */
 @Testcontainers
 class NotificationPreferenceIT {
@@ -255,7 +266,162 @@ class NotificationPreferenceIT {
     assertTrue(magicLink.resolveUnsubscribe("nope", now).isEmpty());
   }
 
+  // ─────────────────────── concurrency, purpose & isolation ───────────────────────
+
+  /**
+   * The opt-out upsert is a single atomic {@code INSERT ... ON CONFLICT}, so concurrent first-time
+   * writes for the same {@code (org, subject, type, channel)} all succeed and converge on one
+   * disabled row — no unique-constraint collision. This is the production case where an email
+   * client prefetches the one-click unsubscribe URL while the customer also clicks it: both
+   * requests resolve the same token and call {@code unsubscribeCustomerEmail} at once.
+   */
+  @Test
+  void concurrentUnsubscribe_isAtomicAndIdempotent() throws Exception {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "nadia@acme.test");
+
+    int threads = 12;
+    CyclicBarrier startLine = new CyclicBarrier(threads);
+    CountDownLatch done = new CountDownLatch(threads);
+    AtomicInteger ok = new AtomicInteger();
+    AtomicInteger threw = new AtomicInteger();
+    List<String> errors = new CopyOnWriteArrayList<>();
+    ExecutorService pool = Executors.newFixedThreadPool(threads);
+
+    for (int i = 0; i < threads; i++) {
+      pool.submit(
+          () -> {
+            try {
+              startLine.await(); // release all at once → maximise the insert overlap
+              service.unsubscribeCustomerEmail(org, customer);
+              ok.incrementAndGet();
+            } catch (Exception e) {
+              threw.incrementAndGet();
+              errors.add(e.getClass().getSimpleName() + ": " + rootMessage(e));
+            } finally {
+              done.countDown();
+            }
+          });
+    }
+    done.await();
+    pool.shutdownNow();
+
+    long rows =
+        dsl.selectCount()
+            .from(NOTIFICATION_PREFERENCE)
+            .where(NOTIFICATION_PREFERENCE.CUSTOMER_ID.eq(customer))
+            .fetchOne(0, long.class);
+
+    // Idempotent: whatever the concurrency, exactly one disabled row.
+    assertEquals(1, rows, "exactly one preference row after the storm");
+    assertFalse(enabledFlag(customer), "final state is 'email off'");
+    // Atomic: every concurrent caller succeeds — no loser hits a unique-constraint collision.
+    assertEquals(0, threw.get(), "no collisions under concurrency; errors=" + errors);
+    assertEquals(threads, ok.get(), "all callers succeeded");
+  }
+
+  /** A VIEW_ORDER token must not resolve on the unsubscribe route, and vice-versa. */
+  @Test
+  void magicTokens_areBoundToTheirPurpose() {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "nadia@acme.test");
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+
+    String viewToken =
+        lastSegment(magicLink.issueOrderViewLink(dsl, org, customer, UUID.randomUUID(), now));
+    String unsubToken = lastSegment(magicLink.issueUnsubscribeLink(dsl, org, customer, now));
+
+    assertTrue(magicLink.resolveOrderView(viewToken, now).isPresent());
+    assertTrue(magicLink.resolveUnsubscribe(unsubToken, now).isPresent());
+    assertTrue(
+        magicLink.resolveUnsubscribe(viewToken, now).isEmpty(),
+        "VIEW_ORDER token cannot unsubscribe");
+    assertTrue(
+        magicLink.resolveOrderView(unsubToken, now).isEmpty(),
+        "UNSUBSCRIBE token cannot view an order");
+  }
+
+  /**
+   * A USER email opt-out sharing the very same UUID as a customer must NOT suppress that customer's
+   * email — resolution is keyed on {@code subject_type}, not just the id.
+   */
+  @Test
+  void optOut_isBoundToSubjectType_evenWhenIdsCollide() {
+    UUID org = createOrg("acme");
+    UUID shared = UUID.randomUUID();
+    dsl.insertInto(APP_USER)
+        .set(APP_USER.ID, shared)
+        .set(APP_USER.EMAIL, shared + "@acme.test")
+        .set(APP_USER.PASSWORD_HASH, "x")
+        .set(APP_USER.ACTOR_TYPE, ActorType.USER)
+        .set(APP_USER.ACTIVE, true)
+        .execute();
+    dsl.insertInto(CUSTOMER)
+        .set(CUSTOMER.ID, shared)
+        .set(CUSTOMER.ORG_ID, org)
+        .set(CUSTOMER.NAME, "Nadia")
+        .set(CUSTOMER.EMAIL, "nadia@acme.test")
+        .execute();
+
+    service.setUserPreferences(
+        org,
+        shared,
+        List.of(new PreferenceInput("ORDER_PLACED", NotificationChannel.EMAIL, false)));
+
+    assertEquals(
+        1,
+        deliveryCount(notifyCustomer(org, shared)),
+        "USER opt-out must not suppress the CUSTOMER's email");
+  }
+
+  /** An opt-out in one org does not suppress the same user in another org. */
+  @Test
+  void optOut_isPerOrg() {
+    UUID orgA = createOrg("acme");
+    UUID orgB = createOrg("globex");
+    UUID user = createUser("staff@shared.test");
+    service.setUserPreferences(
+        orgA,
+        user,
+        List.of(new PreferenceInput("ORDER_PLACED", NotificationChannel.IN_APP, false)));
+
+    assertEquals(0, deliveryCount(notifyUser(orgA, user)), "suppressed in org A");
+    assertEquals(1, deliveryCount(notifyUser(orgB, user)), "unaffected in org B");
+  }
+
+  /** An EMAIL opt-out must not suppress the in-app channel a staff user actually receives. */
+  @Test
+  void optOut_isPerChannel() {
+    UUID org = createOrg("acme");
+    UUID user = createUser("staff@acme.test");
+    service.setUserPreferences(
+        org, user, List.of(new PreferenceInput("ORDER_PLACED", NotificationChannel.EMAIL, false)));
+
+    assertEquals(1, deliveryCount(notifyUser(org, user)), "email opt-out leaves in_app untouched");
+  }
+
   // ───────────────────────────── helpers ─────────────────────────────
+
+  private boolean enabledFlag(UUID customerId) {
+    return dsl.select(NOTIFICATION_PREFERENCE.ENABLED)
+        .from(NOTIFICATION_PREFERENCE)
+        .where(NOTIFICATION_PREFERENCE.CUSTOMER_ID.eq(customerId))
+        .limit(1)
+        .fetchOne(NOTIFICATION_PREFERENCE.ENABLED);
+  }
+
+  private static String lastSegment(String url) {
+    return url.substring(url.lastIndexOf('/') + 1);
+  }
+
+  private static String rootMessage(Throwable t) {
+    Throwable c = t;
+    while (c.getCause() != null && c.getCause() != c) {
+      c = c.getCause();
+    }
+    String m = c.getMessage();
+    return m == null ? c.getClass().getSimpleName() : m.split("\n")[0];
+  }
 
   private UUID notifyUser(UUID org, UUID user) {
     return service

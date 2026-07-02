@@ -18,9 +18,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Mints and resolves order-scoped magic links (notifications-plan §7). The raw token is a 256-bit
  * {@link SecureRandom} value returned only in the emailed URL; only its SHA-256 hash is stored
- * (reusing {@link RefreshTokenStore#hashToken}). Each token unlocks exactly one order for {@link
- * MagicTokenPurpose#VIEW_ORDER} and is multi-use until it expires ({@code consumed_at} stays null —
- * it is reserved for one-shot purposes like unsubscribe).
+ * (reusing {@link RefreshTokenStore#hashToken}). Tokens carry a {@link MagicTokenPurpose} — {@code
+ * VIEW_ORDER} (unlocks one order) or {@code UNSUBSCRIBE} (turns the customer's email off) — and are
+ * multi-use until they expire; both apply idempotently, so {@code consumed_at} stays null. (It
+ * remains available for a future one-shot purpose.)
  */
 public class MagicLinkService {
 

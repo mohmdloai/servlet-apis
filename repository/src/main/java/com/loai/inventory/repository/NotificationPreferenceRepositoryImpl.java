@@ -63,52 +63,50 @@ public final class NotificationPreferenceRepositoryImpl
   public void upsertUser(
       UUID orgId, UUID userId, String type, NotificationChannel channel, boolean enabled) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-    int updated =
-        dsl.update(NOTIFICATION_PREFERENCE)
-            .set(NOTIFICATION_PREFERENCE.ENABLED, enabled)
-            .set(NOTIFICATION_PREFERENCE.UPDATED_AT, now)
-            .where(NOTIFICATION_PREFERENCE.ORG_ID.eq(orgId))
-            .and(NOTIFICATION_PREFERENCE.SUBJECT_TYPE.eq(RecipientType.USER.name()))
-            .and(NOTIFICATION_PREFERENCE.USER_ID.eq(userId))
-            .and(NOTIFICATION_PREFERENCE.TYPE.eq(type))
-            .and(NOTIFICATION_PREFERENCE.CHANNEL.eq(channel.dbValue()))
-            .execute();
-    if (updated == 0) {
-      dsl.insertInto(NOTIFICATION_PREFERENCE)
-          .set(NOTIFICATION_PREFERENCE.ORG_ID, orgId)
-          .set(NOTIFICATION_PREFERENCE.SUBJECT_TYPE, RecipientType.USER.name())
-          .set(NOTIFICATION_PREFERENCE.USER_ID, userId)
-          .set(NOTIFICATION_PREFERENCE.TYPE, type)
-          .set(NOTIFICATION_PREFERENCE.CHANNEL, channel.dbValue())
-          .set(NOTIFICATION_PREFERENCE.ENABLED, enabled)
-          .execute();
-    }
+    // Atomic upsert: a single INSERT ... ON CONFLICT against the partial unique index. The WHERE
+    // repeats the index predicate (subject_type='USER') so Postgres infers that exact index — a
+    // plain UPDATE-then-INSERT would let two concurrent first-writes both insert and collide.
+    dsl.insertInto(NOTIFICATION_PREFERENCE)
+        .set(NOTIFICATION_PREFERENCE.ORG_ID, orgId)
+        .set(NOTIFICATION_PREFERENCE.SUBJECT_TYPE, RecipientType.USER.name())
+        .set(NOTIFICATION_PREFERENCE.USER_ID, userId)
+        .set(NOTIFICATION_PREFERENCE.TYPE, type)
+        .set(NOTIFICATION_PREFERENCE.CHANNEL, channel.dbValue())
+        .set(NOTIFICATION_PREFERENCE.ENABLED, enabled)
+        .onConflict(
+            NOTIFICATION_PREFERENCE.ORG_ID,
+            NOTIFICATION_PREFERENCE.USER_ID,
+            NOTIFICATION_PREFERENCE.TYPE,
+            NOTIFICATION_PREFERENCE.CHANNEL)
+        .where(NOTIFICATION_PREFERENCE.SUBJECT_TYPE.eq(RecipientType.USER.name()))
+        .doUpdate()
+        .set(NOTIFICATION_PREFERENCE.ENABLED, enabled)
+        .set(NOTIFICATION_PREFERENCE.UPDATED_AT, now)
+        .execute();
   }
 
   @Override
   public void upsertCustomer(
       UUID orgId, UUID customerId, String type, NotificationChannel channel, boolean enabled) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-    int updated =
-        dsl.update(NOTIFICATION_PREFERENCE)
-            .set(NOTIFICATION_PREFERENCE.ENABLED, enabled)
-            .set(NOTIFICATION_PREFERENCE.UPDATED_AT, now)
-            .where(NOTIFICATION_PREFERENCE.ORG_ID.eq(orgId))
-            .and(NOTIFICATION_PREFERENCE.SUBJECT_TYPE.eq(RecipientType.CUSTOMER.name()))
-            .and(NOTIFICATION_PREFERENCE.CUSTOMER_ID.eq(customerId))
-            .and(NOTIFICATION_PREFERENCE.TYPE.eq(type))
-            .and(NOTIFICATION_PREFERENCE.CHANNEL.eq(channel.dbValue()))
-            .execute();
-    if (updated == 0) {
-      dsl.insertInto(NOTIFICATION_PREFERENCE)
-          .set(NOTIFICATION_PREFERENCE.ORG_ID, orgId)
-          .set(NOTIFICATION_PREFERENCE.SUBJECT_TYPE, RecipientType.CUSTOMER.name())
-          .set(NOTIFICATION_PREFERENCE.CUSTOMER_ID, customerId)
-          .set(NOTIFICATION_PREFERENCE.TYPE, type)
-          .set(NOTIFICATION_PREFERENCE.CHANNEL, channel.dbValue())
-          .set(NOTIFICATION_PREFERENCE.ENABLED, enabled)
-          .execute();
-    }
+    // Atomic upsert against the CUSTOMER partial unique index (see upsertUser).
+    dsl.insertInto(NOTIFICATION_PREFERENCE)
+        .set(NOTIFICATION_PREFERENCE.ORG_ID, orgId)
+        .set(NOTIFICATION_PREFERENCE.SUBJECT_TYPE, RecipientType.CUSTOMER.name())
+        .set(NOTIFICATION_PREFERENCE.CUSTOMER_ID, customerId)
+        .set(NOTIFICATION_PREFERENCE.TYPE, type)
+        .set(NOTIFICATION_PREFERENCE.CHANNEL, channel.dbValue())
+        .set(NOTIFICATION_PREFERENCE.ENABLED, enabled)
+        .onConflict(
+            NOTIFICATION_PREFERENCE.ORG_ID,
+            NOTIFICATION_PREFERENCE.CUSTOMER_ID,
+            NOTIFICATION_PREFERENCE.TYPE,
+            NOTIFICATION_PREFERENCE.CHANNEL)
+        .where(NOTIFICATION_PREFERENCE.SUBJECT_TYPE.eq(RecipientType.CUSTOMER.name()))
+        .doUpdate()
+        .set(NOTIFICATION_PREFERENCE.ENABLED, enabled)
+        .set(NOTIFICATION_PREFERENCE.UPDATED_AT, now)
+        .execute();
   }
 
   private Condition subjectCondition(RecipientType subjectType, UUID subjectId) {
