@@ -11,6 +11,7 @@ import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
 import com.loai.inventory.api.servlet.handler.ImpersonationHandler;
 import com.loai.inventory.api.servlet.handler.InventoryHandler;
 import com.loai.inventory.api.servlet.handler.InvoiceHandler;
+import com.loai.inventory.api.servlet.handler.NotificationHandler;
 import com.loai.inventory.api.servlet.handler.OrgHandler;
 import com.loai.inventory.api.servlet.handler.OrgResourceHandler;
 import com.loai.inventory.api.servlet.handler.PaymentHandler;
@@ -60,6 +61,7 @@ public class OrgServlet extends HttpServlet {
         Map.ofEntries(
             Map.entry("products", new ProductHandler(config.productService, mapper)),
             Map.entry("categories", new CategoryHandler(config.categoryService, mapper)),
+            Map.entry("notifications", new NotificationHandler(config.notificationService, mapper)),
             Map.entry(
                 "product-listings",
                 new ProductListingHandler(config.productListingService, mapper)),

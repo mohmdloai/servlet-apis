@@ -145,6 +145,25 @@ public final class UserRepositoryImpl implements UserRepository {
   }
 
   @Override
+  public Set<UUID> findActiveUserIdsByOrgAndRoles(UUID orgId, Set<OrgRole> roles) {
+    if (roles == null || roles.isEmpty()) {
+      return Set.of();
+    }
+    List<com.loai.inventory.repository.generated.enums.OrgRole> literals =
+        roles.stream()
+            .map(r -> com.loai.inventory.repository.generated.enums.OrgRole.lookupLiteral(r.name()))
+            .toList();
+    return dsl.selectDistinct(USER_ORG_ROLE.USER_ID)
+        .from(USER_ORG_ROLE)
+        .join(APP_USER)
+        .on(APP_USER.ID.eq(USER_ORG_ROLE.USER_ID))
+        .where(USER_ORG_ROLE.ORG_ID.eq(orgId))
+        .and(USER_ORG_ROLE.ROLE.in(literals))
+        .and(APP_USER.ACTIVE.isTrue())
+        .fetchSet(USER_ORG_ROLE.USER_ID);
+  }
+
+  @Override
   public void insertSystemRole(UUID userId, SystemRole role) {
     dsl.insertInto(USER_SYSTEM_ROLE)
         .set(USER_SYSTEM_ROLE.USER_ID, userId)

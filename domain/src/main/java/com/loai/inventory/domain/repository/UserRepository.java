@@ -31,6 +31,13 @@ public interface UserRepository {
 
   // ── Platform user/role administration (see docs/platform-admin-plan.md, slice 3) ──
 
+  /**
+   * Ids of every <em>active</em> user holding any of {@code roles} in {@code orgId} (distinct — a
+   * user with two qualifying roles appears once). Backs notification fan-out to org staff. An empty
+   * {@code roles} set returns no ids.
+   */
+  Set<UUID> findActiveUserIdsByOrgAndRoles(UUID orgId, Set<OrgRole> roles);
+
   /** Grant a platform role. Idempotent (no-op if the row already exists). */
   void insertSystemRole(UUID userId, SystemRole role);
 

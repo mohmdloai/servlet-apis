@@ -1,6 +1,7 @@
 package com.loai.inventory.api.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.loai.inventory.api.job.NotificationDeliverySweeperJob;
 import com.loai.inventory.api.job.OrderTtlSweeperJob;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.DataSourceFactory;
@@ -16,6 +17,7 @@ import com.loai.inventory.domain.repository.ImpersonationEventRepository;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
+import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
@@ -38,6 +40,7 @@ import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
@@ -59,6 +62,7 @@ import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceService;
+import com.loai.inventory.service.NotificationService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderExpiryService;
 import com.loai.inventory.service.OrgService;
@@ -118,6 +122,7 @@ public class AppConfig {
   public final UserRepository userRepository;
   public final ImpersonationEventRepository impersonationEventRepository;
   public final CategoryRepositoryFactory categoryRepositoryFactory;
+  public final NotificationRepositoryFactory notificationRepositoryFactory;
   public final ProductListingRepositoryFactory productListingRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
@@ -147,6 +152,7 @@ public class AppConfig {
   public final UserAdminService userAdminService;
   public final ProductService productService;
   public final CategoryService categoryService;
+  public final NotificationService notificationService;
   public final ProductListingService productListingService;
   public final StorefrontService storefrontService;
   public final CustomerService customerService;
@@ -164,8 +170,9 @@ public class AppConfig {
   public final RefundService refundService;
   public final OrderCancellationService orderCancellationService;
 
-  // Order-TTL sweeper job + its JobRunr lifecycle flag.
+  // Background JobRunr jobs + their lifecycle flag.
   public final OrderTtlSweeperJob orderTtlSweeperJob;
+  public final NotificationDeliverySweeperJob notificationDeliverySweeperJob;
   private final boolean jobRunrStarted;
 
   public AppConfig() {
@@ -192,6 +199,7 @@ public class AppConfig {
     this.userRepository = new UserRepositoryImpl(dsl);
     this.impersonationEventRepository = new ImpersonationEventRepositoryImpl(dsl);
     this.categoryRepositoryFactory = new CategoryRepositoryFactoryImpl();
+    this.notificationRepositoryFactory = new NotificationRepositoryFactoryImpl();
     this.productListingRepositoryFactory = new ProductListingRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
@@ -234,6 +242,8 @@ public class AppConfig {
             dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);
     this.productService = new ProductService(productRepository, dsl);
     this.categoryService = new CategoryService(dsl, categoryRepositoryFactory);
+    this.notificationService =
+        new NotificationService(dsl, notificationRepositoryFactory, userRepositoryFactory);
     this.productListingService =
         new ProductListingService(dsl, productListingRepositoryFactory, objectStorage);
     this.storefrontService =
@@ -308,7 +318,8 @@ public class AppConfig {
             reservationService,
             fulfillmentService,
             paymentService,
-            invoiceService);
+            invoiceService,
+            notificationService);
     this.creditNoteService =
         new CreditNoteService(
             dsl,
@@ -326,6 +337,10 @@ public class AppConfig {
 
     int batchLimit = (int) parseLong(System.getenv("ORDER_SWEEPER_BATCH_LIMIT"), 200L);
     this.orderTtlSweeperJob = new OrderTtlSweeperJob(orderExpiryService, batchLimit);
+
+    int notifyBatchLimit = (int) parseLong(System.getenv("NOTIFICATION_SWEEPER_BATCH_LIMIT"), 200L);
+    this.notificationDeliverySweeperJob =
+        new NotificationDeliverySweeperJob(notificationService, notifyBatchLimit);
 
     // The background scheduler is gated so tests (and any deployment that wants to drive expiry
     // only through POST /api/admin/sweep) can keep expiry deterministic. Default: enabled.
@@ -352,6 +367,9 @@ public class AppConfig {
             if (type.isInstance(orderTtlSweeperJob)) {
               return type.cast(orderTtlSweeperJob);
             }
+            if (type.isInstance(notificationDeliverySweeperJob)) {
+              return type.cast(notificationDeliverySweeperJob);
+            }
             throw new IllegalArgumentException("No JobRunr bean for " + type.getName());
           }
         };
@@ -368,6 +386,11 @@ public class AppConfig {
     scheduler.<OrderTtlSweeperJob>scheduleRecurrently(
         "order-ttl-sweeper", cron, OrderTtlSweeperJob::run);
     log.info("Order-TTL sweeper scheduled (cron='{}')", cron);
+
+    String notifyCron = getenvOrDefault("NOTIFICATION_SWEEPER_INTERVAL", "*/10 * * * * *");
+    scheduler.<NotificationDeliverySweeperJob>scheduleRecurrently(
+        "notification-delivery-sweeper", notifyCron, NotificationDeliverySweeperJob::run);
+    log.info("Notification-delivery sweeper scheduled (cron='{}')", notifyCron);
     return true;
   }
 

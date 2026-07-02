@@ -6,6 +6,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.Fulfillment;
+import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
@@ -58,6 +59,7 @@ public class SalesOrderService {
   private final FulfillmentService fulfillmentService;
   private final PaymentService paymentService;
   private final InvoiceService invoiceService;
+  private final NotificationService notificationService;
 
   public SalesOrderService(
       DSLContext rootDsl,
@@ -65,13 +67,15 @@ public class SalesOrderService {
       ReservationService reservationService,
       FulfillmentService fulfillmentService,
       PaymentService paymentService,
-      InvoiceService invoiceService) {
+      InvoiceService invoiceService,
+      NotificationService notificationService) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.reservationService = reservationService;
     this.fulfillmentService = fulfillmentService;
     this.paymentService = paymentService;
     this.invoiceService = invoiceService;
+    this.notificationService = notificationService;
   }
 
   /** Input contact info; {@code name} required, others optional. */
@@ -150,6 +154,16 @@ public class SalesOrderService {
 
           // Throws InsufficientStockException → rolls back the whole placement.
           reservationService.reserveForOrder(txDsl, orgId, order, orderLines, actor);
+
+          // Notify org staff — inside the placement txn, so a rolled-back order sends nothing.
+          notificationService.notifyOrgStaff(
+              txDsl,
+              orgId,
+              NotificationType.ORDER_PLACED,
+              Map.of("order_number", order.getOrderNumber()),
+              "sales_order",
+              order.getId(),
+              "/orgs/" + orgId + "/sales-orders/" + order.getId());
 
           log.info(
               "Placed online order id={} orgId={} number={} customerId={} grandTotal={} lines={}",
