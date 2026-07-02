@@ -232,6 +232,69 @@ class FulfillmentShipIT {
     assertEquals(0, reservedQty(org, product));
   }
 
+  /**
+   * Cancel-before-ship ({@code fulfillment.md} §CANCELLED / state-machines.md B): a PENDING
+   * fulfillment cancels, its lines' reservations release back to {@code available}, and no stock
+   * moves. The cancelled shipment can then never ship, and the released line has no ACTIVE
+   * reservation left to re-claim.
+   */
+  @Test
+  void cancelPendingFulfillment_releasesReservations_noStockMovement() {
+    UUID org = createOrg("acme");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 3);
+    Order order = seedPaidOrder(org, List.of(new Want(product, 3)));
+    Line line = order.lines().get(0);
+
+    Fulfillment f =
+        service
+            .create(org, order.id(), List.of(new LineInput(line.lineId())), null, null, null, actor)
+            .fulfillment();
+
+    FulfillmentView cancelled = service.cancelPending(org, f.getId(), actor);
+
+    assertEquals("CANCELLED", cancelled.fulfillment().getStatus().name());
+    assertNotNull(cancelled.fulfillment().getCancelledAt());
+
+    // No stock movement — only the reservation released: stock unchanged, reserved 3 → 0.
+    assertEquals(10, stockQty(org, product));
+    assertEquals(0, reservedQty(org, product));
+    assertEquals("RELEASED", reservationStatus(line.reservationId()));
+    assertEquals("PAID", orderStatus(order.id()), "order keeps its status");
+
+    // The cancelled fulfillment can never ship.
+    assertThrows(ConflictException.class, () -> service.ship(org, f.getId(), actor));
+
+    // And the line's reservation is gone, so it cannot be re-claimed by a new fulfillment.
+    assertThrows(
+        ValidationException.class,
+        () ->
+            service.create(
+                org, order.id(), List.of(new LineInput(line.lineId())), null, null, null, actor));
+  }
+
+  /** Once SHIPPED the branch is FAILED, not CANCELLED — cancel is rejected with a 409. */
+  @Test
+  void cancelShippedFulfillment_isRejected() {
+    UUID org = createOrg("acme");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 3);
+    Order order = seedPaidOrder(org, List.of(new Want(product, 3)));
+    Line line = order.lines().get(0);
+
+    Fulfillment f =
+        service
+            .create(org, order.id(), List.of(new LineInput(line.lineId())), null, null, null, actor)
+            .fulfillment();
+    service.ship(org, f.getId(), actor);
+
+    assertThrows(ConflictException.class, () -> service.cancelPending(org, f.getId(), actor));
+
+    // Ship's effects stand: stock decremented, reservation CONSUMED.
+    assertEquals(7, stockQty(org, product));
+    assertEquals("CONSUMED", reservationStatus(line.reservationId()));
+  }
+
   @Test
   void createForUnpaidOrder_isRejected() {
     UUID org = createOrg("acme");

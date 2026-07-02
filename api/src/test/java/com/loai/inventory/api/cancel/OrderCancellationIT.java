@@ -117,6 +117,7 @@ class OrderCancellationIT {
             dsl,
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl(),
             reservationService,
             refundService);
   }
