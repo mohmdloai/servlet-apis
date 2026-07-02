@@ -230,7 +230,9 @@ public final class PaymentTransactionService {
           Reconciliation rec = paymentService.reconcileAndCreate(txDsl, orgId, txn, ref);
 
           if (rec.status() != PaymentReconciliationStatus.MATCHED) {
-            // Non-MATCHED outcomes persist nothing; throw so the txn stays ORPHAN in the queue.
+            // Throw so the whole txn rolls back (an OVERPAID reconcile writes a Payment and flips
+            // the order — the rollback discards that) and the transaction stays ORPHAN in the
+            // queue. Manual matches accept only an exact cover in this slice.
             throw orphanRejection(rec, txn);
           }
 

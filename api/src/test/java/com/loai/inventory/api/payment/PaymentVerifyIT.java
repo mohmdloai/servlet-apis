@@ -175,7 +175,7 @@ class PaymentVerifyIT {
   }
 
   @Test
-  void overpaid_createsNoPaymentAndOrderStaysPending() {
+  void overpaid_createsPaymentAndMarksOrderPaid() {
     UUID orgId = createOrg("acme");
     UUID admin = createUser("admin@acme.test");
     Order order = seedPendingOrder(orgId, "250.00");
@@ -184,10 +184,20 @@ class PaymentVerifyIT {
         service.verify(
             orgId, cmd(PaymentProvider.INSTAPAY_MANUAL, "300.00", order.number()), admin);
 
+    // OVERPAID still recognizes the money (state-machines.md E / payment.md §Overpaid online):
+    // the order is fully covered so it flips to PAID; the 50.00 excess stays on the Payment as
+    // unallocated_amount for a later direct refund.
     assertEquals("OVERPAID", result.reconciliationStatus().name());
-    assertEquals("PENDING_PAYMENT", orderStatus(order.id()));
-    assertEquals(0, paymentCountForOrder(order.id()));
-    assertNull(result.payment());
+    assertEquals("OVERPAID", txnReconciliation(result.transaction().getId()));
+    assertEquals("PAID", orderStatus(order.id()));
+    assertEquals(0, new BigDecimal("300.00").compareTo(prepaidAmount(order.id())));
+
+    assertEquals(1, paymentCountForOrder(order.id()));
+    assertNotNull(result.payment());
+    assertEquals("RECEIVED", result.payment().getStatus().name());
+    assertEquals(0, new BigDecimal("300.00").compareTo(result.payment().getAmount()));
+    assertEquals(
+        0, result.payment().getAmount().compareTo(result.payment().getUnallocatedAmount()));
   }
 
   @Test
