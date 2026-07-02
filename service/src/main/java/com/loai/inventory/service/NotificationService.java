@@ -4,18 +4,23 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.common.Pagination;
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.DeliveryStatus;
 import com.loai.inventory.domain.model.InAppFeedItem;
 import com.loai.inventory.domain.model.Notification;
 import com.loai.inventory.domain.model.NotificationChannel;
 import com.loai.inventory.domain.model.NotificationDelivery;
+import com.loai.inventory.domain.model.NotificationPreference;
 import com.loai.inventory.domain.model.NotificationRecipient;
 import com.loai.inventory.domain.model.NotificationStatus;
 import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.RecipientType;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.NotificationPreferenceRepository;
+import com.loai.inventory.domain.repository.NotificationPreferenceRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationRepository;
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
@@ -70,7 +75,9 @@ public class NotificationService {
   private final NotificationRepositoryFactory notificationRepoFactory;
   private final UserRepositoryFactory userRepoFactory;
   private final CustomerRepositoryFactory customerRepoFactory;
+  private final NotificationPreferenceRepositoryFactory preferenceRepoFactory;
   private final EmailSender emailSender;
+  private final MagicLinkService magicLinkService;
   private final int emailMaxAttempts;
   private final ObjectMapper payloadMapper = new ObjectMapper();
 
@@ -79,15 +86,22 @@ public class NotificationService {
       NotificationRepositoryFactory notificationRepoFactory,
       UserRepositoryFactory userRepoFactory,
       CustomerRepositoryFactory customerRepoFactory,
+      NotificationPreferenceRepositoryFactory preferenceRepoFactory,
       EmailSender emailSender,
+      MagicLinkService magicLinkService,
       int emailMaxAttempts) {
     this.rootDsl = rootDsl;
     this.notificationRepoFactory = notificationRepoFactory;
     this.userRepoFactory = userRepoFactory;
     this.customerRepoFactory = customerRepoFactory;
+    this.preferenceRepoFactory = preferenceRepoFactory;
     this.emailSender = emailSender;
+    this.magicLinkService = magicLinkService;
     this.emailMaxAttempts = emailMaxAttempts > 0 ? emailMaxAttempts : DEFAULT_EMAIL_MAX_ATTEMPTS;
   }
+
+  /** A staff-preference upsert input from the PUT endpoint. */
+  public record PreferenceInput(String type, NotificationChannel channel, boolean enabled) {}
 
   /**
    * Result of one sweeper tick. {@code sent}/{@code retried}/{@code failed}/{@code skipped} are
@@ -152,6 +166,7 @@ public class NotificationService {
       String linkTarget) {
     NotificationRepository repo = notificationRepoFactory.create(txDsl);
     NotificationTemplates.Rendered rendered = NotificationTemplates.render(type, payload);
+    OffsetDateTime now = now();
 
     Notification n = new Notification();
     n.setOrgId(orgId);
@@ -167,7 +182,12 @@ public class NotificationService {
     n.setPayloadJson(serialize(payload));
     Notification saved = repo.insertNotification(n);
 
+    int created = 0;
     for (NotificationChannel channel : channelsFor(recipient)) {
+      // Opt-out resolution: a preference row can suppress this channel. Absence = enabled.
+      if (!isChannelEnabled(txDsl, orgId, recipient, type.name(), channel)) {
+        continue;
+      }
       NotificationDelivery d = new NotificationDelivery();
       d.setNotificationId(saved.getId());
       d.setChannel(channel);
@@ -177,14 +197,42 @@ public class NotificationService {
       switch (channel) {
         case IN_APP -> repo.insertInAppDelivery(savedDelivery.getId(), linkTarget);
         case EMAIL -> {
-          // Freeze the send target + rendered content now; the sweeper transmits it later.
+          // Freeze the send target + rendered content now; the sweeper transmits it later. Every
+          // customer email carries a one-click unsubscribe link (minted in this same txn).
           String toAddress = resolveCustomerEmail(txDsl, orgId, recipient.customerId());
-          String html = NotificationTemplates.emailHtml(rendered.body(), linkTarget);
+          String unsubscribeUrl =
+              magicLinkService.issueUnsubscribeLink(txDsl, orgId, recipient.customerId(), now);
+          String html =
+              NotificationTemplates.emailHtml(rendered.body(), linkTarget, unsubscribeUrl);
           repo.insertEmailDelivery(savedDelivery.getId(), toAddress, rendered.title(), html);
         }
       }
+      created++;
+    }
+    // Fully suppressed by preferences → no delivery will ever run; finalize now so it doesn't hang
+    // PENDING. (The row is kept as an audit trail that we would have notified.)
+    if (created == 0) {
+      finalizeIfTerminal(repo, saved.getId(), now);
     }
     return saved;
+  }
+
+  /**
+   * The effective enabled/disabled for {@code (recipient, type, channel)}: an explicit preference
+   * wins, else the opt-out default (enabled). USER subjects key on the recipient's user id,
+   * CUSTOMER on the customer id.
+   */
+  boolean isChannelEnabled(
+      DSLContext txDsl,
+      UUID orgId,
+      NotificationRecipient recipient,
+      String type,
+      NotificationChannel channel) {
+    NotificationPreferenceRepository prefs = preferenceRepoFactory.create(txDsl);
+    RecipientType subjectType = recipient.type();
+    UUID subjectId =
+        subjectType == RecipientType.USER ? recipient.userId() : recipient.customerId();
+    return prefs.resolveEnabled(orgId, subjectType, subjectId, type, channel).orElse(true);
   }
 
   /** USER → in_app; CUSTOMER → email (customers have no in-app feed — they are not app_users). */
@@ -206,6 +254,64 @@ public class NotificationService {
       throw new IllegalStateException("customer " + customerId + " has no email for notification");
     }
     return c.getEmail();
+  }
+
+  // ── Preferences (opt-out) ───────────────────────────────────────────────────
+
+  /** A staff user's own preference rows (for the read endpoint). */
+  public List<NotificationPreference> getUserPreferences(UUID orgId, UUID userId) {
+    return preferenceRepoFactory.create(rootDsl).findByUser(orgId, userId);
+  }
+
+  /**
+   * Upsert (merge) the given preferences for a staff user, then return the resulting set. Each
+   * input is validated: {@code type} must be a known {@link NotificationType} name or {@link
+   * NotificationPreference#ALL_TYPES}, and {@code channel} must be present.
+   */
+  public List<NotificationPreference> setUserPreferences(
+      UUID orgId, UUID userId, List<PreferenceInput> inputs) {
+    for (PreferenceInput in : inputs) {
+      if (in == null || in.channel() == null) {
+        throw new ValidationException("each preference needs a channel");
+      }
+      validatePreferenceType(in.type());
+    }
+    rootDsl.transaction(
+        cfg -> {
+          NotificationPreferenceRepository prefs = preferenceRepoFactory.create(DSL.using(cfg));
+          for (PreferenceInput in : inputs) {
+            prefs.upsertUser(orgId, userId, in.type(), in.channel(), in.enabled());
+          }
+        });
+    return getUserPreferences(orgId, userId);
+  }
+
+  /** Turn a customer's email off for the org (the one-click unsubscribe target). Idempotent. */
+  public void unsubscribeCustomerEmail(UUID orgId, UUID customerId) {
+    rootDsl.transaction(
+        cfg ->
+            preferenceRepoFactory
+                .create(DSL.using(cfg))
+                .upsertCustomer(
+                    orgId,
+                    customerId,
+                    NotificationPreference.ALL_TYPES,
+                    NotificationChannel.EMAIL,
+                    false));
+  }
+
+  private static void validatePreferenceType(String type) {
+    if (type == null || type.isBlank()) {
+      throw new ValidationException("preference type is required");
+    }
+    if (NotificationPreference.ALL_TYPES.equals(type)) {
+      return;
+    }
+    try {
+      NotificationType.valueOf(type);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("unknown notification type: " + type);
+    }
   }
 
   // ── Worker: drain pending in-app deliveries ─────────────────────────────────
