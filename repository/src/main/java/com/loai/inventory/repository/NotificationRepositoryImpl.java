@@ -2,6 +2,7 @@ package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY;
+import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY_EMAIL;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY_IN_APP;
 
 import com.loai.inventory.domain.model.DeliveryStatus;
@@ -92,6 +93,17 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .execute();
   }
 
+  @Override
+  public void insertEmailDelivery(
+      UUID deliveryId, String toAddress, String subject, String renderedHtml) {
+    dsl.insertInto(NOTIFICATION_DELIVERY_EMAIL)
+        .set(NOTIFICATION_DELIVERY_EMAIL.DELIVERY_ID, deliveryId)
+        .set(NOTIFICATION_DELIVERY_EMAIL.TO_ADDRESS, toAddress)
+        .set(NOTIFICATION_DELIVERY_EMAIL.SUBJECT, subject)
+        .set(NOTIFICATION_DELIVERY_EMAIL.RENDERED_HTML, renderedHtml)
+        .execute();
+  }
+
   // ── Worker ────────────────────────────────────────────────────────────────
 
   @Override
@@ -137,6 +149,34 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .set(NOTIFICATION_DELIVERY.UPDATED_AT, now)
         .where(NOTIFICATION_DELIVERY.ID.eq(deliveryId))
         .execute();
+  }
+
+  @Override
+  public void markDeliveryRetry(UUID deliveryId, String lastError, OffsetDateTime now) {
+    // Keep status PENDING so the next sweep retries; only the attempt counter + last_error move.
+    dsl.update(NOTIFICATION_DELIVERY)
+        .set(NOTIFICATION_DELIVERY.ATTEMPTS, NOTIFICATION_DELIVERY.ATTEMPTS.plus(1))
+        .set(NOTIFICATION_DELIVERY.LAST_ERROR, lastError)
+        .set(NOTIFICATION_DELIVERY.UPDATED_AT, now)
+        .where(NOTIFICATION_DELIVERY.ID.eq(deliveryId))
+        .execute();
+  }
+
+  @Override
+  public Optional<EmailDeliveryContent> findEmailDeliveryContent(UUID deliveryId) {
+    return dsl.select(
+            NOTIFICATION_DELIVERY_EMAIL.TO_ADDRESS,
+            NOTIFICATION_DELIVERY_EMAIL.SUBJECT,
+            NOTIFICATION_DELIVERY_EMAIL.RENDERED_HTML)
+        .from(NOTIFICATION_DELIVERY_EMAIL)
+        .where(NOTIFICATION_DELIVERY_EMAIL.DELIVERY_ID.eq(deliveryId))
+        .fetchOptional()
+        .map(
+            r ->
+                new EmailDeliveryContent(
+                    r.get(NOTIFICATION_DELIVERY_EMAIL.TO_ADDRESS),
+                    r.get(NOTIFICATION_DELIVERY_EMAIL.SUBJECT),
+                    r.get(NOTIFICATION_DELIVERY_EMAIL.RENDERED_HTML)));
   }
 
   @Override

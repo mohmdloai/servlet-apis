@@ -31,6 +31,8 @@
         <jobrunr.version>7.2.2</jobrunr.version>
         <!-- AWS SDK v2 — S3 presigner for product-listing image uploads (MinIO/S3). -->
         <awssdk.version>2.31.0</awssdk.version>
+        <!-- Jakarta Mail (Eclipse Angus) — SMTP sender for transactional email (notifications §6). -->
+        <angus.mail.version>2.0.3</angus.mail.version>
 
         <!-- DB connection – used by Flyway & jOOQ Maven plugins.
              Keep in sync with common/src/main/resources/db.properties -->
@@ -162,6 +164,12 @@
         <groupId>org.jobrunr</groupId>
         <artifactId>jobrunr</artifactId>
         <version>${jobrunr.version}</version>
+      </dependency>
+      <!-- Transactional email — Jakarta Mail impl (pulls jakarta.mail-api transitively) -->
+      <dependency>
+        <groupId>org.eclipse.angus</groupId>
+        <artifactId>angus-mail</artifactId>
+        <version>${angus.mail.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

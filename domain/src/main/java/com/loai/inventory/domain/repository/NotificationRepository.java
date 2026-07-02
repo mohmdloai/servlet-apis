@@ -31,6 +31,12 @@ public interface NotificationRepository {
 
   void insertInAppDelivery(UUID deliveryId, String linkTarget);
 
+  /**
+   * The email subtype row for an {@code email} delivery (to-address/subject/HTML frozen at produce
+   * time).
+   */
+  void insertEmailDelivery(UUID deliveryId, String toAddress, String subject, String renderedHtml);
+
   // ── Worker (delivery sweeper) ─────────────────────────────────────────────
   List<UUID> findPendingDeliveryIds(NotificationChannel channel, int limit);
 
@@ -39,6 +45,19 @@ public interface NotificationRepository {
   void markDeliverySent(UUID deliveryId, OffsetDateTime now);
 
   void markDeliveryFailed(UUID deliveryId, String lastError, OffsetDateTime now);
+
+  /**
+   * Record a failed send attempt while keeping the delivery {@code PENDING} so the next sweep
+   * retries: {@code attempts++}, {@code last_error} set. Used by channels the recurring sweeper
+   * (not a per-job scheduler) retries — email today.
+   */
+  void markDeliveryRetry(UUID deliveryId, String lastError, OffsetDateTime now);
+
+  /** The frozen email content for a delivery (from {@code notification_delivery_email}). */
+  Optional<EmailDeliveryContent> findEmailDeliveryContent(UUID deliveryId);
+
+  /** Email fields captured at produce time — what the sweeper hands to the {@code EmailSender}. */
+  record EmailDeliveryContent(String toAddress, String subject, String renderedHtml) {}
 
   /**
    * True once every delivery of the notification is in a terminal state (SENT/DELIVERED/FAILED).

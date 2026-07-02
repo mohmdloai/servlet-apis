@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.common.Pagination;
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.DeliveryStatus;
 import com.loai.inventory.domain.model.InAppFeedItem;
 import com.loai.inventory.domain.model.Notification;
@@ -13,10 +14,14 @@ import com.loai.inventory.domain.model.NotificationRecipient;
 import com.loai.inventory.domain.model.NotificationStatus;
 import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.repository.CustomerRepository;
+import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationRepository;
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
+import com.loai.inventory.service.email.EmailMessage;
+import com.loai.inventory.service.email.EmailSender;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -45,9 +50,10 @@ import org.slf4j.LoggerFactory;
  *   <li><b>Feed</b> — own-only reads/mutations, scoped by {@code (orgId, userId)}.
  * </ul>
  *
- * <p>Phase 1 is in-app only. A {@code USER} recipient gets an {@code in_app} delivery; the {@code
- * email} channel (customer recipients) arrives in Phase 2 — until then {@link #notify} rejects a
- * {@code CUSTOMER} recipient loudly rather than dropping it silently.
+ * <p>Two channels are wired: a {@code USER} recipient gets an {@code in_app} delivery; a {@code
+ * CUSTOMER} recipient gets an {@code email} delivery (customers have no in-app feed — they are not
+ * {@code app_user}s). Email is transmitted by {@link #dispatchPendingEmail} through an {@link
+ * EmailSender} <em>after</em> the business txn commits (never inside it).
  */
 public class NotificationService {
 
@@ -57,22 +63,48 @@ public class NotificationService {
   private static final Set<OrgRole> STAFF_ROLES =
       Set.of(OrgRole.STAFF, OrgRole.MANAGER, OrgRole.OWNER);
 
+  /** Default retry budget for an email delivery before it is marked terminally FAILED. */
+  public static final int DEFAULT_EMAIL_MAX_ATTEMPTS = 5;
+
   private final DSLContext rootDsl;
   private final NotificationRepositoryFactory notificationRepoFactory;
   private final UserRepositoryFactory userRepoFactory;
+  private final CustomerRepositoryFactory customerRepoFactory;
+  private final EmailSender emailSender;
+  private final int emailMaxAttempts;
   private final ObjectMapper payloadMapper = new ObjectMapper();
 
   public NotificationService(
       DSLContext rootDsl,
       NotificationRepositoryFactory notificationRepoFactory,
-      UserRepositoryFactory userRepoFactory) {
+      UserRepositoryFactory userRepoFactory,
+      CustomerRepositoryFactory customerRepoFactory,
+      EmailSender emailSender,
+      int emailMaxAttempts) {
     this.rootDsl = rootDsl;
     this.notificationRepoFactory = notificationRepoFactory;
     this.userRepoFactory = userRepoFactory;
+    this.customerRepoFactory = customerRepoFactory;
+    this.emailSender = emailSender;
+    this.emailMaxAttempts = emailMaxAttempts > 0 ? emailMaxAttempts : DEFAULT_EMAIL_MAX_ATTEMPTS;
   }
 
-  /** Result of one sweeper tick. */
-  public record DeliverySummary(int picked, int sent, int failed) {}
+  /**
+   * Result of one sweeper tick. {@code sent}/{@code retried}/{@code failed}/{@code skipped} are
+   * disjoint and sum to {@code picked}: {@code retried} stayed PENDING (a transient fault, will be
+   * re-attempted), {@code failed} reached terminal FAILED <em>this</em> tick, and {@code skipped}
+   * was already consumed by another tick (or its subtype row was missing). Keeping these apart
+   * stops a re-attempted delivery from masquerading as a failure on every sweep.
+   */
+  public record DeliverySummary(int picked, int sent, int retried, int failed, int skipped) {}
+
+  /** What one delivery's dispatch did on a tick — the disjoint tally categories above. */
+  private enum DeliveryOutcome {
+    SENT,
+    RETRIED,
+    FAILED,
+    SKIPPED
+  }
 
   // ── Producer (runs inside the caller's business transaction) ────────────────
 
@@ -142,21 +174,38 @@ public class NotificationService {
       d.setStatus(DeliveryStatus.PENDING);
       d.setAttempts(0);
       NotificationDelivery savedDelivery = repo.insertDelivery(d);
-      if (channel == NotificationChannel.IN_APP) {
-        repo.insertInAppDelivery(savedDelivery.getId(), linkTarget);
+      switch (channel) {
+        case IN_APP -> repo.insertInAppDelivery(savedDelivery.getId(), linkTarget);
+        case EMAIL -> {
+          // Freeze the send target + rendered content now; the sweeper transmits it later.
+          String toAddress = resolveCustomerEmail(txDsl, orgId, recipient.customerId());
+          String html = NotificationTemplates.emailHtml(rendered.body(), linkTarget);
+          repo.insertEmailDelivery(savedDelivery.getId(), toAddress, rendered.title(), html);
+        }
       }
     }
     return saved;
   }
 
-  /** Phase 1: USER → in_app. CUSTOMER (email) is Phase 2 — reject rather than silently drop. */
+  /** USER → in_app; CUSTOMER → email (customers have no in-app feed — they are not app_users). */
   private List<NotificationChannel> channelsFor(NotificationRecipient recipient) {
     return switch (recipient.type()) {
       case USER -> List.of(NotificationChannel.IN_APP);
-      case CUSTOMER ->
-          throw new UnsupportedOperationException(
-              "customer (email) notifications arrive in Phase 2; only in-app is wired");
+      case CUSTOMER -> List.of(NotificationChannel.EMAIL);
     };
+  }
+
+  /** The current email for a customer recipient — required for an email delivery. */
+  private String resolveCustomerEmail(DSLContext txDsl, UUID orgId, UUID customerId) {
+    CustomerRepository customers = customerRepoFactory.create(txDsl);
+    Customer c =
+        customers
+            .findById(orgId, customerId)
+            .orElseThrow(() -> new NotFoundException("Customer", customerId));
+    if (c.getEmail() == null || c.getEmail().isBlank()) {
+      throw new IllegalStateException("customer " + customerId + " has no email for notification");
+    }
+    return c.getEmail();
   }
 
   // ── Worker: drain pending in-app deliveries ─────────────────────────────────
@@ -167,34 +216,131 @@ public class NotificationService {
     List<UUID> ids = reader.findPendingDeliveryIds(NotificationChannel.IN_APP, batchLimit);
     int sent = 0;
     int failed = 0;
+    int skipped = 0;
     for (UUID id : ids) {
       try {
-        dispatchOneInApp(id);
-        sent++;
+        if (dispatchOneInApp(id) == DeliveryOutcome.SENT) {
+          sent++;
+        } else {
+          skipped++; // already consumed by another tick, or gone
+        }
       } catch (RuntimeException e) {
         failed++;
         log.warn("in-app delivery {} failed to dispatch", id, e);
       }
     }
-    return new DeliverySummary(ids.size(), sent, failed);
+    return new DeliverySummary(ids.size(), sent, /* retried= */ 0, failed, skipped);
   }
 
-  private void dispatchOneInApp(UUID deliveryId) {
-    rootDsl.transaction(
+  private DeliveryOutcome dispatchOneInApp(UUID deliveryId) {
+    return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           NotificationRepository repo = notificationRepoFactory.create(txDsl);
           NotificationDelivery d = repo.findDeliveryById(deliveryId).orElse(null);
           if (d == null || d.getStatus() != DeliveryStatus.PENDING) {
-            return; // consumed by another tick, or gone
+            return DeliveryOutcome.SKIPPED; // consumed by another tick, or gone
           }
           OffsetDateTime now = now();
           // in-app: the row IS the delivery — nothing to hand to a provider. Mark SENT.
           repo.markDeliverySent(deliveryId, now);
-          if (repo.allDeliveriesTerminal(d.getNotificationId())) {
-            repo.markNotificationDispatched(d.getNotificationId(), now);
-          }
+          finalizeIfTerminal(repo, d.getNotificationId(), now);
+          return DeliveryOutcome.SENT;
         });
+  }
+
+  // ── Worker: drain pending email deliveries ──────────────────────────────────
+
+  /**
+   * Drain PENDING email deliveries: read candidate ids in autocommit, then dispatch each in its own
+   * transaction (poison-pill isolation). The SMTP call runs inside the per-delivery txn, under the
+   * row's {@code FOR UPDATE} lock, so concurrent ticks can't double-send. At-least-once: a crash
+   * between send and commit re-sends next tick.
+   */
+  public DeliverySummary dispatchPendingEmail(int batchLimit) {
+    NotificationRepository reader = notificationRepoFactory.create(rootDsl);
+    List<UUID> ids = reader.findPendingDeliveryIds(NotificationChannel.EMAIL, batchLimit);
+    int sent = 0;
+    int retried = 0;
+    int failed = 0;
+    int skipped = 0;
+    for (UUID id : ids) {
+      DeliveryOutcome outcome;
+      try {
+        outcome = dispatchOneEmail(id);
+      } catch (RuntimeException e) {
+        // An infra fault (DB) outside the provider call — the txn rolled back, so the row is
+        // untouched and will be retried next tick. Count it as retried, not failed.
+        outcome = DeliveryOutcome.RETRIED;
+        log.warn("email delivery {} errored during dispatch (will retry)", id, e);
+      }
+      switch (outcome) {
+        case SENT -> sent++;
+        case RETRIED -> retried++;
+        case FAILED -> failed++;
+        case SKIPPED -> skipped++;
+      }
+    }
+    return new DeliverySummary(ids.size(), sent, retried, failed, skipped);
+  }
+
+  /** Dispatch one email delivery and report what happened (see {@link DeliveryOutcome}). */
+  private DeliveryOutcome dispatchOneEmail(UUID deliveryId) {
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          NotificationRepository repo = notificationRepoFactory.create(txDsl);
+          NotificationDelivery d = repo.findDeliveryById(deliveryId).orElse(null);
+          if (d == null || d.getStatus() != DeliveryStatus.PENDING) {
+            return DeliveryOutcome.SKIPPED; // consumed by another tick, or gone
+          }
+          OffsetDateTime now = now();
+          NotificationRepository.EmailDeliveryContent content =
+              repo.findEmailDeliveryContent(deliveryId).orElse(null);
+          if (content == null) {
+            // Missing subtype row is a producer bug, not transient — fail terminally.
+            repo.markDeliveryFailed(deliveryId, "missing email subtype row", now);
+            finalizeIfTerminal(repo, d.getNotificationId(), now);
+            return DeliveryOutcome.FAILED;
+          }
+          try {
+            emailSender.send(
+                new EmailMessage(content.toAddress(), content.subject(), content.renderedHtml()));
+          } catch (RuntimeException e) {
+            // Any provider fault — EmailException OR an out-of-contract runtime error from the
+            // sender. Both must advance the attempt counter; otherwise a sender that throws e.g. an
+            // NPE would leave the row PENDING with attempts unchanged and be re-sent forever.
+            int attempted = d.getAttempts() + 1;
+            if (attempted >= emailMaxAttempts) {
+              repo.markDeliveryFailed(deliveryId, truncateError(e.getMessage()), now);
+              finalizeIfTerminal(repo, d.getNotificationId(), now);
+              return DeliveryOutcome.FAILED;
+            }
+            // Leave PENDING so the next sweep retries.
+            repo.markDeliveryRetry(deliveryId, truncateError(e.getMessage()), now);
+            return DeliveryOutcome.RETRIED;
+          }
+          repo.markDeliverySent(deliveryId, now);
+          finalizeIfTerminal(repo, d.getNotificationId(), now);
+          return DeliveryOutcome.SENT;
+        });
+  }
+
+  /**
+   * Once every delivery of a notification is terminal (SENT/DELIVERED/FAILED), flip it DISPATCHED.
+   */
+  private void finalizeIfTerminal(
+      NotificationRepository repo, UUID notificationId, OffsetDateTime now) {
+    if (repo.allDeliveriesTerminal(notificationId)) {
+      repo.markNotificationDispatched(notificationId, now);
+    }
+  }
+
+  private static String truncateError(String message) {
+    if (message == null) {
+      return null;
+    }
+    return message.length() <= 500 ? message : message.substring(0, 500);
   }
 
   // ── Feed (own-only) ─────────────────────────────────────────────────────────

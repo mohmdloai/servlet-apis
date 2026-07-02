@@ -17,6 +17,7 @@ import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
+import com.loai.inventory.service.email.EmailAddresses;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -24,6 +25,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -60,6 +62,7 @@ public class SalesOrderService {
   private final PaymentService paymentService;
   private final InvoiceService invoiceService;
   private final NotificationService notificationService;
+  private final MagicLinkService magicLinkService;
 
   public SalesOrderService(
       DSLContext rootDsl,
@@ -68,7 +71,8 @@ public class SalesOrderService {
       FulfillmentService fulfillmentService,
       PaymentService paymentService,
       InvoiceService invoiceService,
-      NotificationService notificationService) {
+      NotificationService notificationService,
+      MagicLinkService magicLinkService) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.reservationService = reservationService;
@@ -76,6 +80,7 @@ public class SalesOrderService {
     this.paymentService = paymentService;
     this.invoiceService = invoiceService;
     this.notificationService = notificationService;
+    this.magicLinkService = magicLinkService;
   }
 
   /** Input contact info; {@code name} required, others optional. */
@@ -164,6 +169,26 @@ public class SalesOrderService {
               "sales_order",
               order.getId(),
               "/orgs/" + orgId + "/sales-orders/" + order.getId());
+
+          // Notify the customer by email, carrying an order-scoped magic link (view your order, no
+          // login). Both the token and the notification are written in this txn, so a rolled-back
+          // order leaves neither. Online placement always resolves a customer (email required).
+          Customer resolvedCustomer = built.customer();
+          if (resolvedCustomer != null) {
+            String viewLink =
+                magicLinkService.issueOrderViewLink(
+                    txDsl, orgId, resolvedCustomer.getId(), order.getId(), now);
+            notificationService.notify(
+                txDsl,
+                orgId,
+                com.loai.inventory.domain.model.NotificationRecipient.customer(
+                    resolvedCustomer.getId()),
+                NotificationType.ORDER_PLACED,
+                Map.of("order_number", order.getOrderNumber()),
+                "sales_order",
+                order.getId(),
+                viewLink);
+          }
 
           log.info(
               "Placed online order id={} orgId={} number={} customerId={} grandTotal={} lines={}",
@@ -342,6 +367,25 @@ public class SalesOrderService {
         });
   }
 
+  /**
+   * Load an order + its lines + customer for a read-only view (the anonymous magic-link route). The
+   * caller has already proven access via the token, so this takes no {@link ActorContext}; it is
+   * still org-scoped. Returns empty if the order does not exist in {@code orgId}.
+   */
+  public Optional<Placed> findPlaced(UUID orgId, UUID orderId) {
+    SalesOrderRepository repo = repoFactory.create(rootDsl);
+    return repo.findById(orgId, orderId)
+        .map(
+            order -> {
+              List<SalesOrderLine> lines = repo.findLinesByOrderId(order.getId());
+              Customer customer =
+                  order.getCustomerId() == null
+                      ? null
+                      : repo.findCustomerById(orgId, order.getCustomerId()).orElse(null);
+              return new Placed(order, lines, customer);
+            });
+  }
+
   // Shared build
 
   private record BuiltOrder(SalesOrder order, List<SalesOrderLine> lines, Customer customer) {}
@@ -432,9 +476,15 @@ public class SalesOrderService {
       }
       return null;
     }
+    // A single valid address only — a comma list or injected header would otherwise be stored and
+    // later fan the emailed order link out to arbitrary recipients (see MagicLink/email channel).
+    String normalizedEmail = normalize(customer.email());
+    if (!EmailAddresses.isSingleValid(normalizedEmail)) {
+      throw new ValidationException("customer.email is not a valid single email address");
+    }
     return repo.upsertCustomerByEmail(
         orgId,
-        normalize(customer.email()),
+        normalizedEmail,
         trimOrNull(customer.name()),
         trimOrNull(customer.phone()),
         trimOrNull(customer.address()));
