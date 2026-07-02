@@ -221,6 +221,34 @@ class OrphanResolutionIT {
     assertEquals("ORPHAN", txnReconciliation(txnId));
   }
 
+  /**
+   * Empirical proof of the "orphan → refund with no matching order" gap. A VERIFIED InstaPay CREDIT
+   * that reconciles to ORPHAN and matches no order has <em>no exit</em>: it never becomes a {@code
+   * payment} (so a direct, payment-backed refund has no {@code payment_id} to bind to — there is
+   * literally nothing to refund), and every {@code resolveOrphan} route either matches an existing
+   * PENDING_PAYMENT order or throws and leaves the transaction ORPHAN. The money stays stuck in the
+   * orphan queue with no way out.
+   */
+  @Test
+  void verifiedOrphan_noMatchingOrder_hasNoRefundExit() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    UUID txnId = seedOrphan(orgId, admin, "250.00"); // VERIFIED + ORPHAN, no order, no payment
+
+    // No payment row exists for an unmatched orphan → a direct refund has nothing to target.
+    assertEquals(0, paymentCountForTxn(txnId));
+
+    // The only resolution route is matching an existing order — none exists → NotFound.
+    assertThrows(
+        NotFoundException.class,
+        () -> service.resolveOrphan(orgId, txnId, new OrderRef(null, "SO-9999-99999"), admin));
+
+    // Left exactly where it was: ORPHAN, still VERIFIED, still no payment. No refund path anywhere.
+    assertEquals("ORPHAN", txnReconciliation(txnId));
+    assertEquals("VERIFIED", txnVerification(txnId));
+    assertEquals(0, paymentCountForTxn(txnId));
+  }
+
   @Test
   void resolveMissingReference_validationError() {
     UUID orgId = createOrg("acme");
@@ -346,6 +374,18 @@ class OrphanResolutionIT {
 
   private int paymentCountForOrder(UUID orderId) {
     return dsl.fetchCount(dsl.selectFrom(PAYMENT).where(PAYMENT.SALES_ORDER_ID.eq(orderId)));
+  }
+
+  private int paymentCountForTxn(UUID txnId) {
+    return dsl.fetchCount(dsl.selectFrom(PAYMENT).where(PAYMENT.PAYMENT_TRANSACTION_ID.eq(txnId)));
+  }
+
+  private String txnVerification(UUID txnId) {
+    return dsl.select(PAYMENT_TRANSACTION.VERIFICATION_STATUS)
+        .from(PAYMENT_TRANSACTION)
+        .where(PAYMENT_TRANSACTION.ID.eq(txnId))
+        .fetchOne(PAYMENT_TRANSACTION.VERIFICATION_STATUS)
+        .getLiteral();
   }
 
   private String txnReconciliation(UUID txnId) {
