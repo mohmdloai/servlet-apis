@@ -16,7 +16,7 @@ external dependency is an **SMTP sender** (Gmail). Two decisions are settled by 
 email provider = **Gmail SMTP**; customer recipients are **email-only** (customers have no in-app
 feed — they are not `app_user` rows).
 
-Next migration number: **V44**.
+Next migration number: **V46** (V44 = notification tables, V45 = customer_magic_token, both shipped).
 
 ---
 
@@ -159,7 +159,7 @@ When every delivery is terminal, flip the parent `notification` to `DISPATCHED`.
 
 ## 4. Preferences — enable/disable (the doc defers this; your requirement needs it)
 
-- **`V45` — `notification_preference`** (`user_id`/`customer_id` × `type` × `channel` → enabled bool),
+- **`V46` — `notification_preference`** (`user_id`/`customer_id` × `type` × `channel` → enabled bool),
   polymorphic like the recipient. Resolution order in `notify()`: explicit preference → per-event
   default (§8 table) → channel validity (customers can't have `in_app`).
 - **Staff:** manage own prefs via `GET/PUT /api/orgs/{orgId}/notification-preferences`.
@@ -194,10 +194,11 @@ When every delivery is terminal, flip the parent `notification` to `DISPATCHED`.
 Transactional emails ("view your order", "invoice ready", unsubscribe) carry a **capability** token,
 not a session. This is the `customer_magic_token` sketch in `customer-portal-future.md`, used at its
 narrow tier:
-- **`V46` — reuse/introduce `customer_magic_token`** (`token_hash` SHA-256, `customer_id`, `org_id`,
-  `purpose` ∈ {`view_order`,`view_invoice`,`unsubscribe`}, `source_id`, `expires_at`, single-use
-  `consumed_at`). Hashed at rest and short-TTL, mirroring `RefreshTokenStore` hygiene; the raw token
-  lives only in the emailed URL.
+- **`V45` — `customer_magic_token`** (`token_hash` SHA-256, `customer_id`, `org_id`, `purpose` ∈
+  {`VIEW_ORDER`,`VIEW_INVOICE`,`UNSUBSCRIBE`}, `resource_id`, `expires_at`, single-use `consumed_at`).
+  ✅ **shipped in Phase 2** (VIEW_ORDER only). Hashed at rest and TTL-bounded, reusing
+  `RefreshTokenStore.hashToken`; the raw token lives only in the emailed URL. VIEW_ORDER is multi-use
+  until expiry (`consumed_at` reserved for one-shot purposes like unsubscribe).
 - Anonymous public route (like `/api/public/*`) validates the token, scopes to the one resource, no
   broader access. **Build this tier with the email channel** — it's what the notifications need.
 
@@ -237,9 +238,17 @@ each calling `notify(...)` inside its business txn.
    own-only + platform-ADMIN-any via `?user_id=`), and one wired event: `ORDER_PLACED` → org staff
    in_app (fired inside the online-placement txn). Covered by `NotificationDeliveryIT` (produce →
    sweep → feed, fan-out, rollback-safety) + `CustomerResolutionAtPlacementIT#onlineOrder_notifiesOrgStaff`.
-3. **Phase 2 — Email + order magic links:** `EmailSender`/Gmail SMTP + `mail.properties`/env, email
-   subtype, `V46` `customer_magic_token` (order-scoped), wire the customer email events.
-4. **Phase 3 — Preferences:** `V45` + resolution + staff prefs endpoints + customer unsubscribe token.
+3. **Phase 2 — Email + order magic links:** ✅ **done** — `EmailSender`/`SmtpEmailSender` (Gmail SMTP,
+   Angus Mail) + `LoggingEmailSender` fallback + `EmailSenderFactory` (`mail.properties` +
+   `SMTP_USERNAME`/`SMTP_PASSWORD`), the `email` delivery path (producer writes the
+   `notification_delivery_email` subtype; the recurring sweeper now drains **both** channels via
+   `NotificationService.dispatchPendingEmail`, at-least-once with per-attempt retry→FAILED),
+   `V45 customer_magic_token` + `MagicLinkService` (mint/resolve VIEW_ORDER), the anonymous
+   `GET /api/public/orders/{token}` route, and the first customer email event: `ORDER_PLACED` →
+   customer email carrying the order magic link (fired inside the online-placement txn). Covered by
+   `CustomerEmailDeliveryIT` (produce → sweep → SENT/FAILED/retry) + `OrderMagicLinkIT` (mint/resolve,
+   expiry, isolation). Story: `stories/deliver_customer_email_notifications.md`.
+4. **Phase 3 — Preferences:** `V46` + resolution + staff prefs endpoints + customer unsubscribe token.
 5. **Phase 4 — Explicit sends:** admin→org and org→customer producers.
 6. **Later:** customer-session magic links / portal (own slice), SMS/WhatsApp subtypes, ESP webhooks
    for true DELIVERED, org template customization, broadcast model.
