@@ -107,6 +107,16 @@ class CustomerResolutionAtPlacementIT {
             new SalesInvoiceRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl());
+    com.loai.inventory.service.RefundService refundService =
+        new com.loai.inventory.service.RefundService(
+            dsl,
+            new com.loai.inventory.repository.RefundRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl(),
+            new PaymentRepositoryFactoryImpl(),
+            new PaymentAllocationRepositoryFactoryImpl(),
+            new PaymentTransactionRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl());
     FulfillmentService fulfillmentService =
         new FulfillmentService(
             dsl,
@@ -117,15 +127,7 @@ class CustomerResolutionAtPlacementIT {
             new InventoryLogRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
             invoiceService,
-            new com.loai.inventory.service.RefundService(
-                dsl,
-                new com.loai.inventory.repository.RefundRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl(),
-                new PaymentRepositoryFactoryImpl(),
-                new PaymentAllocationRepositoryFactoryImpl(),
-                new PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+            refundService,
             reservationService);
     PaymentService paymentService =
         new PaymentService(
@@ -146,6 +148,7 @@ class CustomerResolutionAtPlacementIT {
             fulfillmentService,
             paymentService,
             invoiceService,
+            refundService,
             new NotificationService(
                 dsl,
                 new NotificationRepositoryFactoryImpl(),
