@@ -336,6 +336,87 @@ public final class RefundService {
     return refund;
   }
 
+  /**
+   * Create <b>and execute</b> a direct cash refund for counter change, inside the caller's
+   * transaction — the in-store overpaid auto-resolution ({@code payment.md} §Overpaid (in-store)
+   * steps 4–5): the cashier hands the change back the moment the sale closes, so unlike every other
+   * refund there is no PENDING window — the DEBIT transaction ({@code provider='cash'}) is recorded
+   * and the refund lands EXECUTED atomically with the checkout.
+   *
+   * <p>No OWNER-threshold gate applies: {@code amount} is capped at the payment's unallocated
+   * excess, which by construction is tender-just-received minus the invoice total — the org's net
+   * money-in is always exactly the invoice total, so there is no discretionary payout to escalate.
+   */
+  public Executed createExecutedChangeInTx(
+      DSLContext txDsl,
+      UUID orgId,
+      Payment payment,
+      BigDecimal amount,
+      UUID actorId,
+      OffsetDateTime now) {
+    if (payment == null) {
+      throw new ValidationException("payment is required");
+    }
+    if (actorId == null) {
+      throw new ValidationException("actor identity is required");
+    }
+    if (amount == null || amount.signum() <= 0) {
+      throw new ValidationException("change amount must be > 0");
+    }
+    if (amount.compareTo(payment.getUnallocatedAmount()) > 0) {
+      throw new ConflictException(
+          "change " + amount + " exceeds payment unallocated " + payment.getUnallocatedAmount());
+    }
+
+    Refund refund =
+        Refund.createPending(
+            UUID.randomUUID(),
+            orgId,
+            payment.getCustomerId(),
+            null,
+            payment.getId(),
+            amount,
+            payment.getCurrency(),
+            PaymentProvider.CASH,
+            "counter change",
+            now);
+    refundRepoFactory.create(txDsl).insert(refund);
+
+    // DEBIT transaction, created VERIFIED — same shape as execute(); the refund id makes the
+    // synthesised ref unique.
+    PaymentTransaction debit =
+        PaymentTransaction.createVerifiedDebit(
+            UUID.randomUUID(),
+            orgId,
+            PaymentProvider.CASH,
+            PaymentProvider.CASH.name() + "-" + refund.getId(),
+            amount,
+            payment.getCurrency(),
+            actorId,
+            null,
+            now);
+    PaymentTransactionRepository.Recorded rec = txnRepoFactory.create(txDsl).insertIfAbsent(debit);
+    if (!rec.inserted()) {
+      throw new ConflictException(
+          "change DEBIT transaction already recorded for refund " + refund.getId());
+    }
+
+    // Move the money off the payment (unallocated → 0 for an exact-change draw) and stamp EXECUTED.
+    payment.recordRefund(amount, false, now);
+    paymentRepoFactory.create(txDsl).updateAllocationState(payment);
+    refund.execute(rec.transaction().getId(), now);
+    refundRepoFactory.create(txDsl).updateExecution(refund);
+
+    log.info(
+        "Executed counter-change refund {} orgId={} amount={} payment={} debitTxn={}",
+        refund.getId(),
+        orgId,
+        amount,
+        payment.getId(),
+        rec.transaction().getId());
+    return new Executed(refund, rec.transaction());
+  }
+
   private void executeCreditNoteBacked(
       DSLContext txDsl, UUID orgId, Refund refund, OffsetDateTime now) {
     CreditNoteRepository cnRepo = creditNoteRepoFactory.create(txDsl);

@@ -109,6 +109,16 @@ class InStoreSaleIT {
             new SalesInvoiceRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl());
+    com.loai.inventory.service.RefundService refundService =
+        new com.loai.inventory.service.RefundService(
+            dsl,
+            new com.loai.inventory.repository.RefundRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl(),
+            new PaymentRepositoryFactoryImpl(),
+            new PaymentAllocationRepositoryFactoryImpl(),
+            new PaymentTransactionRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl());
     FulfillmentService fulfillmentService =
         new FulfillmentService(
             dsl,
@@ -119,15 +129,7 @@ class InStoreSaleIT {
             new InventoryLogRepositoryFactoryImpl(),
             new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
             invoiceService,
-            new com.loai.inventory.service.RefundService(
-                dsl,
-                new com.loai.inventory.repository.RefundRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+            refundService,
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
@@ -151,6 +153,7 @@ class InStoreSaleIT {
             fulfillmentService,
             paymentService,
             invoiceService,
+            refundService,
             new com.loai.inventory.service.NotificationService(
                 dsl,
                 new com.loai.inventory.repository.NotificationRepositoryFactoryImpl(),
@@ -336,9 +339,12 @@ class InStoreSaleIT {
     assertEquals(0, tableCount(SALES_ORDER));
   }
 
-  /** A non-exact tender (amount ≠ grand total) is rejected; v1 is exact-tender only. */
+  /**
+   * An underpaid tender (amount &lt; grand total) is rejected — v1 releases goods only against full
+   * payment (salesOrder.md: "pay full or cancel"). The whole sale rolls back.
+   */
   @Test
-  void nonExactTender_isRejected_rollsBack() {
+  void underpaidTender_isRejected_rollsBack() {
     UUID org = createOrg("acme");
     UUID staff = createUser("cashier@acme.test");
     UUID product = createProduct(org, "SKU1");
@@ -351,7 +357,7 @@ class InStoreSaleIT {
                 org,
                 new CustomerInput("Hana", "hana@acme.test", null, null),
                 List.of(new OrderLineInput(product, 3)), // grand total 30.00
-                new PaymentInput(PaymentProvider.CASH, null, new BigDecimal("999.00")),
+                new PaymentInput(PaymentProvider.CASH, null, new BigDecimal("25.00")),
                 null,
                 actor(staff),
                 UUID.randomUUID().toString(),
@@ -359,6 +365,55 @@ class InStoreSaleIT {
     assertEquals(0, tableCount(SALES_ORDER));
     assertEquals(0, tableCount(PAYMENT));
     assertEquals(5, stockQty(org, product));
+  }
+
+  /**
+   * Overpaid tender — the counter-change reality ({@code payment.md} §Overpaid (in-store)): the
+   * customer hands 50 for a 30.00 sale. The payment records the full 50, the invoice allocates 30,
+   * and the 20 excess is handed straight back as an EXECUTED cash refund (DEBIT transaction) in the
+   * same checkout — payment ends ALLOCATED with unallocated 0, order CLOSED with prepaid = 30.
+   */
+  @Test
+  void overpaidTender_recordsFullPayment_returnsChangeAsExecutedRefund() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("cashier@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 0);
+
+    InStoreSale sale =
+        service.placeInStoreSale(
+            org,
+            new CustomerInput("Nadia", "nadia@acme.test", null, null),
+            List.of(new OrderLineInput(product, 3)), // grand total 30.00
+            new PaymentInput(PaymentProvider.CASH, null, new BigDecimal("50.00")),
+            "round cash",
+            actor(staff),
+            UUID.randomUUID().toString(),
+            staff);
+
+    // Order CLOSED; prepaid is the NET money (tender − change) = grand total.
+    assertEquals("CLOSED", sale.order().getStatus().name());
+    assertEquals(0, new BigDecimal("30.00").compareTo(sale.order().getPrepaidAmount()));
+
+    // Invoice fully paid at its own total — the excess never touches the invoice.
+    assertEquals("PAID", sale.invoice().getStatus().name());
+    assertEquals(0, new BigDecimal("30.00").compareTo(sale.invoice().getPaidAmount()));
+
+    // Payment carries the full tender; allocation consumed 30, change refund drained the rest.
+    assertEquals(0, new BigDecimal("50.00").compareTo(sale.payment().getAmount()));
+    assertEquals("ALLOCATED", sale.payment().getStatus().name());
+    assertEquals(0, BigDecimal.ZERO.compareTo(paymentUnallocated(sale.payment().getId())));
+
+    // The change: an EXECUTED direct cash refund of 20 with its DEBIT transaction recorded.
+    assertNotNull(sale.changeRefund());
+    assertEquals("EXECUTED", sale.changeRefund().getStatus().name());
+    assertEquals(0, new BigDecimal("20.00").compareTo(sale.changeRefund().getAmount()));
+    assertEquals(sale.payment().getId(), sale.changeRefund().getPaymentId());
+    assertNotNull(sale.changeRefund().getPaymentTransactionId());
+    assertEquals(1, cashDebitTxnCount(org));
+
+    // Goods left the shelf exactly once.
+    assertEquals(7, stockQty(org, product));
   }
 
   /**
@@ -517,5 +572,21 @@ class InStoreSaleIT {
 
   private int tableCount(org.jooq.Table<?> table) {
     return dsl.fetchCount(table);
+  }
+
+  /** VERIFIED cash DEBIT transactions in the org — the recorded counter-change hand-backs. */
+  private int cashDebitTxnCount(UUID org) {
+    var txn = com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
+    return dsl.fetchCount(
+        dsl.selectFrom(txn)
+            .where(
+                txn.ORG_ID
+                    .eq(org)
+                    .and(
+                        txn.DIRECTION.eq(
+                            com.loai.inventory.repository.generated.enums.PaymentDirection.DEBIT))
+                    .and(
+                        txn.PROVIDER.eq(
+                            com.loai.inventory.repository.generated.enums.PaymentProvider.cash))));
   }
 }

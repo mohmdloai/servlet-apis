@@ -82,9 +82,15 @@ Observable post-commit: order **PAID → CLOSED** (DRAFT/RECEIVED/ISSUED exist o
   (unchanged, still requires the `Idempotency-Key` header).
 
 ### Out (deferred)
-- **Exact tender only**: payment amount equals `grand_total`. Overpaid (cashier hands back change)
-  and underpaid (chase / CreditNote partial-accept) both need the Refund/CreditNote machinery — a
-  later slice. A non-exact amount is rejected `400`.
+- **Exact tender only** *(since lifted for overpay)*: this slice shipped exact-tender; once the
+  Refund machinery landed, **overpaid tender was implemented** — the payment records the full
+  tender, the invoice allocates its own total, and the excess is returned as an **EXECUTED cash
+  change refund** in the same checkout txn (`payment.md` §Overpaid (in-store)). **Underpaid stays
+  rejected** (`400`): v1 releases goods only against full payment (`salesOrder.md`: "pay full or
+  cancel"; `fulfillment.md`: PAID before goods move), and partial-accept is a MANAGER CreditNote
+  decision, not a STAFF checkout path. The designed remedy for a short tender is **split tender**
+  (several tenders covering one sale in the same checkout) — design in
+  [`payment.md` §Split tender (in-store)](../sys-analysis/outbound/payment.md), not yet implemented.
 - **No barcode lookup**: lines are by `product_id` (same shape as online). `(org_id, barcode)`
   resolution is a thin add-on for a later slice.
 - **No discount proration** — `discount_total` is 0 in v1 (matches the online invoice).
