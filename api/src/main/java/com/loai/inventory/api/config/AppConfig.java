@@ -357,6 +357,7 @@ public class AppConfig {
         new SalesOrderService(
             dsl,
             salesOrderRepositoryFactory,
+            orgRepositoryFactory,
             reservationService,
             fulfillmentService,
             paymentService,

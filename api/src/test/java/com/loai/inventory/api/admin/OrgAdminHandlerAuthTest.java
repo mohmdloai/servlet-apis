@@ -69,7 +69,8 @@ class OrgAdminHandlerAuthTest {
   }
 
   private PlatformOrgService.OrgWithHealth someOrg() {
-    Org org = new Org(ORG, "Acme", "acme", true, null, OffsetDateTime.now(), OffsetDateTime.now());
+    Org org =
+        new Org(ORG, "Acme", "acme", true, null, 1440, OffsetDateTime.now(), OffsetDateTime.now());
     return new PlatformOrgService.OrgWithHealth(org, new OrgHealth(0, 0, 0, 0));
   }
 
@@ -143,7 +144,8 @@ class OrgAdminHandlerAuthTest {
   @Test
   void suspend_allowedForAdmin() throws IOException {
     PlatformOrgService service = Mockito.mock(PlatformOrgService.class);
-    Org org = new Org(ORG, "Acme", "acme", false, null, OffsetDateTime.now(), OffsetDateTime.now());
+    Org org =
+        new Org(ORG, "Acme", "acme", false, null, 1440, OffsetDateTime.now(), OffsetDateTime.now());
     when(service.suspend(any(), any(), eq(ORG), any())).thenReturn(org);
     Resp resp = new Resp();
     handler(service)

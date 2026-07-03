@@ -30,6 +30,7 @@ import com.loai.inventory.repository.generated.enums.ActorType;
 import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InvoiceService;
 import com.loai.inventory.service.NotificationService;
+import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.ReservationService;
 import com.loai.inventory.service.SalesOrderService;
@@ -144,6 +145,7 @@ class CustomerResolutionAtPlacementIT {
         new SalesOrderService(
             dsl,
             new SalesOrderRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
             reservationService,
             fulfillmentService,
             paymentService,
@@ -416,46 +418,81 @@ class CustomerResolutionAtPlacementIT {
   }
 
   /**
-   * Empirical proof of the "reservation TTL is not per-org" gap: the hold window is the hardcoded
-   * {@code ONLINE_TTL = 24h} for every org — expires_at is always exactly placed_at + 24h, and two
-   * different orgs get an identical window (no per-org override feeds it).
+   * Per-org payment-hold window ({@code reservation.md} §Default TTL, "Configurable per-org" —
+   * V47): placement stamps {@code expires_at = placed_at + org.order_ttl_minutes}. Two orgs with
+   * different settings get different windows; an untouched org keeps the 1440-minute (24h) default,
+   * so pre-V47 behavior is unchanged.
    */
   @Test
-  void reservationTtl_isFixed24h_identicalAcrossOrgs() {
-    UUID orgA = createOrg("acme");
-    UUID orgB = createOrg("globex");
+  void reservationTtl_isPerOrg_defaultStays24h() {
+    UUID orgA = createOrg("acme"); // flash-sale org: 2h window
+    UUID orgB = createOrg("globex"); // B2B org: 72h window
+    UUID orgC = createOrg("initech"); // untouched: default 1440
+    setOrderTtlMinutes(orgA, 120);
+    setOrderTtlMinutes(orgB, 4320);
     UUID staffA = createUser("a@acme.test");
     UUID staffB = createUser("b@globex.test");
+    UUID staffC = createUser("c@initech.test");
     UUID pa = createProduct(orgA, "A");
     UUID pb = createProduct(orgB, "B");
+    UUID pc = createProduct(orgC, "C");
     createInventory(orgA, pa, 10, 0);
     createInventory(orgB, pb, 10, 0);
+    createInventory(orgC, pc, 10, 0);
 
-    UUID orderA =
-        service
-            .placeOnlineOrder(
-                orgA,
-                new CustomerInput("Shared", "s@a.test", null, null),
-                List.of(new OrderLineInput(pa, 1)),
-                UUID.randomUUID().toString(),
-                null,
-                actor(staffA))
-            .order()
-            .getId();
-    UUID orderB =
-        service
-            .placeOnlineOrder(
-                orgB,
-                new CustomerInput("Shared", "s@b.test", null, null),
-                List.of(new OrderLineInput(pb, 1)),
-                UUID.randomUUID().toString(),
-                null,
-                actor(staffB))
-            .order()
-            .getId();
+    UUID orderA = placeOne(orgA, staffA, pa, "s@a.test");
+    UUID orderB = placeOne(orgB, staffB, pb, "s@b.test");
+    UUID orderC = placeOne(orgC, staffC, pc, "s@c.test");
 
-    assertEquals(Duration.ofHours(24), holdWindow(orderA));
-    assertEquals(Duration.ofHours(24), holdWindow(orderB), "every org gets the same fixed 24h TTL");
+    assertEquals(Duration.ofMinutes(120), holdWindow(orderA), "flash-sale org gets its 2h window");
+    assertEquals(Duration.ofMinutes(4320), holdWindow(orderB), "B2B org gets its 72h window");
+    assertEquals(Duration.ofHours(24), holdWindow(orderC), "untouched org keeps the 24h default");
+  }
+
+  /**
+   * The knob's real path is {@code PUT /api/orgs/{orgId}} → {@link OrgService#update}: a value
+   * inside the V47 bounds sticks and immediately drives placement; out-of-bounds values are a 400
+   * (insta-expiring / immortal orders are impossible to configure).
+   */
+  @Test
+  void orderTtl_updatableViaOrgService_boundsEnforced() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("staff@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 0);
+    OrgService orgService =
+        new OrgService(
+            dsl,
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.UserRepositoryFactoryImpl());
+
+    assertEquals(1440, orgService.getById(org).getOrderTtlMinutes(), "V47 default");
+
+    orgService.update(org, "acme", null, 60);
+    assertEquals(60, orgService.getById(org).getOrderTtlMinutes());
+    UUID orderId = placeOne(org, staff, product, "s@a.test");
+    assertEquals(Duration.ofMinutes(60), holdWindow(orderId));
+
+    assertThrows(ValidationException.class, () -> orgService.update(org, "acme", null, 14));
+    assertThrows(ValidationException.class, () -> orgService.update(org, "acme", null, 43_201));
+    assertEquals(60, orgService.getById(org).getOrderTtlMinutes(), "rejected values don't stick");
+  }
+
+  private UUID placeOne(UUID org, UUID staff, UUID product, String email) {
+    return service
+        .placeOnlineOrder(
+            org,
+            new CustomerInput("Shared", email, null, null),
+            List.of(new OrderLineInput(product, 1)),
+            UUID.randomUUID().toString(),
+            null,
+            actor(staff))
+        .order()
+        .getId();
+  }
+
+  private void setOrderTtlMinutes(UUID org, int minutes) {
+    dsl.update(ORG).set(ORG.ORDER_TTL_MINUTES, minutes).where(ORG.ID.eq(org)).execute();
   }
 
   // ───────────────────────────── seed helpers ─────────────────────────────

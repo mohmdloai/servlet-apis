@@ -11,6 +11,7 @@ public class OrgResponse {
   private String slug;
   private boolean active;
   private BigDecimal refundApprovalThreshold;
+  private Integer orderTtlMinutes;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -23,6 +24,7 @@ public class OrgResponse {
     r.slug = o.getSlug();
     r.active = o.isActive();
     r.refundApprovalThreshold = o.getRefundApprovalThreshold();
+    r.orderTtlMinutes = o.getOrderTtlMinutes();
     r.createdAt = o.getCreatedAt();
     r.updatedAt = o.getUpdatedAt();
     return r;
@@ -46,6 +48,10 @@ public class OrgResponse {
 
   public BigDecimal getRefundApprovalThreshold() {
     return refundApprovalThreshold;
+  }
+
+  public Integer getOrderTtlMinutes() {
+    return orderTtlMinutes;
   }
 
   public OffsetDateTime getCreatedAt() {

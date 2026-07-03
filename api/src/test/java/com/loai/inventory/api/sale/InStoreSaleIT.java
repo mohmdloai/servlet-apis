@@ -149,6 +149,7 @@ class InStoreSaleIT {
         new SalesOrderService(
             dsl,
             new SalesOrderRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
             reservationService,
             fulfillmentService,
             paymentService,
