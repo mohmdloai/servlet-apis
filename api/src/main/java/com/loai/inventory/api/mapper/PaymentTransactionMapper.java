@@ -1,11 +1,14 @@
 package com.loai.inventory.api.mapper;
 
+import com.loai.inventory.api.dto.OrphanRefundResponse;
 import com.loai.inventory.api.dto.PaymentTransactionResponse;
+import com.loai.inventory.api.dto.RefundOrphanRequest;
 import com.loai.inventory.api.dto.ResolveOrphanRequest;
 import com.loai.inventory.api.dto.VerifyPaymentTransactionRequest;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.service.PaymentService.OrderRef;
+import com.loai.inventory.service.PaymentTransactionService.OrphanRefundResult;
 import com.loai.inventory.service.PaymentTransactionService.VerifyCommand;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
 
@@ -41,6 +44,18 @@ public final class PaymentTransactionMapper {
       throw new ValidationException("request body is required");
     }
     return new OrderRef(req.getSalesOrderId(), req.getOrderNumber());
+  }
+
+  /** Refund method chosen for an orphan refund; null → service defaults to the txn's provider. */
+  public static PaymentProvider toRefundMethod(RefundOrphanRequest req) {
+    if (req == null || req.getMethod() == null || req.getMethod().isBlank()) {
+      return null;
+    }
+    return parseProvider(req.getMethod());
+  }
+
+  public static OrphanRefundResponse toResponse(OrphanRefundResult result) {
+    return OrphanRefundResponse.from(result.transaction(), result.payment(), result.refund());
   }
 
   /** Accept either the enum name ({@code INSTAPAY_MANUAL}) or the DB literal ({@code cash}). */

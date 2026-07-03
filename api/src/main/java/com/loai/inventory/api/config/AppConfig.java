@@ -306,9 +306,27 @@ public class AppConfig {
             paymentTransactionRepositoryFactory);
     this.paymentDisputeService =
         new PaymentDisputeService(dsl, paymentRepositoryFactory, refundAllocationRepositoryFactory);
+    // RefundService is built before PaymentTransactionService and FulfillmentService: the
+    // orphan-refund path (PaymentTransactionService.refundOrphan) and the failed-fulfillment
+    // refund path (FulfillmentService.refundFailed) both reuse
+    // RefundService.createDirectPendingInTx.
+    this.refundService =
+        new RefundService(
+            dsl,
+            refundRepositoryFactory,
+            refundAllocationRepositoryFactory,
+            creditNoteRepositoryFactory,
+            paymentRepositoryFactory,
+            paymentAllocationRepositoryFactory,
+            paymentTransactionRepositoryFactory,
+            orgRepositoryFactory);
     this.paymentTransactionService =
         new PaymentTransactionService(
-            dsl, paymentTransactionRepositoryFactory, paymentRepositoryFactory, paymentService);
+            dsl,
+            paymentTransactionRepositoryFactory,
+            paymentRepositoryFactory,
+            paymentService,
+            refundService);
     this.invoiceService =
         new InvoiceService(
             salesInvoiceRepositoryFactory,
@@ -323,18 +341,6 @@ public class AppConfig {
             salesOrderRepositoryFactory,
             customerRepositoryFactory,
             invoiceService);
-    // RefundService is built before FulfillmentService: the failed-fulfillment refund path
-    // (FulfillmentService.refundFailed) reuses RefundService.createDirectPendingInTx.
-    this.refundService =
-        new RefundService(
-            dsl,
-            refundRepositoryFactory,
-            refundAllocationRepositoryFactory,
-            creditNoteRepositoryFactory,
-            paymentRepositoryFactory,
-            paymentAllocationRepositoryFactory,
-            paymentTransactionRepositoryFactory,
-            orgRepositoryFactory);
     this.fulfillmentService =
         new FulfillmentService(
             dsl,

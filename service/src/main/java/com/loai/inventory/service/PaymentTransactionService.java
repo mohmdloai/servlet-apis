@@ -10,6 +10,7 @@ import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
 import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.PaymentVerificationStatus;
+import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
@@ -45,16 +46,19 @@ public final class PaymentTransactionService {
   private final PaymentTransactionRepositoryFactory txnRepoFactory;
   private final PaymentRepositoryFactory paymentRepoFactory;
   private final PaymentService paymentService;
+  private final RefundService refundService;
 
   public PaymentTransactionService(
       DSLContext rootDsl,
       PaymentTransactionRepositoryFactory txnRepoFactory,
       PaymentRepositoryFactory paymentRepoFactory,
-      PaymentService paymentService) {
+      PaymentService paymentService,
+      RefundService refundService) {
     this.rootDsl = rootDsl;
     this.txnRepoFactory = txnRepoFactory;
     this.paymentRepoFactory = paymentRepoFactory;
     this.paymentService = paymentService;
+    this.refundService = refundService;
   }
 
   /**
@@ -247,6 +251,160 @@ public final class PaymentTransactionService {
               resolvedBy);
           return new VerifyResult(txn, rec.status(), rec.payment(), rec.order(), false);
         });
+  }
+
+  /**
+   * Result of refunding an unmatched orphan: the transaction, its standalone payment, the refund.
+   */
+  public record OrphanRefundResult(
+      PaymentTransaction transaction, Payment payment, Refund refund, boolean replay) {}
+
+  /**
+   * The refund exit from the orphan queue ({@code state-machines.md} E: the orphan's two
+   * resolutions are "link manually" — {@link #resolveOrphan} — and "refund"). For a VERIFIED CREDIT
+   * transaction that genuinely matches no order (wrong reference, duplicate payment, payment for an
+   * expired order), the admin chooses to send the money back: per {@code refund.md} §"Orphan
+   * transaction", this promotes the transaction into a standalone {@link Payment} ({@code
+   * sales_order_id} NULL, {@code unallocated_amount} = full amount — the V23 "orphan/unmatched"
+   * path) and creates a <b>PENDING</b> direct refund for the full amount against it, atomically. No
+   * money moves here — the admin performs the real reverse transfer and executes the refund
+   * separately (two-step lifecycle, {@code RefundService#execute}).
+   *
+   * <p>The transaction's {@code reconciliation_status} intentionally stays ORPHAN — it never
+   * matched an order, and that history is the truth. Its <b>disposition</b> marker is the 1:1
+   * Payment now bound to it (the same marker {@link #resolveOrphan} uses for replay): orphan-queue
+   * queries exclude transactions that already have a payment. From here on the money's lifecycle
+   * lives on the Payment/Refund aggregates — if this refund is later cancelled, re-invoking this
+   * method (or {@code POST /refunds} directly against the payment) opens a fresh PENDING refund.
+   *
+   * <p>{@code method} defaults to the transaction's own provider (the money goes back the way it
+   * came); the OWNER approval threshold applies exactly as on any other direct refund ({@code
+   * callerIsOwnerOrAdmin}). Idempotent: a replay returns the existing open refund.
+   */
+  public OrphanRefundResult refundOrphan(
+      UUID orgId,
+      UUID transactionId,
+      PaymentProvider method,
+      String notes,
+      UUID actorId,
+      boolean callerIsOwnerOrAdmin) {
+    if (transactionId == null) {
+      throw new ValidationException("transaction id is required");
+    }
+    if (actorId == null) {
+      throw new ValidationException("actor identity is required");
+    }
+
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
+          PaymentRepository paymentRepo = paymentRepoFactory.create(txDsl);
+
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+
+          PaymentTransaction txn =
+              txnRepo
+                  .findByIdForUpdate(orgId, transactionId)
+                  .orElseThrow(
+                      () ->
+                          new NotFoundException(
+                              "payment transaction " + transactionId + " not found"));
+
+          // A Payment already bound to this transaction means it was dispositioned before.
+          Optional<Payment> existing = paymentRepo.findByTransactionId(orgId, transactionId);
+          if (existing.isPresent()) {
+            Payment payment = existing.get();
+            if (payment.getSalesOrderId() != null) {
+              throw new ConflictException(
+                  "transaction "
+                      + transactionId
+                      + " was matched to order "
+                      + payment.getSalesOrderId()
+                      + "; refund that order's money via cancellation or a credit note instead");
+            }
+            // Standalone payment from a prior refundOrphan. Open refund → idempotent replay.
+            Optional<Refund> open =
+                refundService.findOpenDirectByPaymentInTx(txDsl, orgId, payment.getId());
+            if (open.isPresent()) {
+              log.info(
+                  "Idempotent orphan-refund replay for transaction {} (refund {})",
+                  transactionId,
+                  open.get().getId());
+              return new OrphanRefundResult(txn, payment, open.get(), true);
+            }
+            // Every prior refund was cancelled — re-open a fresh PENDING one on the same payment.
+            Payment locked =
+                paymentRepo
+                    .findByIdForUpdate(orgId, payment.getId())
+                    .orElseThrow(() -> new NotFoundException("Payment", payment.getId()));
+            Refund reopened =
+                refundService.createDirectPendingInTx(
+                    txDsl,
+                    orgId,
+                    locked,
+                    locked.getUnallocatedAmount(),
+                    method != null ? method : txn.getProvider(),
+                    orphanRefundNotes(notes),
+                    callerIsOwnerOrAdmin,
+                    now);
+            return new OrphanRefundResult(txn, locked, reopened, false);
+          }
+
+          // First disposition: only a VERIFIED, CREDIT, still-ORPHAN transaction can be refunded.
+          if (txn.getDirection() != PaymentDirection.CREDIT) {
+            throw new ValidationException("only CREDIT transactions can be refunded");
+          }
+          if (txn.getVerificationStatus() != PaymentVerificationStatus.VERIFIED) {
+            throw new ConflictException(
+                "transaction is "
+                    + txn.getVerificationStatus()
+                    + "; only a VERIFIED transaction can be refunded");
+          }
+          if (txn.getReconciliationStatus() != PaymentReconciliationStatus.ORPHAN) {
+            throw new ConflictException(
+                "transaction reconciliation is "
+                    + txn.getReconciliationStatus()
+                    + "; only an ORPHAN transaction can be refunded this way");
+          }
+
+          Payment payment =
+              Payment.createUnmatched(
+                  UUID.randomUUID(),
+                  orgId,
+                  txn.getClaimedByCustomerId(),
+                  txn.getId(),
+                  txn.getAmount(),
+                  txn.getCurrency(),
+                  now);
+          paymentRepo.insert(payment);
+
+          Refund refund =
+              refundService.createDirectPendingInTx(
+                  txDsl,
+                  orgId,
+                  payment,
+                  payment.getUnallocatedAmount(),
+                  method != null ? method : txn.getProvider(),
+                  orphanRefundNotes(notes),
+                  callerIsOwnerOrAdmin,
+                  now);
+
+          log.info(
+              "Refunding ORPHAN transaction {} → standalone payment {} + PENDING refund {} "
+                  + "(amount {}, by {})",
+              transactionId,
+              payment.getId(),
+              refund.getId(),
+              refund.getAmount(),
+              actorId);
+          return new OrphanRefundResult(txn, payment, refund, false);
+        });
+  }
+
+  private static String orphanRefundNotes(String notes) {
+    String t = trimOrNull(notes);
+    return t != null ? t : "orphan refund — verified transfer with no matching order";
   }
 
   /** Precise 4xx for a manual match that {@code reconcileAndCreate} did not turn into a MATCHED. */

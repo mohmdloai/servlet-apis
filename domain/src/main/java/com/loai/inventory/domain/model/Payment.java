@@ -75,6 +75,49 @@ public class Payment {
         now);
   }
 
+  /**
+   * A standalone (order-less) payment in {@code RECEIVED} state — the admin promotion of a VERIFIED
+   * ORPHAN transaction that matched no order and is being refunded instead ({@code refund.md}: "the
+   * admin first creates the Payment … then issues a direct Refund"). {@code salesOrderId} stays
+   * null (the V23 "orphan/unmatched Payments" path); {@code customerId} is the claimer when known.
+   */
+  public static Payment createUnmatched(
+      UUID id,
+      UUID orgId,
+      UUID customerId,
+      UUID paymentTransactionId,
+      BigDecimal amount,
+      String currency,
+      OffsetDateTime now) {
+    Objects.requireNonNull(id, "id required");
+    Objects.requireNonNull(orgId, "orgId required");
+    Objects.requireNonNull(paymentTransactionId, "paymentTransactionId required");
+    Objects.requireNonNull(currency, "currency required");
+    Objects.requireNonNull(now, "now required");
+    Objects.requireNonNull(amount, "amount required");
+    if (amount.signum() <= 0) {
+      throw new IllegalArgumentException("amount must be > 0");
+    }
+    BigDecimal scaled = amount.setScale(MONEY_SCALE, MONEY_ROUNDING);
+    return new Payment(
+        id,
+        orgId,
+        customerId,
+        null,
+        paymentTransactionId,
+        scaled,
+        currency,
+        now,
+        now,
+        scaled,
+        BigDecimal.ZERO.setScale(MONEY_SCALE, MONEY_ROUNDING),
+        PaymentStatus.RECEIVED,
+        null,
+        null,
+        null,
+        now);
+  }
+
   /** Reconstitute from persistent state — trusts DB invariants, skips creation-time validation. */
   public static Payment rehydrate(
       UUID id,

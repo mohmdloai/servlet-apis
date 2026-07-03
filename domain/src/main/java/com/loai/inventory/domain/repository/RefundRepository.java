@@ -2,6 +2,7 @@ package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Refund;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -32,4 +33,7 @@ public interface RefundRepository {
 
   /** True if any EXECUTED refund references this credit note — blocks voiding it. */
   boolean existsExecutedByCreditNote(UUID orgId, UUID creditNoteId);
+
+  /** All refunds backed directly by this payment, oldest first. */
+  List<Refund> findByPaymentId(UUID orgId, UUID paymentId);
 }

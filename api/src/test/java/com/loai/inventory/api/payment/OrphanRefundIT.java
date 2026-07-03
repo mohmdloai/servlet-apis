@@ -4,16 +4,19 @@ import static com.loai.inventory.repository.generated.Tables.APP_USER;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
+import static com.loai.inventory.repository.generated.Tables.REFUND;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
-import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
@@ -26,9 +29,13 @@ import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.generated.enums.ActorType;
 import com.loai.inventory.repository.generated.enums.OrderChannel;
 import com.loai.inventory.repository.generated.enums.OrderStatus;
+import com.loai.inventory.repository.generated.enums.PaymentDirection;
+import com.loai.inventory.repository.generated.tables.records.PaymentRecord;
+import com.loai.inventory.repository.generated.tables.records.RefundRecord;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentService.OrderRef;
 import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.PaymentTransactionService.OrphanRefundResult;
 import com.loai.inventory.service.PaymentTransactionService.VerifyCommand;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
 import com.loai.inventory.service.RefundService;
@@ -50,17 +57,20 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * Integration coverage for orphan resolution ({@code FLOW.md} §"ORPHAN → admin queue"; {@code
- * state-machines.md}: "manual InstaPay will produce orphans on day 1"). An admin records a manual
- * InstaPay arrival with no usable order reference (→ ORPHAN), then later matches it to a chosen
- * order via {@link PaymentTransactionService#resolveOrphan}, reusing the same reconcile / prepaid /
- * SO→PAID path as the automated flow.
+ * Integration coverage for the orphan queue's <b>refund exit</b> ({@code state-machines.md} E: an
+ * ORPHAN's two resolutions are "link manually" and "refund"; {@code refund.md} §"Orphan
+ * transaction": the admin "first creates the Payment … then issues a direct Refund"). A VERIFIED
+ * manual-InstaPay arrival that genuinely matches no order (wrong reference, duplicate payment,
+ * payment for an expired order) is promoted by {@link PaymentTransactionService#refundOrphan} into
+ * a standalone order-less {@code payment} plus a PENDING direct refund, then executed through the
+ * ordinary two-step refund lifecycle.
  *
- * <p>Drives the service directly against the real jOOQ repositories — no Tomcat. MANAGER-only
- * authorization is enforced in the handler and covered separately.
+ * <p>Drives the services directly against the real jOOQ repositories — no Tomcat. MANAGER-only
+ * authorization is enforced in the handler; the OWNER approval threshold is exercised here via the
+ * {@code callerIsOwnerOrAdmin} flag.
  */
 @Testcontainers
-class OrphanResolutionIT {
+class OrphanRefundIT {
 
   @Container
   static final PostgreSQLContainer<?> PG =
@@ -72,6 +82,7 @@ class OrphanResolutionIT {
   static HikariDataSource dataSource;
   static DSLContext dsl;
   static PaymentTransactionService service;
+  static RefundService refundService;
 
   private final AtomicInteger orderSeq = new AtomicInteger(1);
   private final AtomicInteger refSeq = new AtomicInteger(1);
@@ -99,7 +110,7 @@ class OrphanResolutionIT {
             new PaymentRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl());
-    RefundService refundService =
+    refundService =
         new RefundService(
             dsl,
             new RefundRepositoryFactoryImpl(),
@@ -128,184 +139,172 @@ class OrphanResolutionIT {
   @BeforeEach
   void freshSchema() {
     dsl.execute(
-        "TRUNCATE payment, payment_transaction, sales_order_line, sales_order, customer, product,"
-            + " app_user, org RESTART IDENTITY CASCADE");
+        "TRUNCATE refund, payment, payment_transaction, sales_order_line, sales_order, customer,"
+            + " product, app_user, org RESTART IDENTITY CASCADE");
   }
 
   // ───────────────────────────── scenarios ─────────────────────────────
 
   @Test
-  void resolveByOrderNumber_exactCover_createsPaymentAndFlipsOrderToPaid() {
+  void refundOrphan_promotesToStandalonePaymentAndPendingRefund() {
     UUID orgId = createOrg("acme");
     UUID admin = createUser("admin@acme.test");
-    Order order = seedPendingOrder(orgId, "250.00");
     UUID txnId = seedOrphan(orgId, admin, "250.00");
 
-    VerifyResult result =
-        service.resolveOrphan(orgId, txnId, new OrderRef(null, order.number()), admin);
+    OrphanRefundResult result = service.refundOrphan(orgId, txnId, null, null, admin, false);
 
     assertFalse(result.replay());
-    assertEquals("MATCHED", result.reconciliationStatus().name());
-    assertEquals("MATCHED", txnReconciliation(txnId));
 
-    // order flipped to PAID with the prepayment cached.
-    assertEquals("PAID", orderStatus(order.id()));
-    assertEquals(0, new BigDecimal("250.00").compareTo(prepaidAmount(order.id())));
+    // Standalone payment: order-less, RECEIVED, fully unallocated, 1:1 with the orphan txn.
+    PaymentRecord payment = paymentForTxn(txnId);
+    assertNotNull(payment);
+    assertNull(payment.getSalesOrderId());
+    assertEquals("RECEIVED", payment.getStatus().getLiteral().toUpperCase());
+    assertEquals(0, new BigDecimal("250.00").compareTo(payment.getAmount()));
+    assertEquals(0, new BigDecimal("250.00").compareTo(payment.getUnallocatedAmount()));
+    assertEquals(result.payment().getId(), payment.getId());
 
-    // exactly one payment, RECEIVED + fully unallocated, bound to the orphan transaction.
-    assertEquals(1, paymentCountForOrder(order.id()));
-    assertNotNull(result.payment());
-    assertEquals("RECEIVED", result.payment().getStatus().name());
-    assertEquals(txnId, result.payment().getPaymentTransactionId());
-    assertEquals(
-        0, result.payment().getAmount().compareTo(result.payment().getUnallocatedAmount()));
-  }
+    // PENDING direct refund for the full amount, method defaulted to the txn's own provider.
+    RefundRecord refund = refundRow(result.refund().getId());
+    assertEquals("PENDING", refund.getStatus().getLiteral());
+    assertEquals(0, new BigDecimal("250.00").compareTo(refund.getAmount()));
+    assertEquals(payment.getId(), refund.getPaymentId());
+    assertNull(refund.getCreditNoteId());
+    assertEquals("instapay_manual", refund.getMethod().getLiteral());
 
-  @Test
-  void resolveBySalesOrderId_exactCover_matches() {
-    UUID orgId = createOrg("acme");
-    UUID admin = createUser("admin@acme.test");
-    Order order = seedPendingOrder(orgId, "250.00");
-    UUID txnId = seedOrphan(orgId, admin, "250.00");
+    // No money moved yet: no DEBIT transaction exists until the refund executes.
+    assertEquals(0, debitTxnCount(orgId));
 
-    VerifyResult result =
-        service.resolveOrphan(orgId, txnId, new OrderRef(order.id(), null), admin);
-
-    assertEquals("MATCHED", result.reconciliationStatus().name());
-    assertEquals("PAID", orderStatus(order.id()));
-  }
-
-  @Test
-  void resolveUnderpaid_rejectedAndTransactionStaysOrphan() {
-    UUID orgId = createOrg("acme");
-    UUID admin = createUser("admin@acme.test");
-    Order order = seedPendingOrder(orgId, "250.00");
-    UUID txnId = seedOrphan(orgId, admin, "100.00");
-
-    assertThrows(
-        ConflictException.class,
-        () -> service.resolveOrphan(orgId, txnId, new OrderRef(null, order.number()), admin));
-
-    assertEquals("ORPHAN", txnReconciliation(txnId));
-    assertEquals("PENDING_PAYMENT", orderStatus(order.id()));
-    assertEquals(0, paymentCountForOrder(order.id()));
-  }
-
-  @Test
-  void resolveOverpaid_rejectedAndTransactionStaysOrphan() {
-    UUID orgId = createOrg("acme");
-    UUID admin = createUser("admin@acme.test");
-    Order order = seedPendingOrder(orgId, "250.00");
-    UUID txnId = seedOrphan(orgId, admin, "300.00");
-
-    assertThrows(
-        ConflictException.class,
-        () -> service.resolveOrphan(orgId, txnId, new OrderRef(null, order.number()), admin));
-
-    assertEquals("ORPHAN", txnReconciliation(txnId));
-    assertEquals(0, paymentCountForOrder(order.id()));
-  }
-
-  @Test
-  void resolveAgainstNonPendingOrder_rejectedAndTransactionStaysOrphan() {
-    UUID orgId = createOrg("acme");
-    UUID admin = createUser("admin@acme.test");
-    Order order = seedPendingOrder(orgId, "250.00");
-    dsl.update(SALES_ORDER)
-        .set(SALES_ORDER.STATUS, OrderStatus.PAID)
-        .where(SALES_ORDER.ID.eq(order.id()))
-        .execute();
-    UUID txnId = seedOrphan(orgId, admin, "250.00");
-
-    assertThrows(
-        ConflictException.class,
-        () -> service.resolveOrphan(orgId, txnId, new OrderRef(order.id(), null), admin));
-
-    assertEquals("ORPHAN", txnReconciliation(txnId));
-    assertEquals(0, paymentCountForOrder(order.id()));
-  }
-
-  @Test
-  void resolveAgainstUnknownOrder_notFound() {
-    UUID orgId = createOrg("acme");
-    UUID admin = createUser("admin@acme.test");
-    UUID txnId = seedOrphan(orgId, admin, "250.00");
-
-    assertThrows(
-        NotFoundException.class,
-        () -> service.resolveOrphan(orgId, txnId, new OrderRef(null, "SO-9999-99999"), admin));
-
-    assertEquals("ORPHAN", txnReconciliation(txnId));
-  }
-
-  /**
-   * The "orphan with no matching order" case is no longer a dead end: matching still fails cleanly
-   * (NotFound, transaction stays ORPHAN and untouched), and the money's exit is now {@link
-   * PaymentTransactionService#refundOrphan} — covered end-to-end in {@link OrphanRefundIT}.
-   */
-  @Test
-  void verifiedOrphan_noMatchingOrder_matchFailsCleanly_refundIsTheExit() {
-    UUID orgId = createOrg("acme");
-    UUID admin = createUser("admin@acme.test");
-    UUID txnId = seedOrphan(orgId, admin, "250.00"); // VERIFIED + ORPHAN, no order, no payment
-
-    // Matching against a nonexistent order still fails without side effects.
-    assertThrows(
-        NotFoundException.class,
-        () -> service.resolveOrphan(orgId, txnId, new OrderRef(null, "SO-9999-99999"), admin));
+    // Reconciliation history is preserved — the payment is the disposition marker.
     assertEquals("ORPHAN", txnReconciliation(txnId));
     assertEquals("VERIFIED", txnVerification(txnId));
-    assertEquals(0, paymentCountForTxn(txnId));
-
-    // The refund exit promotes the orphan into a standalone payment + PENDING direct refund.
-    var refunded = service.refundOrphan(orgId, txnId, null, null, admin, false);
-    assertEquals(1, paymentCountForTxn(txnId));
-    assertEquals("PENDING", refunded.refund().getStatus().name());
   }
 
   @Test
-  void resolveMissingReference_validationError() {
+  void executeAfterRefundOrphan_movesMoneyOutThroughStandardTwoStepLifecycle() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    UUID txnId = seedOrphan(orgId, admin, "250.00");
+    OrphanRefundResult created = service.refundOrphan(orgId, txnId, null, null, admin, false);
+
+    // Admin performs the real reverse transfer, then records it.
+    refundService.execute(orgId, created.refund().getId(), "IP-RETURN-778899", admin);
+
+    RefundRecord refund = refundRow(created.refund().getId());
+    assertEquals("EXECUTED", refund.getStatus().getLiteral());
+    assertNotNull(refund.getPaymentTransactionId());
+
+    // The standalone payment is drained and terminal.
+    PaymentRecord payment = paymentForTxn(txnId);
+    assertEquals(0, BigDecimal.ZERO.compareTo(payment.getUnallocatedAmount()));
+    assertEquals("REFUNDED", payment.getStatus().getLiteral().toUpperCase());
+
+    // Money-out is on the books: one VERIFIED DEBIT transaction for the full amount.
+    assertEquals(1, debitTxnCount(orgId));
+  }
+
+  @Test
+  void refundOrphan_replay_returnsSameRefundAndCreatesNothing() {
     UUID orgId = createOrg("acme");
     UUID admin = createUser("admin@acme.test");
     UUID txnId = seedOrphan(orgId, admin, "250.00");
 
-    assertThrows(
-        ValidationException.class,
-        () -> service.resolveOrphan(orgId, txnId, new OrderRef(null, null), admin));
-  }
-
-  @Test
-  void resolveUnknownTransaction_notFound() {
-    UUID orgId = createOrg("acme");
-    UUID admin = createUser("admin@acme.test");
-    Order order = seedPendingOrder(orgId, "250.00");
-
-    assertThrows(
-        NotFoundException.class,
-        () ->
-            service.resolveOrphan(orgId, UUID.randomUUID(), new OrderRef(order.id(), null), admin));
-  }
-
-  @Test
-  void resolveTwice_secondCallReplaysExistingPayment() {
-    UUID orgId = createOrg("acme");
-    UUID admin = createUser("admin@acme.test");
-    Order order = seedPendingOrder(orgId, "250.00");
-    UUID txnId = seedOrphan(orgId, admin, "250.00");
-
-    VerifyResult first = service.resolveOrphan(orgId, txnId, new OrderRef(order.id(), null), admin);
-    VerifyResult second =
-        service.resolveOrphan(orgId, txnId, new OrderRef(order.id(), null), admin);
+    OrphanRefundResult first = service.refundOrphan(orgId, txnId, null, null, admin, false);
+    OrphanRefundResult second = service.refundOrphan(orgId, txnId, null, null, admin, false);
 
     assertFalse(first.replay());
     assertTrue(second.replay());
-    assertEquals("MATCHED", second.reconciliationStatus().name());
-    assertNotNull(second.payment());
-    assertNotNull(second.order());
-    assertEquals(order.id(), second.order().getId());
+    assertEquals(first.refund().getId(), second.refund().getId());
+    assertEquals(1, paymentCountForTxn(txnId));
+    assertEquals(1, refundCountForPayment(first.payment().getId()));
+  }
 
-    // still exactly one payment despite two resolve calls.
-    assertEquals(1, paymentCountForOrder(order.id()));
+  @Test
+  void refundOrphan_explicitMethod_overridesProviderDefault() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    UUID txnId = seedOrphan(orgId, admin, "250.00");
+
+    OrphanRefundResult result =
+        service.refundOrphan(
+            orgId, txnId, PaymentProvider.CASH, "returned at counter", admin, false);
+
+    RefundRecord refund = refundRow(result.refund().getId());
+    assertEquals("cash", refund.getMethod().getLiteral());
+    assertEquals("returned at counter", refund.getNotes());
+  }
+
+  @Test
+  void refundOrphan_matchedTransaction_rejected() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    Order order = seedPendingOrder(orgId, "250.00");
+    UUID txnId = seedOrphan(orgId, admin, "250.00");
+    VerifyResult resolved =
+        service.resolveOrphan(orgId, txnId, new OrderRef(order.id(), null), admin);
+    assertEquals("MATCHED", resolved.reconciliationStatus().name());
+
+    // Money attached to an order is refunded via cancellation / credit note, never this path.
+    assertThrows(
+        ConflictException.class,
+        () -> service.refundOrphan(orgId, txnId, null, null, admin, false));
+    assertEquals(0, refundCountForPayment(resolved.payment().getId()));
+  }
+
+  @Test
+  void refundOrphan_unknownTransaction_notFound() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+
+    assertThrows(
+        NotFoundException.class,
+        () -> service.refundOrphan(orgId, UUID.randomUUID(), null, null, admin, false));
+  }
+
+  /**
+   * The OWNER approval threshold (org default 500.00, V33) gates this path exactly like any other
+   * direct refund — and a denial rolls back the whole promotion: no standalone payment may survive
+   * without its refund obligation.
+   */
+  @Test
+  void refundOrphan_aboveThreshold_requiresOwner_andDenialRollsBackAtomically() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    UUID txnId = seedOrphan(orgId, admin, "600.00");
+
+    assertThrows(
+        AuthorizationException.class,
+        () -> service.refundOrphan(orgId, txnId, null, null, admin, false));
+
+    // Atomic: the payment insert was rolled back with the refused refund.
+    assertEquals(0, paymentCountForTxn(txnId));
+    assertEquals("ORPHAN", txnReconciliation(txnId));
+
+    // The OWNER (or system ADMIN) can approve the same disposition.
+    OrphanRefundResult result = service.refundOrphan(orgId, txnId, null, null, admin, true);
+    assertFalse(result.replay());
+    assertEquals(1, paymentCountForTxn(txnId));
+    assertEquals(0, new BigDecimal("600.00").compareTo(result.refund().getAmount()));
+  }
+
+  /** A cancelled PENDING refund re-opens: the money is still held, so the exit must stay usable. */
+  @Test
+  void refundOrphan_afterCancelledRefund_opensFreshPendingOnSamePayment() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    UUID txnId = seedOrphan(orgId, admin, "250.00");
+    OrphanRefundResult first = service.refundOrphan(orgId, txnId, null, null, admin, false);
+
+    refundService.cancel(orgId, first.refund().getId(), "customer unreachable, retry later");
+
+    OrphanRefundResult second = service.refundOrphan(orgId, txnId, null, null, admin, false);
+
+    assertFalse(second.replay());
+    assertNotEquals(first.refund().getId(), second.refund().getId());
+    assertEquals("PENDING", second.refund().getStatus().name());
+    // Same standalone payment underneath — no duplicate promotion.
+    assertEquals(first.payment().getId(), second.payment().getId());
+    assertEquals(1, paymentCountForTxn(txnId));
   }
 
   // ───────────────────────────── helpers ─────────────────────────────
@@ -371,27 +370,30 @@ class OrphanResolutionIT {
     return new Order(orderId, number);
   }
 
-  private String orderStatus(UUID orderId) {
-    return dsl.select(SALES_ORDER.STATUS)
-        .from(SALES_ORDER)
-        .where(SALES_ORDER.ID.eq(orderId))
-        .fetchOne(SALES_ORDER.STATUS)
-        .getLiteral();
-  }
-
-  private BigDecimal prepaidAmount(UUID orderId) {
-    return dsl.select(SALES_ORDER.PREPAID_AMOUNT)
-        .from(SALES_ORDER)
-        .where(SALES_ORDER.ID.eq(orderId))
-        .fetchOne(SALES_ORDER.PREPAID_AMOUNT);
-  }
-
-  private int paymentCountForOrder(UUID orderId) {
-    return dsl.fetchCount(dsl.selectFrom(PAYMENT).where(PAYMENT.SALES_ORDER_ID.eq(orderId)));
+  private PaymentRecord paymentForTxn(UUID txnId) {
+    return dsl.selectFrom(PAYMENT).where(PAYMENT.PAYMENT_TRANSACTION_ID.eq(txnId)).fetchOne();
   }
 
   private int paymentCountForTxn(UUID txnId) {
     return dsl.fetchCount(dsl.selectFrom(PAYMENT).where(PAYMENT.PAYMENT_TRANSACTION_ID.eq(txnId)));
+  }
+
+  private RefundRecord refundRow(UUID refundId) {
+    return dsl.selectFrom(REFUND).where(REFUND.ID.eq(refundId)).fetchOne();
+  }
+
+  private int refundCountForPayment(UUID paymentId) {
+    return dsl.fetchCount(dsl.selectFrom(REFUND).where(REFUND.PAYMENT_ID.eq(paymentId)));
+  }
+
+  private int debitTxnCount(UUID orgId) {
+    return dsl.fetchCount(
+        dsl.selectFrom(PAYMENT_TRANSACTION)
+            .where(
+                PAYMENT_TRANSACTION
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(PAYMENT_TRANSACTION.DIRECTION.eq(PaymentDirection.DEBIT))));
   }
 
   private String txnVerification(UUID txnId) {
