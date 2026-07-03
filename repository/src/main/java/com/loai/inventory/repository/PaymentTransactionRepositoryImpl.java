@@ -1,5 +1,6 @@
 package com.loai.inventory.repository;
 
+import static com.loai.inventory.repository.generated.Tables.PAYMENT;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
 
 import com.loai.inventory.domain.model.PaymentDirection;
@@ -9,9 +10,12 @@ import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.PaymentVerificationStatus;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository;
 import com.loai.inventory.repository.generated.tables.records.PaymentTransactionRecord;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.jooq.Condition;
 import org.jooq.DSLContext;
+import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -121,6 +125,60 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
                 .eq(txn.getId())
                 .and(PAYMENT_TRANSACTION.ORG_ID.eq(txn.getOrgId())))
         .execute();
+  }
+
+  @Override
+  public List<PaymentTransaction> list(UUID orgId, ListFilter filter, int offset, int limit) {
+    var query = dsl.selectFrom(PAYMENT_TRANSACTION).where(conditions(orgId, filter));
+    // Filtered = queue view, oldest first (FIFO worklist); unfiltered = ledger, newest first.
+    var ordered =
+        filter != null && !filter.isEmpty()
+            ? query.orderBy(PAYMENT_TRANSACTION.OCCURRED_AT.asc(), PAYMENT_TRANSACTION.ID.asc())
+            : query.orderBy(PAYMENT_TRANSACTION.RECORDED_AT.desc(), PAYMENT_TRANSACTION.ID.desc());
+    return ordered.offset(offset).limit(limit).fetch().map(this::toPaymentTransaction);
+  }
+
+  @Override
+  public long count(UUID orgId, ListFilter filter) {
+    return dsl.fetchCount(dsl.selectFrom(PAYMENT_TRANSACTION).where(conditions(orgId, filter)));
+  }
+
+  @Override
+  public Optional<PaymentTransaction> findById(UUID orgId, UUID id) {
+    return dsl.selectFrom(PAYMENT_TRANSACTION)
+        .where(PAYMENT_TRANSACTION.ID.eq(id).and(PAYMENT_TRANSACTION.ORG_ID.eq(orgId)))
+        .fetchOptional()
+        .map(this::toPaymentTransaction);
+  }
+
+  private static Condition conditions(UUID orgId, ListFilter filter) {
+    Condition c = PAYMENT_TRANSACTION.ORG_ID.eq(orgId);
+    if (filter == null) {
+      return c;
+    }
+    if (filter.verificationStatus() != null) {
+      c =
+          c.and(
+              PAYMENT_TRANSACTION.VERIFICATION_STATUS.eq(
+                  com.loai.inventory.repository.generated.enums.PaymentVerificationStatus.valueOf(
+                      filter.verificationStatus().name())));
+    }
+    if (filter.reconciliationStatus() != null) {
+      c =
+          c.and(
+              PAYMENT_TRANSACTION.RECONCILIATION_STATUS.eq(
+                  com.loai.inventory.repository.generated.enums.PaymentReconciliationStatus.valueOf(
+                      filter.reconciliationStatus().name())));
+    }
+    if (filter.hasPayment() != null) {
+      Condition payment =
+          DSL.exists(
+              DSL.selectOne()
+                  .from(PAYMENT)
+                  .where(PAYMENT.PAYMENT_TRANSACTION_ID.eq(PAYMENT_TRANSACTION.ID)));
+      c = c.and(filter.hasPayment() ? payment : DSL.not(payment));
+    }
+    return c;
   }
 
   private static com.loai.inventory.repository.generated.enums.PaymentReconciliationStatus

@@ -1,7 +1,10 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.model.PaymentReconciliationStatus;
 import com.loai.inventory.domain.model.PaymentTransaction;
+import com.loai.inventory.domain.model.PaymentVerificationStatus;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -33,4 +36,34 @@ public interface PaymentTransactionRepository {
 
   /** Persist verification + reconciliation columns for an existing transaction. */
   void update(PaymentTransaction transaction);
+
+  /**
+   * Optional list predicates, ANDed; a {@code null} field means "no filter on this column". {@code
+   * hasPayment} filters on the existence of the 1:1 {@code payment} row bound to the transaction
+   * ({@code payment.payment_transaction_id} UNIQUE) — {@code false} is the payment-exists exclusion
+   * the orphan queue is built on ({@code transaction.md} §Operational queries).
+   */
+  record ListFilter(
+      PaymentVerificationStatus verificationStatus,
+      PaymentReconciliationStatus reconciliationStatus,
+      Boolean hasPayment) {
+
+    /** True when no predicate is set — the unfiltered ledger view. */
+    public boolean isEmpty() {
+      return verificationStatus == null && reconciliationStatus == null && hasPayment == null;
+    }
+  }
+
+  /**
+   * Page through the org's transactions. Filtered queries are queue views ordered oldest-first
+   * ({@code occurred_at ASC, id ASC}); an empty filter is the ledger view ordered newest-first
+   * ({@code recorded_at DESC, id DESC}). {@code id} tiebreaks keep pagination deterministic.
+   */
+  List<PaymentTransaction> list(UUID orgId, ListFilter filter, int offset, int limit);
+
+  /** Count the transactions {@link #list} would return for the same filter. */
+  long count(UUID orgId, ListFilter filter);
+
+  /** Read a transaction by id without locking, scoped to the org. */
+  Optional<PaymentTransaction> findById(UUID orgId, UUID id);
 }

@@ -15,12 +15,14 @@ import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository;
+import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListFilter;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.service.PaymentService.OrderRef;
 import com.loai.inventory.service.PaymentService.Reconciliation;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -400,6 +402,58 @@ public final class PaymentTransactionService {
               actorId);
           return new OrphanRefundResult(txn, payment, refund, false);
         });
+  }
+
+  /** One page of the transaction ledger/queues plus the filtered total (for tab badges). */
+  public record TransactionPage(List<PaymentTransaction> items, long total) {}
+
+  /** A transaction with its money context: the 1:1 payment and that payment's order, if any. */
+  public record TransactionDetail(
+      PaymentTransaction transaction, Payment payment, SalesOrder order) {}
+
+  public static final int DEFAULT_PAGE_SIZE = 20;
+  public static final int MAX_PAGE_SIZE = 100;
+
+  /**
+   * Read one page of the org's transactions ({@code stories/list_payment_transactions.md}). The
+   * filter is mechanical — the <b>open orphan queue</b> is the caller's composition {@code
+   * reconciliation_status=ORPHAN + has_payment=false} ({@code transaction.md} §Operational
+   * queries); no queue semantics are added here. {@code page} floors at 0, {@code size} is clamped
+   * to {@code [1, MAX_PAGE_SIZE]}.
+   */
+  public TransactionPage list(UUID orgId, ListFilter filter, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    PaymentTransactionRepository repo = txnRepoFactory.create(rootDsl);
+    List<PaymentTransaction> items = repo.list(orgId, filter, p * s, s);
+    long total = repo.count(orgId, filter);
+    return new TransactionPage(items, total);
+  }
+
+  /**
+   * Read one transaction with its disposition context: the 1:1 payment bound to it (matched at
+   * verify time, resolved, or refund-dispositioned) and, when that payment is order-linked, the
+   * order — the detail view's answer to "how was this handled?".
+   */
+  public TransactionDetail get(UUID orgId, UUID transactionId) {
+    if (transactionId == null) {
+      throw new ValidationException("transaction id is required");
+    }
+    PaymentTransaction txn =
+        txnRepoFactory
+            .create(rootDsl)
+            .findById(orgId, transactionId)
+            .orElseThrow(
+                () -> new NotFoundException("payment transaction " + transactionId + " not found"));
+    Payment payment =
+        paymentRepoFactory.create(rootDsl).findByTransactionId(orgId, transactionId).orElse(null);
+    SalesOrder order =
+        payment == null || payment.getSalesOrderId() == null
+            ? null
+            : paymentService
+                .findOrder(rootDsl, orgId, new OrderRef(payment.getSalesOrderId(), null))
+                .orElse(null);
+    return new TransactionDetail(txn, payment, order);
   }
 
   private static String orphanRefundNotes(String notes) {

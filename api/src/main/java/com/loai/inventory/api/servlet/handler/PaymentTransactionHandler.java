@@ -3,6 +3,7 @@ package com.loai.inventory.api.servlet.handler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.OrphanRefundResponse;
+import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PaymentTransactionResponse;
 import com.loai.inventory.api.dto.RefundOrphanRequest;
 import com.loai.inventory.api.dto.ResolveOrphanRequest;
@@ -12,23 +13,37 @@ import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.PaymentReconciliationStatus;
+import com.loai.inventory.domain.model.PaymentVerificationStatus;
 import com.loai.inventory.domain.model.SecurityContext;
+import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListFilter;
 import com.loai.inventory.service.PaymentService.OrderRef;
 import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.PaymentTransactionService.OrphanRefundResult;
+import com.loai.inventory.service.PaymentTransactionService.TransactionDetail;
+import com.loai.inventory.service.PaymentTransactionService.TransactionPage;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Admin-facing payment-transaction routes (all require MANAGER in the org; system ADMIN bypasses):
+ * Payment-transaction routes. Reads require VIEWER in the org, mutations MANAGER (system ADMIN
+ * bypasses both):
  *
  * <ul>
+ *   <li>{@code GET /api/orgs/{orgId}/payment-transactions} — the reconciliation worklist / ledger
+ *       ({@code stories/list_payment_transactions.md}). Optional ANDed filters {@code
+ *       verification_status}, {@code reconciliation_status}, {@code has_payment} plus {@code
+ *       page}/{@code size}; the open orphan queue is {@code
+ *       ?reconciliation_status=ORPHAN&has_payment=false}.
+ *   <li>{@code GET /api/orgs/{orgId}/payment-transactions/{id}} — one transaction plus its
+ *       disposition context (the 1:1 payment and that payment's order, when they exist).
  *   <li>{@code POST /api/orgs/{orgId}/payment-transactions} — record-and-verify a manual InstaPay
  *       claim. {@code 201 Created} when this call processed it, {@code 200 OK} on an idempotent
  *       replay of an already-verified transaction.
@@ -62,22 +77,31 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
       String remainingPath)
       throws IOException {
     try {
-      if (!"POST".equals(method)) {
-        writeError(resp, 405, "Method not allowed");
-        return;
-      }
-
       String[] parts = splitPath(remainingPath);
-      if (parts.length == 0) {
-        doPost(req, resp, orgId);
-        return;
-      }
-      if (parts.length == 2 && "resolve".equals(parts[1])) {
-        doResolve(req, resp, orgId, parseId(parts[0]));
-        return;
-      }
-      if (parts.length == 2 && "refund".equals(parts[1])) {
-        doRefund(req, resp, orgId, parseId(parts[0]));
+      if ("GET".equals(method)) {
+        if (parts.length == 0) {
+          doList(req, resp, orgId);
+          return;
+        }
+        if (parts.length == 1) {
+          doGet(req, resp, orgId, parseId(parts[0]));
+          return;
+        }
+      } else if ("POST".equals(method)) {
+        if (parts.length == 0) {
+          doPost(req, resp, orgId);
+          return;
+        }
+        if (parts.length == 2 && "resolve".equals(parts[1])) {
+          doResolve(req, resp, orgId, parseId(parts[0]));
+          return;
+        }
+        if (parts.length == 2 && "refund".equals(parts[1])) {
+          doRefund(req, resp, orgId, parseId(parts[0]));
+          return;
+        }
+      } else {
+        writeError(resp, 405, "Method not allowed");
         return;
       }
       throw new ValidationException(
@@ -91,6 +115,43 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
       log.error("Unexpected error in /api/orgs/{}/payment-transactions{}", orgId, remainingPath, e);
       writeError(resp, 500, "Internal server error");
     }
+  }
+
+  /** {@code GET /} — the reconciliation worklist (filtered queue views) / transaction ledger. */
+  private void doList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+
+    ListFilter filter =
+        new ListFilter(
+            enumParam(req, "verification_status", PaymentVerificationStatus.class),
+            enumParam(req, "reconciliation_status", PaymentReconciliationStatus.class),
+            boolParam(req, "has_payment"));
+    // Clamp here too so the envelope echoes the page/size actually served.
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", PaymentTransactionService.DEFAULT_PAGE_SIZE), 1),
+            PaymentTransactionService.MAX_PAGE_SIZE);
+
+    TransactionPage result = service.list(orgId, filter, page, size);
+    List<PaymentTransactionResponse> data =
+        result.items().stream()
+            .map(txn -> PaymentTransactionResponse.from(txn, null, null))
+            .toList();
+    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+  }
+
+  /** {@code GET /{id}} — one transaction plus its disposition payment/order when they exist. */
+  private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+
+    TransactionDetail detail = service.get(orgId, id);
+    writeJson(
+        resp,
+        200,
+        PaymentTransactionResponse.from(detail.transaction(), detail.payment(), detail.order()));
   }
 
   private void doPost(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
@@ -167,6 +228,48 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
       return UUID.fromString(raw);
     } catch (IllegalArgumentException e) {
       throw new ValidationException("Invalid transaction id format: " + raw);
+    }
+  }
+
+  /** Case-insensitive enum query param; absent → null, unknown value → 400 (fail loudly). */
+  private static <E extends Enum<E>> E enumParam(
+      HttpServletRequest req, String name, Class<E> type) {
+    String raw = req.getParameter(name);
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return Enum.valueOf(type, raw.trim().toUpperCase());
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Unknown " + name + ": " + raw);
+    }
+  }
+
+  /** Strict boolean query param; absent → null (no filter), anything but true/false → 400. */
+  private static Boolean boolParam(HttpServletRequest req, String name) {
+    String raw = req.getParameter(name);
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    String v = raw.trim();
+    if ("true".equalsIgnoreCase(v)) {
+      return Boolean.TRUE;
+    }
+    if ("false".equalsIgnoreCase(v)) {
+      return Boolean.FALSE;
+    }
+    throw new ValidationException("Parameter '" + name + "' must be true or false");
+  }
+
+  private static int intParam(HttpServletRequest req, String name, int defaultValue) {
+    String value = req.getParameter(name);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new ValidationException("Parameter '" + name + "' must be an integer");
     }
   }
 
