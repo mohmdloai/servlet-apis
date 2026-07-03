@@ -18,6 +18,7 @@ public class InStoreSaleResponse {
   private Invoice invoice;
   private Payment payment;
   private Fulfillment fulfillment;
+  private Change change;
 
   private InStoreSaleResponse() {}
 
@@ -27,6 +28,7 @@ public class InStoreSaleResponse {
     r.invoice = Invoice.from(sale);
     r.payment = Payment.from(sale);
     r.fulfillment = Fulfillment.from(sale);
+    r.change = Change.from(sale);
     return r;
   }
 
@@ -44,6 +46,10 @@ public class InStoreSaleResponse {
 
   public Fulfillment getFulfillment() {
     return fulfillment;
+  }
+
+  public Change getChange() {
+    return change;
   }
 
   /** The issued + paid invoice summary. */
@@ -131,6 +137,17 @@ public class InStoreSaleResponse {
     static Payment from(InStoreSale sale) {
       com.loai.inventory.domain.model.Payment p = sale.payment();
       return new Payment(p.getId(), p.getStatus().name(), p.getAmount(), p.getUnallocatedAmount());
+    }
+  }
+
+  /**
+   * Counter change handed back for an overpaid tender: the EXECUTED cash refund of the excess.
+   * Omitted (null) for an exact tender.
+   */
+  public record Change(BigDecimal amount, UUID refundId, String status) {
+    static Change from(InStoreSale sale) {
+      com.loai.inventory.domain.model.Refund r = sale.changeRefund();
+      return r == null ? null : new Change(r.getAmount(), r.getId(), r.getStatus().name());
     }
   }
 

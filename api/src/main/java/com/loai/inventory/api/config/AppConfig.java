@@ -355,6 +355,7 @@ public class AppConfig {
             fulfillmentService,
             paymentService,
             invoiceService,
+            refundService,
             notificationService,
             magicLinkService);
     this.creditNoteService =

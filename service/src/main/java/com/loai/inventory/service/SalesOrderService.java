@@ -11,6 +11,7 @@ import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
 import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -61,6 +62,7 @@ public class SalesOrderService {
   private final FulfillmentService fulfillmentService;
   private final PaymentService paymentService;
   private final InvoiceService invoiceService;
+  private final RefundService refundService;
   private final NotificationService notificationService;
   private final MagicLinkService magicLinkService;
 
@@ -71,6 +73,7 @@ public class SalesOrderService {
       FulfillmentService fulfillmentService,
       PaymentService paymentService,
       InvoiceService invoiceService,
+      RefundService refundService,
       NotificationService notificationService,
       MagicLinkService magicLinkService) {
     this.rootDsl = rootDsl;
@@ -79,6 +82,7 @@ public class SalesOrderService {
     this.fulfillmentService = fulfillmentService;
     this.paymentService = paymentService;
     this.invoiceService = invoiceService;
+    this.refundService = refundService;
     this.notificationService = notificationService;
     this.magicLinkService = magicLinkService;
   }
@@ -97,7 +101,11 @@ public class SalesOrderService {
   /** Carries the placed order + its lines + the resolved customer for response mapping. */
   public record Placed(SalesOrder order, List<SalesOrderLine> lines, Customer customer) {}
 
-  /** The full result of an in-store sale: every aggregate created in the one checkout txn. */
+  /**
+   * The full result of an in-store sale: every aggregate created in the one checkout txn. {@code
+   * changeRefund} is the EXECUTED cash refund of the tender's excess over the grand total — null
+   * for an exact tender.
+   */
   public record InStoreSale(
       SalesOrder order,
       List<SalesOrderLine> lines,
@@ -105,7 +113,8 @@ public class SalesOrderService {
       SalesInvoice invoice,
       List<SalesInvoiceLine> invoiceLines,
       Payment payment,
-      List<PaymentAllocation> allocations) {}
+      List<PaymentAllocation> allocations,
+      Refund changeRefund) {}
 
   public Placed placeOnlineOrder(
       UUID orgId,
@@ -265,20 +274,24 @@ public class SalesOrderService {
           List<SalesOrderLine> orderLines = built.lines();
           repo.insert(order, orderLines);
 
-          // v1: exact tender only. The settled amount is the grand total; a different explicit
-          // amount is a 400 (overpay/underpay needs the refund/credit-note machinery — later
-          // slice).
-          BigDecimal amount = order.getGrandTotal();
-          if (payment.amount() != null && payment.amount().compareTo(amount) != 0) {
+          // Tender rules: overpaid is accepted (the customer hands a round amount, the excess is
+          // returned as counter change — payment.md §Overpaid (in-store)); underpaid is rejected —
+          // v1 releases goods only against full payment (salesOrder.md edge case "pay full or
+          // cancel"; fulfillment.md: SalesOrder must be PAID before goods move). Partial-accept
+          // (write off the shortfall) is a MANAGER CreditNote decision, not a STAFF checkout path.
+          BigDecimal grandTotal = order.getGrandTotal();
+          BigDecimal tender = payment.amount() == null ? grandTotal : payment.amount();
+          if (tender.compareTo(grandTotal) < 0) {
             throw new ValidationException(
-                "in-store payment amount "
-                    + payment.amount()
-                    + " must equal grand total "
-                    + amount
-                    + " (exact tender only in v1)");
+                "in-store tender "
+                    + tender
+                    + " is less than grand total "
+                    + grandTotal
+                    + " — underpaid sales are not accepted (v1: pay full or cancel)");
           }
+          BigDecimal change = tender.subtract(grandTotal);
 
-          // 2. Take the money: payment recorded VERIFIED + MATCHED, RECEIVED (unallocated for now).
+          // 2. Take the money: payment recorded for the FULL tender, VERIFIED + MATCHED, RECEIVED.
           Payment paymentRow =
               paymentService.recordInStorePayment(
                   txDsl,
@@ -286,12 +299,14 @@ public class SalesOrderService {
                   order,
                   payment.provider(),
                   payment.providerRef(),
-                  amount,
+                  tender,
                   verifiedBy,
                   now);
 
-          // 3. Order DRAFT → PAID (prepaid = grand total) — paid before any goods move.
-          order.markPaid(amount, now);
+          // 3. Order DRAFT → PAID — paid before any goods move. prepaid_amount is the NET money
+          // attached to the order (SUM(payments) − SUM(executed refunds)); the change refund
+          // executes before this transaction commits, so the net is the grand total.
+          order.markPaid(grandTotal, now);
           repo.updatePaymentState(order);
 
           // 4. Release the goods: fulfillment created DELIVERED, stock decremented now (no
@@ -332,28 +347,37 @@ public class SalesOrderService {
           order.closeInStore(now);
           repo.updateFulfillmentState(order);
 
-          // The FIFO allocator mutated its own copy of the payment; surface that (ALLOCATED,
-          // unallocated 0) rather than the as-created RECEIVED instance. v1 is exact tender, so the
-          // single same-txn payment is fully consumed by the invoice — exactly one consumed
-          // payment.
-          // Guard the invariant so overpay/underpay (a later slice) can't silently pick the wrong
-          // one.
+          // The FIFO allocator mutated its own copy of the payment; surface that rather than the
+          // as-created RECEIVED instance. The sale has exactly one same-txn payment — guard the
+          // invariant so a future multi-tender slice can't silently pick the wrong one.
           if (issued.consumedPayments().size() > 1) {
             throw new IllegalStateException(
-                "in-store exact tender expected at most one consumed payment, got "
+                "in-store sale expected at most one consumed payment, got "
                     + issued.consumedPayments().size());
           }
           Payment finalPayment =
               issued.consumedPayments().isEmpty() ? paymentRow : issued.consumedPayments().get(0);
 
+          // 7. Counter change: the allocator consumed the invoice total, leaving the excess as the
+          // payment's unallocated balance — hand it straight back as an EXECUTED cash refund
+          // (payment.md §Overpaid (in-store) steps 4–5). Payment ends ALLOCATED, unallocated 0.
+          RefundService.Executed changeRefund = null;
+          if (change.signum() > 0) {
+            changeRefund =
+                refundService.createExecutedChangeInTx(
+                    txDsl, orgId, finalPayment, change, verifiedBy, now);
+          }
+
           log.info(
-              "In-store sale order id={} orgId={} number={} grandTotal={} invoice={} payment={} status={}",
+              "In-store sale order id={} orgId={} number={} grandTotal={} tender={} change={} invoice={} payment={} status={}",
               order.getId(),
               orgId,
               order.getOrderNumber(),
               order.getGrandTotal(),
+              tender,
+              change,
               issued.invoice().getInvoiceNumber(),
-              paymentRow.getStatus(),
+              finalPayment.getStatus(),
               order.getStatus());
 
           return new InStoreSale(
@@ -363,7 +387,8 @@ public class SalesOrderService {
               issued.invoice(),
               issued.lines(),
               finalPayment,
-              issued.allocations());
+              issued.allocations(),
+              changeRefund == null ? null : changeRefund.refund());
         });
   }
 
