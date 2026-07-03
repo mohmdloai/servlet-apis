@@ -8,6 +8,7 @@ import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrderChannel;
+import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
 import com.loai.inventory.domain.model.PaymentProvider;
@@ -16,6 +17,7 @@ import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
+import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.service.email.EmailAddresses;
@@ -53,11 +55,11 @@ public class SalesOrderService {
 
   private static final Logger log = LoggerFactory.getLogger(SalesOrderService.class);
   private static final BigDecimal DEFAULT_TAX_RATE = BigDecimal.ZERO;
-  private static final Duration ONLINE_TTL = Duration.ofHours(24);
   private static final String CURRENCY_EGP = "EGP";
 
   private final DSLContext rootDsl;
   private final SalesOrderRepositoryFactory repoFactory;
+  private final OrgRepositoryFactory orgRepoFactory;
   private final ReservationService reservationService;
   private final FulfillmentService fulfillmentService;
   private final PaymentService paymentService;
@@ -69,6 +71,7 @@ public class SalesOrderService {
   public SalesOrderService(
       DSLContext rootDsl,
       SalesOrderRepositoryFactory repoFactory,
+      OrgRepositoryFactory orgRepoFactory,
       ReservationService reservationService,
       FulfillmentService fulfillmentService,
       PaymentService paymentService,
@@ -78,6 +81,7 @@ public class SalesOrderService {
       MagicLinkService magicLinkService) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
+    this.orgRepoFactory = orgRepoFactory;
     this.reservationService = reservationService;
     this.fulfillmentService = fulfillmentService;
     this.paymentService = paymentService;
@@ -161,8 +165,16 @@ public class SalesOrderService {
           SalesOrder order = built.order();
           List<SalesOrderLine> orderLines = built.lines();
 
-          // Online: DRAFT → PENDING_PAYMENT with a TTL, persist, then reserve stock atomically.
-          OffsetDateTime expiresAt = now.plus(ONLINE_TTL);
+          // Online: DRAFT → PENDING_PAYMENT with the org's payment-hold window (reservation.md
+          // §Default TTL, "Configurable per-org" — V47, default 1440 min), read inside this txn so
+          // the stamped expires_at always reflects the org's current setting. The TTL sweeper keys
+          // off expires_at alone.
+          Org org =
+              orgRepoFactory
+                  .create(txDsl)
+                  .findById(orgId)
+                  .orElseThrow(() -> new NotFoundException("Org", orgId));
+          OffsetDateTime expiresAt = now.plus(Duration.ofMinutes(org.getOrderTtlMinutes()));
           order.markPendingPayment(now, expiresAt);
           repo.insert(order, orderLines);
 

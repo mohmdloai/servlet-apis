@@ -86,18 +86,39 @@ public class OrgService {
   }
 
   public Org update(UUID id, String name) {
-    return update(id, name, null);
+    return update(id, name, null, null);
   }
 
+  public Org update(UUID id, String name, java.math.BigDecimal refundApprovalThreshold) {
+    return update(id, name, refundApprovalThreshold, null);
+  }
+
+  /** Bounds of {@code org.order_ttl_minutes}, mirroring the V47 CHECK (15 min … 30 days). */
+  public static final int MIN_ORDER_TTL_MINUTES = 15;
+
+  public static final int MAX_ORDER_TTL_MINUTES = 43_200;
+
   /**
-   * Update an org's name and, optionally, its {@code refundApprovalThreshold} (the per-org boundary
-   * above which returning money requires an OWNER). A null threshold leaves the current value
+   * Update an org's name and, optionally, its business-policy knobs: {@code
+   * refundApprovalThreshold} (the per-org boundary above which returning money requires an OWNER)
+   * and {@code orderTtlMinutes} (the payment-hold window stamped on reserved online/phone orders —
+   * {@code reservation.md} §Default TTL, "Configurable per-org"). A null leaves the current value
    * unchanged.
    */
-  public Org update(UUID id, String name, java.math.BigDecimal refundApprovalThreshold) {
+  public Org update(
+      UUID id, String name, java.math.BigDecimal refundApprovalThreshold, Integer orderTtlMinutes) {
     validateName(name);
     if (refundApprovalThreshold != null && refundApprovalThreshold.signum() < 0) {
       throw new ValidationException("refund_approval_threshold must be >= 0");
+    }
+    if (orderTtlMinutes != null
+        && (orderTtlMinutes < MIN_ORDER_TTL_MINUTES || orderTtlMinutes > MAX_ORDER_TTL_MINUTES)) {
+      throw new ValidationException(
+          "order_ttl_minutes must be between "
+              + MIN_ORDER_TTL_MINUTES
+              + " and "
+              + MAX_ORDER_TTL_MINUTES
+              + " (15 minutes to 30 days)");
     }
 
     return rootDsl.transactionResult(
@@ -109,6 +130,9 @@ public class OrgService {
           existing.setName(name);
           if (refundApprovalThreshold != null) {
             existing.setRefundApprovalThreshold(refundApprovalThreshold);
+          }
+          if (orderTtlMinutes != null) {
+            existing.setOrderTtlMinutes(orderTtlMinutes);
           }
 
           Org updated = orgRepo.update(existing);

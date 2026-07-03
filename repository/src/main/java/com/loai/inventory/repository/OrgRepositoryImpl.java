@@ -96,6 +96,7 @@ public final class OrgRepositoryImpl implements OrgRepository {
             .set(ORG.NAME, org.getName())
             .set(ORG.ACTIVE, org.isActive())
             .set(ORG.REFUND_APPROVAL_THRESHOLD, org.getRefundApprovalThreshold())
+            .set(ORG.ORDER_TTL_MINUTES, org.getOrderTtlMinutes())
             .set(ORG.UPDATED_AT, OffsetDateTime.now())
             .where(ORG.ID.eq(org.getId()))
             .returning()
@@ -145,6 +146,7 @@ public final class OrgRepositoryImpl implements OrgRepository {
         r.getSlug(),
         r.getActive(),
         r.getRefundApprovalThreshold(),
+        r.getOrderTtlMinutes(),
         r.getCreatedAt(),
         r.getUpdatedAt());
   }

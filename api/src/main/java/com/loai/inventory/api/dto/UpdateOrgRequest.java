@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 public class UpdateOrgRequest {
   private String name;
   private BigDecimal refundApprovalThreshold;
+  private Integer orderTtlMinutes;
 
   public UpdateOrgRequest() {}
 
@@ -22,5 +23,13 @@ public class UpdateOrgRequest {
 
   public void setRefundApprovalThreshold(BigDecimal refundApprovalThreshold) {
     this.refundApprovalThreshold = refundApprovalThreshold;
+  }
+
+  public Integer getOrderTtlMinutes() {
+    return orderTtlMinutes;
+  }
+
+  public void setOrderTtlMinutes(Integer orderTtlMinutes) {
+    this.orderTtlMinutes = orderTtlMinutes;
   }
 }

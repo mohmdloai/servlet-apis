@@ -10,6 +10,7 @@ public class Org {
   private String slug;
   private boolean active;
   private BigDecimal refundApprovalThreshold;
+  private int orderTtlMinutes;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -21,6 +22,7 @@ public class Org {
       String slug,
       boolean active,
       BigDecimal refundApprovalThreshold,
+      int orderTtlMinutes,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {
     this.id = id;
@@ -28,6 +30,7 @@ public class Org {
     this.slug = slug;
     this.active = active;
     this.refundApprovalThreshold = refundApprovalThreshold;
+    this.orderTtlMinutes = orderTtlMinutes;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;
   }
@@ -70,6 +73,15 @@ public class Org {
 
   public void setRefundApprovalThreshold(BigDecimal refundApprovalThreshold) {
     this.refundApprovalThreshold = refundApprovalThreshold;
+  }
+
+  /** Payment-hold window in minutes for reserved online/phone orders (V47, default 1440). */
+  public int getOrderTtlMinutes() {
+    return orderTtlMinutes;
+  }
+
+  public void setOrderTtlMinutes(int orderTtlMinutes) {
+    this.orderTtlMinutes = orderTtlMinutes;
   }
 
   public OffsetDateTime getCreatedAt() {
