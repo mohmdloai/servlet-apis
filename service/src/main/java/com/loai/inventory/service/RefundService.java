@@ -30,6 +30,7 @@ import com.loai.inventory.domain.repository.RefundRepositoryFactory;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -334,6 +335,19 @@ public final class RefundService {
         amount,
         payment.getId());
     return refund;
+  }
+
+  /**
+   * The first non-CANCELLED refund backed directly by {@code paymentId}, read inside the caller's
+   * transaction. Used by the orphan-refund path as its idempotent-replay marker: a standalone
+   * payment with an open (PENDING or EXECUTED) direct refund was already dispositioned, so a
+   * retried request returns that refund instead of creating a second one.
+   */
+  public Optional<Refund> findOpenDirectByPaymentInTx(
+      DSLContext txDsl, UUID orgId, UUID paymentId) {
+    return refundRepoFactory.create(txDsl).findByPaymentId(orgId, paymentId).stream()
+        .filter(r -> r.getStatus() != RefundStatus.CANCELLED)
+        .findFirst();
   }
 
   /**

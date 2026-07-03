@@ -8,6 +8,7 @@ import com.loai.inventory.domain.model.RefundStatus;
 import com.loai.inventory.domain.repository.RefundRepository;
 import com.loai.inventory.repository.generated.tables.records.RefundRecord;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -123,6 +124,15 @@ public final class RefundRepositoryImpl implements RefundRepository {
                     .and(
                         REFUND.STATUS.eq(
                             com.loai.inventory.repository.generated.enums.RefundStatus.EXECUTED))));
+  }
+
+  @Override
+  public List<Refund> findByPaymentId(UUID orgId, UUID paymentId) {
+    return dsl.selectFrom(REFUND)
+        .where(REFUND.ORG_ID.eq(orgId).and(REFUND.PAYMENT_ID.eq(paymentId)))
+        .orderBy(REFUND.CREATED_AT.asc(), REFUND.ID.asc())
+        .fetch()
+        .map(this::toRefund);
   }
 
   private Refund toRefund(RefundRecord r) {

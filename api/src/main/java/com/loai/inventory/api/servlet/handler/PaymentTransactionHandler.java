@@ -2,7 +2,9 @@ package com.loai.inventory.api.servlet.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.OrphanRefundResponse;
 import com.loai.inventory.api.dto.PaymentTransactionResponse;
+import com.loai.inventory.api.dto.RefundOrphanRequest;
 import com.loai.inventory.api.dto.ResolveOrphanRequest;
 import com.loai.inventory.api.dto.VerifyPaymentTransactionRequest;
 import com.loai.inventory.api.mapper.PaymentTransactionMapper;
@@ -13,10 +15,12 @@ import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.PaymentService.OrderRef;
 import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.PaymentTransactionService.OrphanRefundResult;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +35,10 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code POST /api/orgs/{orgId}/payment-transactions/{id}/resolve} — orphan resolution:
  *       attach an ORPHAN transaction's payment to an admin-chosen order. {@code 201 Created} when
  *       this call created the payment, {@code 200 OK} on an idempotent replay.
+ *   <li>{@code POST /api/orgs/{orgId}/payment-transactions/{id}/refund} — the orphan queue's other
+ *       exit: promote a VERIFIED ORPHAN transaction that matches no order into a standalone payment
+ *       plus a PENDING direct refund (executed separately via {@code /refunds/{id}/execute}).
+ *       {@code 201 Created} / {@code 200 OK} on replay.
  * </ul>
  */
 public class PaymentTransactionHandler implements OrgResourceHandler {
@@ -66,6 +74,10 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
       }
       if (parts.length == 2 && "resolve".equals(parts[1])) {
         doResolve(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
+      if (parts.length == 2 && "refund".equals(parts[1])) {
+        doRefund(req, resp, orgId, parseId(parts[0]));
         return;
       }
       throw new ValidationException(
@@ -110,6 +122,37 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
     writeJson(resp, result.replay() ? 200 : 201, out);
   }
 
+  /** {@code POST /{id}/refund} — admin refunds an ORPHAN transaction that matches no order. */
+  private void doRefund(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID transactionId)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
+
+    RefundOrphanRequest body = readBodyOrNull(req, RefundOrphanRequest.class);
+
+    OrphanRefundResult result =
+        service.refundOrphan(
+            orgId,
+            transactionId,
+            PaymentTransactionMapper.toRefundMethod(body),
+            body == null ? null : body.getNotes(),
+            sc.actorId(),
+            isOwnerOrAdmin(sc, orgId));
+
+    OrphanRefundResponse out = PaymentTransactionMapper.toResponse(result);
+    // 201 when this call created the payment + PENDING refund, 200 on an idempotent replay.
+    writeJson(resp, result.replay() ? 200 : 201, out);
+  }
+
+  /** Above-threshold direct refunds escalate to OWNER; system ADMIN bypasses (as everywhere). */
+  private static boolean isOwnerOrAdmin(SecurityContext sc, UUID orgId) {
+    if (sc.isSystemAdmin()) {
+      return true;
+    }
+    Set<OrgRole> roles = sc.orgRoles() == null ? null : sc.orgRoles().get(orgId);
+    return roles != null && roles.contains(OrgRole.OWNER);
+  }
+
   /** Split {@code remainingPath} ("/{id}/resolve") into its non-empty segments. */
   private static String[] splitPath(String remainingPath) {
     if (remainingPath == null || remainingPath.isEmpty() || "/".equals(remainingPath)) {
@@ -129,6 +172,15 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
 
   private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {
     return mapper.readValue(req.getInputStream(), type);
+  }
+
+  /** Like {@link #readBody} but tolerates an absent/empty body (all-optional request DTOs). */
+  private <T> T readBodyOrNull(HttpServletRequest req, Class<T> type) throws IOException {
+    byte[] raw = req.getInputStream().readAllBytes();
+    if (raw.length == 0) {
+      return null;
+    }
+    return mapper.readValue(raw, type);
   }
 
   private void writeJson(HttpServletResponse resp, int status, Object body) throws IOException {

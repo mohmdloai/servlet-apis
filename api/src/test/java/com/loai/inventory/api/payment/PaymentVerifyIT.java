@@ -12,8 +12,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
+import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
+import com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl;
+import com.loai.inventory.repository.RefundRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.generated.enums.ActorType;
 import com.loai.inventory.repository.generated.enums.OrderChannel;
@@ -22,6 +27,7 @@ import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.PaymentTransactionService.VerifyCommand;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
+import com.loai.inventory.service.RefundService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -97,12 +103,23 @@ class PaymentVerifyIT {
             new PaymentRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl());
+    RefundService refundService =
+        new RefundService(
+            dsl,
+            new RefundRepositoryFactoryImpl(),
+            new RefundAllocationRepositoryFactoryImpl(),
+            new CreditNoteRepositoryFactoryImpl(),
+            new PaymentRepositoryFactoryImpl(),
+            new PaymentAllocationRepositoryFactoryImpl(),
+            new PaymentTransactionRepositoryFactoryImpl(),
+            new OrgRepositoryFactoryImpl());
     service =
         new PaymentTransactionService(
             dsl,
             new PaymentTransactionRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
-            paymentService);
+            paymentService,
+            refundService);
   }
 
   @AfterAll
