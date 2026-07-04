@@ -119,7 +119,8 @@ class OrderCancellationAdversarialIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     service =
         new OrderCancellationService(
             dsl,
@@ -165,7 +166,7 @@ class OrderCancellationAdversarialIT {
     assertTrue(violations.isEmpty(), "reserved_qty != SUM(ACTIVE reservations): " + violations);
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   /** Two unallocated prepayments on one order → one PENDING refund each, summed total, no money. */
   @Test
@@ -465,7 +466,7 @@ class OrderCancellationAdversarialIT {
     assertEquals(1, pendingRefundCount(payId));
   }
 
-  // ───────────────────────────── seeding ─────────────────────────────
+  // seeding
 
   private UUID seedOrder(
       UUID orgId, UUID customerId, OrderStatus status, String grandTotal, String prepaid) {
@@ -623,7 +624,7 @@ class OrderCancellationAdversarialIT {
         .execute();
   }
 
-  // ───────────────────────────── reads ─────────────────────────────
+  // reads
 
   private String orderStatus(UUID orderId) {
     return dsl.select(SALES_ORDER.STATUS)

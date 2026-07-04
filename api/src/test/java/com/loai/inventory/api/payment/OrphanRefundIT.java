@@ -123,7 +123,8 @@ class OrphanRefundIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     service =
         new PaymentTransactionService(
             dsl,
@@ -147,7 +148,7 @@ class OrphanRefundIT {
             + " product, app_user, org RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   @Test
   void refundOrphan_promotesToStandalonePaymentAndPendingRefund() {
@@ -311,7 +312,7 @@ class OrphanRefundIT {
     assertEquals(1, paymentCountForTxn(txnId));
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   /** Record a VERIFIED manual-InstaPay arrival with no order reference → lands as ORPHAN. */
   private UUID seedOrphan(UUID orgId, UUID admin, String amount) {

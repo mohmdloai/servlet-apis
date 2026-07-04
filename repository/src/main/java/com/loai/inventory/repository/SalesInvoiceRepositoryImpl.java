@@ -122,6 +122,7 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
   public List<SalesInvoice> findByOrderId(UUID orgId, UUID salesOrderId) {
     return dsl.selectFrom(SALES_INVOICE)
         .where(SALES_INVOICE.ORG_ID.eq(orgId).and(SALES_INVOICE.SALES_ORDER_ID.eq(salesOrderId)))
+        .orderBy(SALES_INVOICE.CREATED_AT.asc(), SALES_INVOICE.ID.asc())
         .fetch()
         .map(this::toInvoice);
   }

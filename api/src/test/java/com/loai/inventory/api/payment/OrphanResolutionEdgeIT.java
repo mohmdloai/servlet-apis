@@ -131,7 +131,8 @@ class OrphanResolutionEdgeIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     service =
         new PaymentTransactionService(
             dsl,
@@ -155,7 +156,7 @@ class OrphanResolutionEdgeIT {
             + " app_user, org RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   @Test
   void crossOrg_orderInDifferentOrg_notFoundAndStaysOrphan() {
@@ -292,7 +293,7 @@ class OrphanResolutionEdgeIT {
     assertTrue(realInserts <= 1, "at most one resolve may be a non-replay insert");
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   /** Record a VERIFIED manual-InstaPay arrival with no order reference → lands as ORPHAN. */
   private UUID seedOrphan(UUID orgId, UUID admin, String amount) {

@@ -24,7 +24,9 @@ import org.slf4j.LoggerFactory;
  * (sys-analysis/outbound/payment.md §Disputed):
  *
  * <ul>
- *   <li>{@code GET /payments/{id}} — read (VIEWER+)
+ *   <li>{@code GET /payments/{id}} — read (VIEWER+), decorated with {@code allocations} — the
+ *       invoices this payment funded — so the refund resolution knows which invoice to issue the
+ *       DISPUTE_RESOLUTION CreditNote against ({@code stories/money_reads.md})
  *   <li>{@code POST /payments/{id}/dispute} — flag DISPUTED (MANAGER+); body {@code {reason?}}
  *   <li>{@code POST /payments/{id}/uphold} — resolve DISPUTED → ALLOCATED (MANAGER+)
  * </ul>

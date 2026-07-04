@@ -140,7 +140,8 @@ class InvoiceRollupVerificationIT {
                 new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl()),
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
@@ -586,7 +587,7 @@ class InvoiceRollupVerificationIT {
         .execute();
   }
 
-  // ─────────────── query helpers ───────────────
+  // query helpers
 
   /** Evaluate the CLOSE precondition inside a transaction (boxed to avoid overload ambiguity). */
   private boolean allLivePaid(UUID org, UUID orderId) {

@@ -54,6 +54,15 @@ public final class PaymentAllocationRepositoryImpl implements PaymentAllocationR
         .map(this::toAllocation);
   }
 
+  @Override
+  public List<PaymentAllocation> findByPaymentId(UUID orgId, UUID paymentId) {
+    return dsl.selectFrom(PAYMENT_ALLOCATION)
+        .where(PAYMENT_ALLOCATION.ORG_ID.eq(orgId).and(PAYMENT_ALLOCATION.PAYMENT_ID.eq(paymentId)))
+        .orderBy(PAYMENT_ALLOCATION.RECEIVED_AT.asc(), PAYMENT_ALLOCATION.ID.asc())
+        .fetch()
+        .map(this::toAllocation);
+  }
+
   private PaymentAllocation toAllocation(PaymentAllocationRecord r) {
     return PaymentAllocation.rehydrate(
         r.getId(),

@@ -93,6 +93,35 @@ public final class InvoiceAdminService {
     return new InvoiceView(invoice, invoiceRepo.findLinesByInvoiceId(id));
   }
 
+  /** An order's billing story: the header + every invoice oldest-first, each with lines. */
+  public record OrderInvoices(SalesOrder order, List<InvoiceView> invoices) {}
+
+  /**
+   * Every invoice ever issued against an order regardless of status (VOID included — a voided
+   * invoice is part of the story), oldest first ({@code created_at ASC}), each with its lines, plus
+   * the order header so the billing panel renders standalone. The billing mirror of {@code
+   * PaymentService#listForOrder} / {@code FulfillmentService#listForOrder}. No pagination: invoice
+   * count is bounded by the order's fulfillment count.
+   *
+   * @throws NotFoundException if the order is not in {@code orgId}
+   */
+  public OrderInvoices listForOrder(UUID orgId, UUID salesOrderId) {
+    if (salesOrderId == null) {
+      throw new ValidationException("sales order id is required");
+    }
+    SalesOrder order =
+        orderRepoFactory
+            .create(rootDsl)
+            .findById(orgId, salesOrderId)
+            .orElseThrow(() -> new NotFoundException("SalesOrder", salesOrderId));
+    SalesInvoiceRepository invoiceRepo = invoiceRepoFactory.create(rootDsl);
+    List<InvoiceView> invoices =
+        invoiceRepo.findByOrderId(orgId, salesOrderId).stream()
+            .map(inv -> new InvoiceView(inv, invoiceRepo.findLinesByInvoiceId(inv.getId())))
+            .toList();
+    return new OrderInvoices(order, invoices);
+  }
+
   /**
    * Void an ISSUED, unpaid, uncredited invoice — cancel it without a replacement. The fulfillment
    * is left unbound (the partial unique index frees its slot for a later reissue).

@@ -24,6 +24,10 @@ import org.slf4j.LoggerFactory;
  * Handles {@code /api/orgs/{orgId}/credit-notes}:
  *
  * <ul>
+ *   <li>{@code GET /credit-notes?sales_invoice_id=&status=} — one invoice's crediting story with
+ *       the already-credited sum, powering the cumulative-cap meter ({@code
+ *       stories/money_reads.md}). {@code sales_invoice_id} is required — a bare {@code GET} is a
+ *       400, the route stays reserved for a future unfiltered list. VIEWER+.
  *   <li>{@code POST /credit-notes} — issue a credit note (MANAGER+; OWNER above the org's refund
  *       approval threshold, enforced in the service against the committed org row)
  *   <li>{@code GET /credit-notes/{id}} — read (VIEWER+)
@@ -55,6 +59,8 @@ public class CreditNoteHandler implements OrgResourceHandler {
       if (parts.length == 0) {
         if ("POST".equals(method)) {
           doIssue(req, resp, orgId);
+        } else if ("GET".equals(method)) {
+          doList(req, resp, orgId);
         } else {
           writeError(resp, 405, "Method not allowed");
         }
@@ -98,6 +104,35 @@ public class CreditNoteHandler implements OrgResourceHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
     Issued issued = service.get(orgId, id);
     writeJson(resp, 200, CreditNoteMapper.toResponse(issued));
+  }
+
+  /**
+   * {@code GET /?sales_invoice_id=&status=} — the invoice's crediting story: header +
+   * already-credited sum + notes oldest-first. {@code sales_invoice_id} is required; the bare list
+   * is deliberately reserved (same convention as the bare {@code GET /sales-orders}).
+   */
+  private void doList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    String rawInvoiceId = req.getParameter("sales_invoice_id");
+    if (rawInvoiceId == null || rawInvoiceId.isBlank()) {
+      throw new ValidationException(
+          "sales_invoice_id query parameter is required (the unfiltered list is not implemented)");
+    }
+    UUID salesInvoiceId;
+    try {
+      salesInvoiceId = UUID.fromString(rawInvoiceId.trim());
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid sales_invoice_id: " + rawInvoiceId);
+    }
+    writeJson(
+        resp,
+        200,
+        CreditNoteMapper.toInvoiceCreditNotesResponse(
+            service.listForInvoice(
+                orgId,
+                salesInvoiceId,
+                CreditNoteMapper.toStatusFilter(req.getParameter("status")))));
   }
 
   private void doVoid(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)

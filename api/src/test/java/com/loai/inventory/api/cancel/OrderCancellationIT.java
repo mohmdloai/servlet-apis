@@ -111,7 +111,8 @@ class OrderCancellationIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     service =
         new OrderCancellationService(
             dsl,
@@ -158,7 +159,7 @@ class OrderCancellationIT {
         violations.isEmpty(), "reserved_qty != SUM(ACTIVE reservations): " + violations);
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   @Test
   void underpaidCancel_releasesReservationsAndDirectRefundsPartial() {
@@ -288,7 +289,7 @@ class OrderCancellationIT {
     assertEquals(0, debitTxnCount(f.orgId));
   }
 
-  // ───────────────────────────── seeding ─────────────────────────────
+  // seeding
 
   private record Fixture(UUID orgId, UUID adminId, UUID customerId, UUID productId, UUID orderId) {}
 
@@ -423,7 +424,7 @@ class OrderCancellationIT {
         .execute();
   }
 
-  // ───────────────────────────── reads ─────────────────────────────
+  // reads
 
   private String orderStatus(UUID orderId) {
     return dsl.select(SALES_ORDER.STATUS)

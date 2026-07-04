@@ -18,4 +18,11 @@ public interface PaymentAllocationRepository {
    * created_at ASC, id ASC}) for deterministic unwinding by a CreditNote-backed refund.
    */
   List<PaymentAllocation> findByInvoiceIdForUpdate(UUID orgId, UUID salesInvoiceId);
+
+  /**
+   * The allocations a given payment was consumed by, unlocked and ordered FIFO ({@code received_at
+   * ASC, id ASC} — the order they were applied in). The read-only sibling of {@link
+   * #findByInvoiceIdForUpdate} for the payment detail read: which invoices this payment funded.
+   */
+  List<PaymentAllocation> findByPaymentId(UUID orgId, UUID paymentId);
 }

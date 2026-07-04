@@ -5,7 +5,9 @@ import com.loai.inventory.api.dto.RefundResponse;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.Refund;
+import com.loai.inventory.domain.model.RefundStatus;
 import com.loai.inventory.service.RefundService.CreateCommand;
+import com.loai.inventory.service.RefundService.RefundView;
 
 /** Maps refund DTOs ↔ service inputs and domain → response. Lives in api/. */
 public final class RefundMapper {
@@ -27,6 +29,22 @@ public final class RefundMapper {
 
   public static RefundResponse toResponse(Refund refund) {
     return RefundResponse.from(refund);
+  }
+
+  public static RefundResponse toResponse(RefundView view) {
+    return RefundResponse.from(view);
+  }
+
+  /** Parse the optional {@code status} list filter; blank → null (no filter), unknown → 400. */
+  public static RefundStatus toStatusFilter(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return RefundStatus.valueOf(raw.trim().toUpperCase());
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Unknown status: " + raw);
+    }
   }
 
   /** Accept the enum name ({@code CASH}) or the DB literal ({@code cash}); blank → 400. */

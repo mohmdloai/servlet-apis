@@ -6,7 +6,9 @@ import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentStatus;
 import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.repository.generated.tables.records.PaymentRecord;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -74,6 +76,22 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
         .forUpdate()
         .fetchOptional()
         .map(this::toPayment);
+  }
+
+  @Override
+  public Map<UUID, UUID> findOrderIdsByIds(UUID orgId, Collection<UUID> paymentIds) {
+    if (paymentIds.isEmpty()) {
+      return Map.of();
+    }
+    return dsl.select(PAYMENT.ID, PAYMENT.SALES_ORDER_ID)
+        .from(PAYMENT)
+        .where(
+            PAYMENT
+                .ORG_ID
+                .eq(orgId)
+                .and(PAYMENT.ID.in(paymentIds))
+                .and(PAYMENT.SALES_ORDER_ID.isNotNull()))
+        .fetchMap(PAYMENT.ID, PAYMENT.SALES_ORDER_ID);
   }
 
   @Override

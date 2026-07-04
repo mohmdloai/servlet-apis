@@ -122,7 +122,8 @@ class FulfillmentReadIT {
                 new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl()),
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
@@ -144,7 +145,7 @@ class FulfillmentReadIT {
             + " sales_order, product, org, invoice_number_counter RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── detail ─────────────────────────────
+  // detail
 
   @Test
   void get_returnsFulfillmentWithLines() {
@@ -291,7 +292,7 @@ class FulfillmentReadIT {
     assertThrows(NotFoundException.class, () -> service.get(org, foreign));
   }
 
-  // ───────────────────────────── list: queue and ledger ─────────────────────────────
+  // list: queue and ledger
 
   @Test
   void statusFilter_returnsOnlyThatStatus_oldestFirst() {
@@ -399,7 +400,7 @@ class FulfillmentReadIT {
     assertTrue(ids(service.list(otherOrg, null, 0, 20)).contains(foreign));
   }
 
-  // ───────────────────────────── by-order: the shipment story ─────────────────────────────
+  // by-order: the shipment story
 
   @Test
   void listForOrder_everyStatusOldestFirst_plusOrderHeader() {
@@ -467,7 +468,7 @@ class FulfillmentReadIT {
     assertThrows(NotFoundException.class, () -> service.listForOrder(org, foreign.id()));
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   private static List<UUID> ids(FulfillmentPage page) {
     return viewIds(page.items());

@@ -1,9 +1,11 @@
 package com.loai.inventory.api.mapper;
 
 import com.loai.inventory.api.dto.InvoiceResponse;
+import com.loai.inventory.api.dto.OrderInvoicesResponse;
 import com.loai.inventory.api.dto.ReissueInvoiceRequest;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.service.InvoiceAdminService.InvoiceView;
+import com.loai.inventory.service.InvoiceAdminService.OrderInvoices;
 import com.loai.inventory.service.InvoiceAdminService.ReissueLine;
 import com.loai.inventory.service.InvoiceService.Issued;
 import java.math.BigDecimal;
@@ -39,5 +41,10 @@ public final class InvoiceMapper {
 
   public static InvoiceResponse toResponse(Issued issued) {
     return InvoiceResponse.from(issued.invoice(), issued.lines());
+  }
+
+  public static OrderInvoicesResponse toOrderInvoicesResponse(OrderInvoices result) {
+    return OrderInvoicesResponse.from(
+        result.order(), result.invoices().stream().map(InvoiceMapper::toResponse).toList());
   }
 }

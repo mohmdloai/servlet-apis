@@ -131,7 +131,8 @@ class InvoiceVoidReissueIT {
                 new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl()),
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
@@ -171,7 +172,7 @@ class InvoiceVoidReissueIT {
             + " RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── void ─────────────────────────────
+  // void
 
   /** Void an ISSUED, unpaid, uncredited invoice → VOID with reason + voided_at recorded. */
   @Test
@@ -228,7 +229,7 @@ class InvoiceVoidReissueIT {
         () -> invoiceAdminService.voidInvoice(f.org, f.invoiceId, "second"));
   }
 
-  // ───────────────────────────── reissue ─────────────────────────────
+  // reissue
 
   /**
    * Reissue voids the wrong invoice and issues a corrected one against the SAME fulfillment with a
@@ -335,7 +336,7 @@ class InvoiceVoidReissueIT {
     assertEquals(1, invoiceCountForFulfillment(f.fulfillmentId)); // no replacement created
   }
 
-  // ───────────────────────────── get ─────────────────────────────
+  // get
 
   /** get returns the invoice with its lines. */
   @Test
@@ -347,7 +348,7 @@ class InvoiceVoidReissueIT {
     assertNull(view.invoice().getVoidedAt());
   }
 
-  // ───────────────────────────── fixtures & helpers ─────────────────────────────
+  // fixtures & helpers
 
   private record Fixture(
       UUID org, UUID customer, UUID productId, UUID orderId, UUID fulfillmentId, UUID invoiceId) {}
@@ -534,7 +535,7 @@ class InvoiceVoidReissueIT {
         .execute();
   }
 
-  // ───────────────────────────── query helpers ─────────────────────────────
+  // query helpers
 
   private String invoiceStatus(UUID id) {
     return dsl.select(SALES_INVOICE.STATUS)

@@ -126,7 +126,8 @@ class OrderPaymentsIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     txnService =
         new PaymentTransactionService(
             dsl,
@@ -161,7 +162,7 @@ class OrderPaymentsIT {
             + " product, app_user, org RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── the money story ─────────────────────────────
+  // the money story
 
   @Test
   void underpaidTopUpSequence_threePaymentsFifo_sumReconstructsPrepaid_orderPaid() {
@@ -311,7 +312,7 @@ class OrderPaymentsIT {
     assertThrows(NotFoundException.class, () -> paymentService.listForOrder(orgId, foreign.id()));
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   /**
    * Record-and-verify a credit with a distinct occurred_at; asserts the expected reconciliation and

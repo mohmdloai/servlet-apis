@@ -13,7 +13,9 @@ import com.loai.inventory.repository.generated.tables.records.CreditNoteLineReco
 import com.loai.inventory.repository.generated.tables.records.CreditNoteRecord;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -107,6 +109,40 @@ public final class CreditNoteRepositoryImpl implements CreditNoteRepository {
         .where(CREDIT_NOTE_LINE.CREDIT_NOTE_ID.eq(creditNoteId))
         .fetch()
         .map(this::toLine);
+  }
+
+  @Override
+  public List<CreditNote> findByInvoiceId(
+      UUID orgId, UUID salesInvoiceId, CreditNoteStatus status) {
+    org.jooq.Condition c =
+        CREDIT_NOTE.ORG_ID.eq(orgId).and(CREDIT_NOTE.SALES_INVOICE_ID.eq(salesInvoiceId));
+    if (status != null) {
+      c =
+          c.and(
+              CREDIT_NOTE.STATUS.eq(
+                  com.loai.inventory.repository.generated.enums.CreditNoteStatus.valueOf(
+                      status.name())));
+    }
+    return dsl.selectFrom(CREDIT_NOTE)
+        .where(c)
+        .orderBy(CREDIT_NOTE.CREATED_AT.asc(), CREDIT_NOTE.ID.asc())
+        .fetch()
+        .map(this::toCreditNote);
+  }
+
+  @Override
+  public Map<UUID, CreditNoteRef> findRefsByIds(UUID orgId, Collection<UUID> creditNoteIds) {
+    if (creditNoteIds.isEmpty()) {
+      return Map.of();
+    }
+    return dsl.select(CREDIT_NOTE.ID, CREDIT_NOTE.SALES_INVOICE_ID, CREDIT_NOTE.CREDIT_NOTE_NUMBER)
+        .from(CREDIT_NOTE)
+        .where(CREDIT_NOTE.ORG_ID.eq(orgId).and(CREDIT_NOTE.ID.in(creditNoteIds)))
+        .fetchMap(
+            CREDIT_NOTE.ID,
+            r ->
+                new CreditNoteRef(
+                    r.get(CREDIT_NOTE.SALES_INVOICE_ID), r.get(CREDIT_NOTE.CREDIT_NOTE_NUMBER)));
   }
 
   @Override
