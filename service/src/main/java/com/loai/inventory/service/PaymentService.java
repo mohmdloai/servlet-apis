@@ -3,6 +3,8 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.NotificationRecipient;
+import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentProvider;
@@ -22,6 +24,7 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -67,18 +70,24 @@ public final class PaymentService {
   private final SalesOrderRepositoryFactory salesOrderRepoFactory;
   private final PaymentTransactionRepositoryFactory txnRepoFactory;
   private final RefundRepositoryFactory refundRepoFactory;
+  private final NotificationService notificationService;
+  private final MagicLinkService magicLinkService;
 
   public PaymentService(
       DSLContext rootDsl,
       PaymentRepositoryFactory paymentRepoFactory,
       SalesOrderRepositoryFactory salesOrderRepoFactory,
       PaymentTransactionRepositoryFactory txnRepoFactory,
-      RefundRepositoryFactory refundRepoFactory) {
+      RefundRepositoryFactory refundRepoFactory,
+      NotificationService notificationService,
+      MagicLinkService magicLinkService) {
     this.rootDsl = rootDsl;
     this.paymentRepoFactory = paymentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.txnRepoFactory = txnRepoFactory;
     this.refundRepoFactory = refundRepoFactory;
+    this.notificationService = notificationService;
+    this.magicLinkService = magicLinkService;
   }
 
   /** Target order for a transaction; at most one of the two fields is populated. */
@@ -166,6 +175,8 @@ public final class PaymentService {
       BigDecimal newPrepaid = order.getPrepaidAmount().add(txn.getAmount());
       order.markPaid(newPrepaid, now); // domain guard allows prepaid > grand_total
       orderRepo.updatePaymentState(order);
+      // Same template as MATCHED — the excess-refund conversation is the admin's, not an email's.
+      notifyOrderPaid(txDsl, orgId, order, txn, now);
       log.info(
           "Reconcile OVERPAID: order {} → PAID (prepaid={} > grandTotal={}), payment {} RECEIVED"
               + " amount={} excess={}",
@@ -184,6 +195,7 @@ public final class PaymentService {
     BigDecimal newPrepaid = order.getPrepaidAmount().add(txn.getAmount());
     order.markPaid(newPrepaid, now); // domain guard: prepaid >= grand_total, PENDING_PAYMENT → PAID
     orderRepo.updatePaymentState(order);
+    notifyOrderPaid(txDsl, orgId, order, txn, now);
 
     log.info(
         "Reconcile MATCHED: order {} → PAID (prepaid={}), payment {} RECEIVED amount={}",
@@ -192,6 +204,37 @@ public final class PaymentService {
         payment.getId(),
         payment.getAmount());
     return new Reconciliation(PaymentReconciliationStatus.MATCHED, payment, order);
+  }
+
+  /**
+   * ORDER_PAID producer ({@code stories/notify_order_paid.md}): the customer's "your payment was
+   * received, your order is confirmed" email, fired on the two {@code markPaid} branches (MATCHED
+   * and OVERPAID) — which covers every route to PAID-by-money, verify and orphan-resolve alike.
+   * Runs inside {@code txDsl}, after the order state is persisted: the notification exists iff the
+   * PAID flip commits; delivery is post-commit via the sweeper, at-least-once. A fresh order-view
+   * magic link is minted per email, same as placement. Deliberately silent when the order has no
+   * customer ({@code customer_id} NULL — possible on PHONE orders): there is nobody to mail.
+   */
+  private void notifyOrderPaid(
+      DSLContext txDsl, UUID orgId, SalesOrder order, PaymentTransaction txn, OffsetDateTime now) {
+    if (order.getCustomerId() == null) {
+      return;
+    }
+    String viewLink =
+        magicLinkService.issueOrderViewLink(
+            txDsl, orgId, order.getCustomerId(), order.getId(), now);
+    notificationService.notify(
+        txDsl,
+        orgId,
+        NotificationRecipient.customer(order.getCustomerId()),
+        NotificationType.ORDER_PAID,
+        Map.of(
+            "order_number", order.getOrderNumber(),
+            "amount", txn.getAmount(),
+            "currency", txn.getCurrency()),
+        "sales_order",
+        order.getId(),
+        viewLink);
   }
 
   /**

@@ -100,7 +100,9 @@ class OrphanResolutionIT {
             new PaymentRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new RefundRepositoryFactoryImpl());
+            new RefundRepositoryFactoryImpl(),
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
     RefundService refundService =
         new RefundService(
             dsl,

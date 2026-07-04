@@ -41,16 +41,30 @@ public interface PaymentTransactionRepository {
    * Optional list predicates, ANDed; a {@code null} field means "no filter on this column". {@code
    * hasPayment} filters on the existence of the 1:1 {@code payment} row bound to the transaction
    * ({@code payment.payment_transaction_id} UNIQUE) — {@code false} is the payment-exists exclusion
-   * the orphan queue is built on ({@code transaction.md} §Operational queries).
+   * the orphan queue is built on ({@code transaction.md} §Operational queries). {@code provider} /
+   * {@code providerRef} are literal column matches ({@code providerRef} case-sensitive — it is the
+   * provider's identifier, not user prose) for the support lookup "did we record this reference?"
+   * ({@code stories/lookup_transaction_by_reference.md}).
    */
   record ListFilter(
       PaymentVerificationStatus verificationStatus,
       PaymentReconciliationStatus reconciliationStatus,
-      Boolean hasPayment) {
+      Boolean hasPayment,
+      PaymentProvider provider,
+      String providerRef) {
+
+    /** Normalizes {@code providerRef}: blank → null (no filter), otherwise trimmed. */
+    public ListFilter {
+      providerRef = providerRef == null || providerRef.isBlank() ? null : providerRef.trim();
+    }
 
     /** True when no predicate is set — the unfiltered ledger view. */
     public boolean isEmpty() {
-      return verificationStatus == null && reconciliationStatus == null && hasPayment == null;
+      return verificationStatus == null
+          && reconciliationStatus == null
+          && hasPayment == null
+          && provider == null
+          && providerRef == null;
     }
   }
 

@@ -58,6 +58,17 @@ public final class PaymentTransactionMapper {
     return OrphanRefundResponse.from(result.transaction(), result.payment(), result.refund());
   }
 
+  /**
+   * Optional {@code provider} list filter: absent/blank → null (no filter); otherwise the enum name
+   * or DB literal, unknown value → 400.
+   */
+  public static PaymentProvider toProviderFilter(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    return parseProvider(raw);
+  }
+
   /** Accept either the enum name ({@code INSTAPAY_MANUAL}) or the DB literal ({@code cash}). */
   private static PaymentProvider parseProvider(String raw) {
     if (raw == null || raw.isBlank()) {

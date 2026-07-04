@@ -210,17 +210,17 @@ recommendation in this plan's discussion. Not in the notifications scope.
 
 ## 8. Default routing (per `notifications.md` examples, customer=email-only)
 
-| Event | Recipient | Default channels |
-|---|---|---|
-| Order placed | Customer | email |
-| Order placed | Org staff | in_app |
-| Payment needs verification (manual InstaPay) | Org admin | in_app |
-| Payment verified | Customer | email |
-| Order shipped / delivered | Customer | email |
-| Invoice issued / reissued | Customer | email *(delivery only — does not harden the invoice)* |
-| Low-stock threshold crossed | Org manager | in_app |
-| Refund executed | Customer | email |
-| Order expired (no payment) | Customer | email |
+| Event | Recipient | Default channels | Status |
+|---|---|---|---|
+| Order placed | Customer | email | ✅ |
+| Order placed | Org staff | in_app | ✅ |
+| Payment needs verification (manual InstaPay) | Org admin | in_app | |
+| Payment verified | Customer | email | ✅ shipped as `ORDER_PAID` — fired at both `markPaid` sites in `PaymentService.reconcileAndCreate` (MATCHED + OVERPAID, so verify **and** orphan-resolve), not on UNDERPAID or the in-store sale; carries a fresh order-view magic link (`stories/notify_order_paid.md`) |
+| Order shipped / delivered | Customer | email | |
+| Invoice issued / reissued | Customer | email *(delivery only — does not harden the invoice)* | |
+| Low-stock threshold crossed | Org manager | in_app | |
+| Refund executed | Customer | email | |
+| Order expired (no payment) | Customer | email | |
 
 Producer hooks live in the existing services (`SalesOrderService`, `PaymentService`,
 `FulfillmentService`, `InvoiceService`, `RefundService`, `OrderExpiryService`, `InventoryService`),
