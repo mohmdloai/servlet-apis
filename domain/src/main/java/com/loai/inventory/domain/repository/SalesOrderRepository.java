@@ -43,6 +43,14 @@ public interface SalesOrderRepository {
   Optional<SalesOrder> findByOrderNumber(UUID orgId, String orderNumber);
 
   /**
+   * Batch projection {@code id → order_number} for the given orders, scoped to {@code orgId}. Used
+   * by list reads that decorate child rows (e.g. fulfillment queue rows) with the human-readable
+   * order number without loading whole order aggregates — one query per page, not per row. Ids not
+   * in {@code orgId} are simply absent from the result map.
+   */
+  Map<UUID, String> findOrderNumbersByIds(UUID orgId, Collection<UUID> salesOrderIds);
+
+  /**
    * Persist the payment-related mutable state of an order: {@code status}, {@code prepaid_amount},
    * {@code updated_at}. Scoped by {@code (org_id, id)}.
    */

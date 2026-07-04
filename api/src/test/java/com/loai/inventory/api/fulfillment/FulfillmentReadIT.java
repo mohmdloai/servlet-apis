@@ -3,6 +3,8 @@ package com.loai.inventory.api.fulfillment;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY_RESERVATION;
 import static com.loai.inventory.repository.generated.Tables.ORG;
+import static com.loai.inventory.repository.generated.Tables.PAYMENT;
+import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
@@ -24,8 +26,12 @@ import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.generated.enums.OrderChannel;
 import com.loai.inventory.repository.generated.enums.OrderStatus;
+import com.loai.inventory.repository.generated.enums.PaymentDirection;
+import com.loai.inventory.repository.generated.enums.PaymentStatus;
+import com.loai.inventory.repository.generated.enums.PaymentVerificationStatus;
 import com.loai.inventory.repository.generated.enums.ReservationStatus;
 import com.loai.inventory.service.FulfillmentService;
+import com.loai.inventory.service.FulfillmentService.FailedRefundResult;
 import com.loai.inventory.service.FulfillmentService.FulfillmentPage;
 import com.loai.inventory.service.FulfillmentService.FulfillmentView;
 import com.loai.inventory.service.FulfillmentService.LineInput;
@@ -33,6 +39,8 @@ import com.loai.inventory.service.FulfillmentService.OrderFulfillments;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -221,6 +229,54 @@ class FulfillmentReadIT {
     assertEquals(1, service.get(org, replacementId).lines().size());
   }
 
+  /**
+   * The detail read carries the parent order's human-readable number and the fulfillment's monetary
+   * value — the invoice arithmetic (subtotal + tax, {@code InvoiceService.grandTotalOf}), i.e. the
+   * exact figure {@code refundFailed} sizes its refund (and the OWNER-threshold check) by, not a
+   * naive sum of order-line totals.
+   */
+  @Test
+  void get_carriesOrderNumberAndGuardValue() {
+    UUID org = createOrg("acme");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 3);
+    Order order = seedPaidOrder(org, List.of(new Want(product, 3)));
+    dsl.update(SALES_ORDER_LINE)
+        .set(SALES_ORDER_LINE.TAX_RATE, new BigDecimal("0.1000"))
+        .where(SALES_ORDER_LINE.ID.eq(order.lines().get(0).lineId()))
+        .execute();
+    UUID id = createFulfillment(org, order, 0);
+
+    FulfillmentView view = service.get(org, id);
+
+    assertEquals(order.number(), view.salesOrderNumber());
+    // 3 × 10.00 = 30.00 subtotal + 10% tax = 33.00 — what a refund of this fulfillment would move.
+    assertEquals(new BigDecimal("33.00"), view.fulfillmentValue());
+  }
+
+  /**
+   * Guard parity end-to-end: the value advertised on the read equals the PENDING refund total
+   * {@code refundFailed} actually creates — a client-side threshold pre-warning built on it can
+   * never disagree with the server's own guard.
+   */
+  @Test
+  void get_advertisedValue_equalsWhatRefundFailedMoves() {
+    UUID org = createOrg("acme");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 2);
+    Order order = seedPaidOrder(org, List.of(new Want(product, 2)));
+    seedReceivedPayment(org, order.id(), "20.00");
+    UUID id = createFulfillment(org, order, 0);
+    service.ship(org, id, actor);
+    service.markFailed(org, id, "package lost");
+
+    BigDecimal advertised = service.get(org, id).fulfillmentValue();
+    FailedRefundResult result = service.refundFailed(org, id, null, UUID.randomUUID(), true);
+
+    assertEquals(new BigDecimal("20.00"), advertised);
+    assertEquals(advertised, result.pendingRefundTotal());
+  }
+
   @Test
   void get_unknownOrForeignId_is404() {
     UUID org = createOrg("acme");
@@ -270,6 +326,29 @@ class FulfillmentReadIT {
       assertEquals(1, v.lines().size());
       assertEquals(v.fulfillment().getId(), v.lines().get(0).getFulfillmentId());
     }
+  }
+
+  /** Each queue row names its own parent order — the card is readable without a second fetch. */
+  @Test
+  void list_rowsCarryTheirOwnOrderNumber_valueOmitted() {
+    UUID org = createOrg("acme");
+    UUID a = createProduct(org, "A");
+    UUID b = createProduct(org, "B");
+    createInventory(org, a, 10, 2);
+    createInventory(org, b, 10, 2);
+    Order order1 = seedPaidOrder(org, List.of(new Want(a, 2)));
+    Order order2 = seedPaidOrder(org, List.of(new Want(b, 2)));
+    UUID f1 = createFulfillment(org, order1, 0);
+    UUID f2 = createFulfillment(org, order2, 0);
+
+    FulfillmentPage page = service.list(org, FulfillmentStatus.PENDING, 0, 20);
+
+    assertEquals(List.of(f1, f2), ids(page));
+    assertEquals(order1.number(), page.items().get(0).salesOrderNumber());
+    assertEquals(order2.number(), page.items().get(1).salesOrderNumber());
+    // Queue rows carry no monetary value — pricing a page would need every parent order's lines;
+    // the detail and by-order reads (where the refund flow lives) carry it.
+    assertNull(page.items().get(0).fulfillmentValue());
   }
 
   @Test
@@ -354,7 +433,13 @@ class FulfillmentReadIT {
     assertEquals(failed, story.fulfillments().get(2).fulfillment().getReplacesFulfillmentId());
     for (FulfillmentView v : story.fulfillments()) {
       assertEquals(1, v.lines().size());
+      assertEquals(order.number(), v.salesOrderNumber());
     }
+    // Each fulfillment is valued at its own lines' invoice arithmetic: line A (2 × 10.00), the
+    // failed line B (3 × 10.00) and its replacement (same line, same value).
+    assertEquals(new BigDecimal("20.00"), story.fulfillments().get(0).fulfillmentValue());
+    assertEquals(new BigDecimal("30.00"), story.fulfillments().get(1).fulfillmentValue());
+    assertEquals(new BigDecimal("30.00"), story.fulfillments().get(2).fulfillmentValue());
   }
 
   @Test
@@ -449,6 +534,34 @@ class FulfillmentReadIT {
         .set(INVENTORY.PRODUCT_ID, product)
         .set(INVENTORY.STOCK_QTY, stockQty)
         .set(INVENTORY.RESERVED_QTY, reservedQty)
+        .execute();
+  }
+
+  /** A VERIFIED transaction + RECEIVED, fully-unallocated payment — refundFailed's funding pool. */
+  private void seedReceivedPayment(UUID org, UUID orderId, String amount) {
+    OffsetDateTime earlier = OffsetDateTime.now(ZoneOffset.UTC).minusHours(2);
+    UUID txnId = UUID.randomUUID();
+    dsl.insertInto(PAYMENT_TRANSACTION)
+        .set(PAYMENT_TRANSACTION.ID, txnId)
+        .set(PAYMENT_TRANSACTION.ORG_ID, org)
+        .set(
+            PAYMENT_TRANSACTION.PROVIDER,
+            com.loai.inventory.repository.generated.enums.PaymentProvider.instapay_manual)
+        .set(PAYMENT_TRANSACTION.PROVIDER_REF, "IPN-" + seq.getAndIncrement())
+        .set(PAYMENT_TRANSACTION.DIRECTION, PaymentDirection.CREDIT)
+        .set(PAYMENT_TRANSACTION.AMOUNT, new BigDecimal(amount))
+        .set(PAYMENT_TRANSACTION.VERIFICATION_STATUS, PaymentVerificationStatus.VERIFIED)
+        .set(PAYMENT_TRANSACTION.OCCURRED_AT, earlier)
+        .execute();
+    dsl.insertInto(PAYMENT)
+        .set(PAYMENT.ID, UUID.randomUUID())
+        .set(PAYMENT.ORG_ID, org)
+        .set(PAYMENT.SALES_ORDER_ID, orderId)
+        .set(PAYMENT.PAYMENT_TRANSACTION_ID, txnId)
+        .set(PAYMENT.AMOUNT, new BigDecimal(amount))
+        .set(PAYMENT.UNALLOCATED_AMOUNT, new BigDecimal(amount))
+        .set(PAYMENT.STATUS, PaymentStatus.RECEIVED)
+        .set(PAYMENT.RECEIVED_AT, earlier)
         .execute();
   }
 

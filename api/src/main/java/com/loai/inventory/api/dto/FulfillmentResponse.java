@@ -4,6 +4,7 @@ import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.FulfillmentLine;
 import com.loai.inventory.domain.model.FulfillmentResolution;
 import com.loai.inventory.domain.model.FulfillmentStatus;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -12,6 +13,8 @@ public class FulfillmentResponse {
   private UUID id;
   private UUID orgId;
   private UUID salesOrderId;
+  private String salesOrderNumber;
+  private BigDecimal fulfillmentValue;
   private FulfillmentStatus status;
   private String carrier;
   private String trackingNumber;
@@ -31,10 +34,25 @@ public class FulfillmentResponse {
   private FulfillmentResponse() {}
 
   public static FulfillmentResponse from(Fulfillment fulfillment, List<FulfillmentLine> lines) {
+    return from(fulfillment, lines, null, null);
+  }
+
+  /**
+   * Read-path variant: additionally carries the parent order's number (all reads) and the
+   * fulfillment's monetary value (detail + by-order reads — the amount a failed-fulfillment refund
+   * would move, for client-side threshold pre-warnings). Both null → omitted on mutation responses.
+   */
+  public static FulfillmentResponse from(
+      Fulfillment fulfillment,
+      List<FulfillmentLine> lines,
+      String salesOrderNumber,
+      BigDecimal fulfillmentValue) {
     FulfillmentResponse r = new FulfillmentResponse();
     r.id = fulfillment.getId();
     r.orgId = fulfillment.getOrgId();
     r.salesOrderId = fulfillment.getSalesOrderId();
+    r.salesOrderNumber = salesOrderNumber;
+    r.fulfillmentValue = fulfillmentValue;
     r.status = fulfillment.getStatus();
     r.carrier = fulfillment.getCarrier();
     r.trackingNumber = fulfillment.getTrackingNumber();
@@ -63,6 +81,14 @@ public class FulfillmentResponse {
 
   public UUID getSalesOrderId() {
     return salesOrderId;
+  }
+
+  public String getSalesOrderNumber() {
+    return salesOrderNumber;
+  }
+
+  public BigDecimal getFulfillmentValue() {
+    return fulfillmentValue;
   }
 
   public FulfillmentStatus getStatus() {

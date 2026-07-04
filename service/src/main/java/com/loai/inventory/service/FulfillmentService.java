@@ -126,8 +126,23 @@ public final class FulfillmentService {
   /** A line to fulfill in-store: order line + its product + quantity (no reservation involved). */
   public record DeliveredLineInput(UUID salesOrderLineId, UUID productId, int quantity) {}
 
-  /** Carries a fulfillment + its lines for response mapping. */
-  public record FulfillmentView(Fulfillment fulfillment, List<FulfillmentLine> lines) {}
+  /**
+   * Carries a fulfillment + its lines for response mapping. Read paths additionally decorate it
+   * with the parent order's human-readable number (all reads) and the fulfillment's monetary value
+   * (detail + by-order reads — the figure {@link #refundFailed} sizes its refund by, so a client
+   * can pre-warn about the refund-approval threshold with the guard's own number). Mutation paths
+   * leave both null (omitted from JSON).
+   */
+  public record FulfillmentView(
+      Fulfillment fulfillment,
+      List<FulfillmentLine> lines,
+      String salesOrderNumber,
+      BigDecimal fulfillmentValue) {
+
+    public FulfillmentView(Fulfillment fulfillment, List<FulfillmentLine> lines) {
+      this(fulfillment, lines, null, null);
+    }
+  }
 
   /**
    * The full result of marking a fulfillment DELIVERED: the delivered fulfillment, the SalesInvoice
@@ -704,26 +719,10 @@ public final class FulfillmentService {
           // had it been delivered — NOT the order's whole unallocated prepayment (that is an order
           // cancel). The order continues, so its other fulfillments must keep their funding. No
           // invoice exists for a SHIPPED-failed fulfillment, so the refund is direct-from-Payment.
-          Map<UUID, SalesOrderLine> orderLines = new LinkedHashMap<>();
-          for (SalesOrderLine ol : orderRepo.findLinesByOrderId(fulfillment.getSalesOrderId())) {
-            orderLines.put(ol.getId(), ol);
-          }
-          List<InvoiceService.LineSpec> specs = new ArrayList<>();
-          for (FulfillmentLine fl : fulfillmentRepo.findLinesByFulfillmentId(fulfillmentId)) {
-            SalesOrderLine ol = orderLines.get(fl.getSalesOrderLineId());
-            if (ol == null) {
-              throw new IllegalStateException(
-                  "fulfillment line " + fl.getId() + " references unknown order line");
-            }
-            specs.add(
-                new InvoiceService.LineSpec(
-                    ol.getProductId(),
-                    ol.getDescription(),
-                    fl.getQuantity(),
-                    ol.getUnitPrice(),
-                    ol.getTaxRate()));
-          }
-          BigDecimal fulfillmentValue = InvoiceService.grandTotalOf(specs);
+          BigDecimal fulfillmentValue =
+              fulfillmentValueOf(
+                  orderLinesById(orderRepo, fulfillment.getSalesOrderId()),
+                  fulfillmentRepo.findLinesByFulfillmentId(fulfillmentId));
 
           // Draw that value FIFO across the order's unallocated prepayment(s): each Payment
           // contributes min(its unallocated, remaining). createDirectPendingInTx caps each refund
@@ -1116,7 +1115,9 @@ public final class FulfillmentService {
   /**
    * Read one fulfillment + its lines — the detail view behind the queue row. Read-only on {@code
    * rootDsl}, no lock: mutations re-read {@code FOR UPDATE} inside their own transactions, so a
-   * stale read can never corrupt a write.
+   * stale read can never corrupt a write. Decorated with the parent order's number and the
+   * fulfillment's monetary value ({@link #fulfillmentValueOf} — the exact figure {@link
+   * #refundFailed} would refund).
    *
    * @throws NotFoundException if the fulfillment is not in {@code orgId}
    */
@@ -1128,14 +1129,23 @@ public final class FulfillmentService {
     Fulfillment fulfillment =
         repo.findById(orgId, fulfillmentId)
             .orElseThrow(() -> new NotFoundException("Fulfillment", fulfillmentId));
-    return new FulfillmentView(fulfillment, repo.findLinesByFulfillmentId(fulfillmentId));
+    SalesOrderRepository orderRepo = salesOrderRepoFactory.create(rootDsl);
+    UUID orderId = fulfillment.getSalesOrderId();
+    List<FulfillmentLine> lines = repo.findLinesByFulfillmentId(fulfillmentId);
+    return new FulfillmentView(
+        fulfillment,
+        lines,
+        orderRepo.findOrderNumbersByIds(orgId, List.of(orderId)).get(orderId),
+        fulfillmentValueOf(orderLinesById(orderRepo, orderId), lines));
   }
 
   /**
    * Read one page of the org's fulfillments — filtered by {@code status} it is the packing/shipping
    * queue (oldest first, the FIFO worklist); unfiltered it is the ledger (newest first). Mirrors
    * {@code PaymentTransactionService#list}: {@code page} floors at 0, {@code size} is clamped to
-   * {@code [1, MAX_PAGE_SIZE]}; lines are batch-loaded (one query per page, not per row).
+   * {@code [1, MAX_PAGE_SIZE]}; lines and order numbers are batch-loaded (one query each per page,
+   * not per row). Rows carry no {@code fulfillmentValue} — pricing a page would need every parent
+   * order's lines; the detail/by-order reads carry it, and that is where the refund flow lives.
    */
   public FulfillmentPage list(UUID orgId, FulfillmentStatus status, int page, int size) {
     int p = Math.max(page, 0);
@@ -1143,14 +1153,32 @@ public final class FulfillmentService {
     FulfillmentRepository repo = fulfillmentRepoFactory.create(rootDsl);
     List<Fulfillment> items = repo.list(orgId, status, p * s, s);
     long total = repo.count(orgId, status);
-    return new FulfillmentPage(withLines(repo, items), total);
+    Map<UUID, String> orderNumbers =
+        salesOrderRepoFactory
+            .create(rootDsl)
+            .findOrderNumbersByIds(
+                orgId, items.stream().map(Fulfillment::getSalesOrderId).distinct().toList());
+    Map<UUID, List<FulfillmentLine>> lines =
+        repo.findLinesByFulfillmentIds(items.stream().map(Fulfillment::getId).toList());
+    List<FulfillmentView> views =
+        items.stream()
+            .map(
+                f ->
+                    new FulfillmentView(
+                        f,
+                        lines.getOrDefault(f.getId(), List.of()),
+                        orderNumbers.get(f.getSalesOrderId()),
+                        null))
+            .toList();
+    return new FulfillmentPage(views, total);
   }
 
   /**
    * The shipment story of an order — every fulfillment ever created for it regardless of status,
-   * oldest first ({@code created_at ASC}), each with its lines, plus the order header so the panel
-   * renders standalone. The by-order mirror of {@code PaymentService#listForOrder}. No pagination:
-   * fulfillment count is bounded by the order's line count.
+   * oldest first ({@code created_at ASC}), each with its lines, order number and monetary value,
+   * plus the order header so the panel renders standalone. The by-order mirror of {@code
+   * PaymentService#listForOrder}. No pagination: fulfillment count is bounded by the order's line
+   * count.
    *
    * @throws NotFoundException if the order is not in {@code orgId}
    */
@@ -1158,23 +1186,63 @@ public final class FulfillmentService {
     if (salesOrderId == null) {
       throw new ValidationException("sales order id is required");
     }
+    SalesOrderRepository orderRepo = salesOrderRepoFactory.create(rootDsl);
     SalesOrder order =
-        salesOrderRepoFactory
-            .create(rootDsl)
+        orderRepo
             .findById(orgId, salesOrderId)
             .orElseThrow(() -> new NotFoundException("SalesOrder", salesOrderId));
     FulfillmentRepository repo = fulfillmentRepoFactory.create(rootDsl);
-    return new OrderFulfillments(order, withLines(repo, repo.findByOrderId(orgId, salesOrderId)));
-  }
-
-  /** Assemble views with one batch line query, preserving the repository's ordering. */
-  private static List<FulfillmentView> withLines(
-      FulfillmentRepository repo, List<Fulfillment> fulfillments) {
+    List<Fulfillment> fulfillments = repo.findByOrderId(orgId, salesOrderId);
     Map<UUID, List<FulfillmentLine>> lines =
         repo.findLinesByFulfillmentIds(fulfillments.stream().map(Fulfillment::getId).toList());
-    return fulfillments.stream()
-        .map(f -> new FulfillmentView(f, lines.getOrDefault(f.getId(), List.of())))
-        .toList();
+    Map<UUID, SalesOrderLine> orderLines = orderLinesById(orderRepo, salesOrderId);
+    List<FulfillmentView> views =
+        fulfillments.stream()
+            .map(
+                f -> {
+                  List<FulfillmentLine> fLines = lines.getOrDefault(f.getId(), List.of());
+                  return new FulfillmentView(
+                      f, fLines, order.getOrderNumber(), fulfillmentValueOf(orderLines, fLines));
+                })
+            .toList();
+    return new OrderFulfillments(order, views);
+  }
+
+  /** The order's lines keyed by id — the pricing source for {@link #fulfillmentValueOf}. */
+  private static Map<UUID, SalesOrderLine> orderLinesById(
+      SalesOrderRepository orderRepo, UUID salesOrderId) {
+    Map<UUID, SalesOrderLine> byId = new LinkedHashMap<>();
+    for (SalesOrderLine ol : orderRepo.findLinesByOrderId(salesOrderId)) {
+      byId.put(ol.getId(), ol);
+    }
+    return byId;
+  }
+
+  /**
+   * The monetary value of a fulfillment — the grand total the invoice for its lines would carry at
+   * delivery ({@link InvoiceService#grandTotalOf}: identical scale and rounding to real issuance).
+   * The single valuation used both by {@link #refundFailed} to size the refund (and hence the
+   * OWNER-approval threshold check) and by the reads that expose it, so a client-side threshold
+   * pre-warning can never disagree with the guard.
+   */
+  private static BigDecimal fulfillmentValueOf(
+      Map<UUID, SalesOrderLine> orderLinesById, List<FulfillmentLine> fulfillmentLines) {
+    List<InvoiceService.LineSpec> specs = new ArrayList<>();
+    for (FulfillmentLine fl : fulfillmentLines) {
+      SalesOrderLine ol = orderLinesById.get(fl.getSalesOrderLineId());
+      if (ol == null) {
+        throw new IllegalStateException(
+            "fulfillment line " + fl.getId() + " references unknown order line");
+      }
+      specs.add(
+          new InvoiceService.LineSpec(
+              ol.getProductId(),
+              ol.getDescription(),
+              fl.getQuantity(),
+              ol.getUnitPrice(),
+              ol.getTaxRate()));
+    }
+    return InvoiceService.grandTotalOf(specs);
   }
 
   /**
