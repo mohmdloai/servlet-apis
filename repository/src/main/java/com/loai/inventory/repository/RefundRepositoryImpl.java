@@ -158,10 +158,11 @@ public final class RefundRepositoryImpl implements RefundRepository {
   }
 
   @Override
-  public List<Refund> list(UUID orgId, RefundStatus status, int offset, int limit) {
-    var query = dsl.selectFrom(REFUND).where(conditions(orgId, status));
+  public List<Refund> list(
+      UUID orgId, RefundStatus status, UUID creditNoteId, int offset, int limit) {
+    var query = dsl.selectFrom(REFUND).where(conditions(orgId, status, creditNoteId));
     // Queue vs ledger: a status filter is a worklist — execute the oldest first (FIFO);
-    // no filter is the audit ledger — newest first.
+    // no filter is the audit ledger — newest first. credit_note_id only narrows, never reorders.
     var ordered =
         status != null
             ? query.orderBy(REFUND.CREATED_AT.asc(), REFUND.ID.asc())
@@ -170,11 +171,11 @@ public final class RefundRepositoryImpl implements RefundRepository {
   }
 
   @Override
-  public long count(UUID orgId, RefundStatus status) {
-    return dsl.fetchCount(dsl.selectFrom(REFUND).where(conditions(orgId, status)));
+  public long count(UUID orgId, RefundStatus status, UUID creditNoteId) {
+    return dsl.fetchCount(dsl.selectFrom(REFUND).where(conditions(orgId, status, creditNoteId)));
   }
 
-  private static org.jooq.Condition conditions(UUID orgId, RefundStatus status) {
+  private static org.jooq.Condition conditions(UUID orgId, RefundStatus status, UUID creditNoteId) {
     org.jooq.Condition c = REFUND.ORG_ID.eq(orgId);
     if (status != null) {
       c =
@@ -182,6 +183,9 @@ public final class RefundRepositoryImpl implements RefundRepository {
               REFUND.STATUS.eq(
                   com.loai.inventory.repository.generated.enums.RefundStatus.valueOf(
                       status.name())));
+    }
+    if (creditNoteId != null) {
+      c = c.and(REFUND.CREDIT_NOTE_ID.eq(creditNoteId));
     }
     return c;
   }

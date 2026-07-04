@@ -336,6 +336,50 @@ class MoneyReadsIT {
     assertEquals(s.creditNoteNumber(), cnBacked.creditNoteNumber());
   }
 
+  // refunds list: credit_note_id filter (enumerating one note's refund history)
+
+  @Test
+  void list_filtersByCreditNoteId_narrowsWithoutReordering() {
+    UUID orgId = createOrg("acme");
+    Invoice invoice = seedInvoice(orgId, null, "200.00", InvoiceStatus.ISSUED, base);
+    UUID cnA =
+        seedCreditNote(
+            orgId,
+            invoice.id(),
+            "60.00",
+            com.loai.inventory.repository.generated.enums.CreditNoteStatus.ISSUED,
+            "CN-2026-0001",
+            base);
+    UUID cnB =
+        seedCreditNote(
+            orgId,
+            invoice.id(),
+            "40.00",
+            com.loai.inventory.repository.generated.enums.CreditNoteStatus.ISSUED,
+            "CN-2026-0002",
+            base);
+
+    UUID rA1 = createCnRefund(orgId, cnA, "10.00");
+    UUID rA2 = createCnRefund(orgId, cnA, "20.00");
+    UUID rB = createCnRefund(orgId, cnB, "15.00");
+    pinCreatedAt(rA1, base.plusMinutes(1));
+    pinCreatedAt(rA2, base.plusMinutes(2));
+    pinCreatedAt(rB, base.plusMinutes(3));
+
+    // Ledger (no status) narrowed to cnA → only its two refunds, newest-first.
+    RefundPage cnALedger = refundService.list(orgId, null, cnA, 0, 20);
+    assertEquals(List.of(rA2, rA1), ids(cnALedger));
+    assertEquals(2, cnALedger.total());
+
+    // AND with a status filter → oldest-first queue, still only cnA's refunds.
+    assertEquals(
+        List.of(rA1, rA2), ids(refundService.list(orgId, RefundStatus.PENDING, cnA, 0, 20)));
+
+    // cnB isolates its single refund; an unknown note is an empty page (a filter, not a 404).
+    assertEquals(List.of(rB), ids(refundService.list(orgId, null, cnB, 0, 20)));
+    assertEquals(0, refundService.list(orgId, null, UUID.randomUUID(), 0, 20).total());
+  }
+
   // credit notes by invoice (the cap meter)
 
   @Test
@@ -579,6 +623,17 @@ class MoneyReadsIT {
         .set(SALES_INVOICE_LINE.LINE_TOTAL, new BigDecimal(grandTotal))
         .execute();
     return new Invoice(invoiceId, number);
+  }
+
+  /** Create a PENDING CreditNote-backed refund (OWNER-bypassed) and return its id. */
+  private UUID createCnRefund(UUID orgId, UUID creditNoteId, String amount) {
+    return refundService
+        .create(
+            orgId,
+            new CreateCommand(
+                creditNoteId, null, new BigDecimal(amount), "EGP", PaymentProvider.CASH, null),
+            true)
+        .getId();
   }
 
   private UUID seedCreditNote(

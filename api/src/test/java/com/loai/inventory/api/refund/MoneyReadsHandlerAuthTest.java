@@ -70,7 +70,7 @@ class MoneyReadsHandlerAuthTest {
   @Test
   void refundsList_allowedForViewer_serviceCalled() throws IOException {
     RefundService service = Mockito.mock(RefundService.class);
-    when(service.list(eq(ORG), eq(RefundStatus.PENDING), anyInt(), anyInt()))
+    when(service.list(eq(ORG), eq(RefundStatus.PENDING), any(), anyInt(), anyInt()))
         .thenReturn(new RefundPage(List.of(), 0));
     Resp resp = new Resp();
 
@@ -83,7 +83,7 @@ class MoneyReadsHandlerAuthTest {
             "");
 
     assertEquals(200, resp.status, "VIEWER refunds worklist must succeed");
-    verify(service).list(eq(ORG), eq(RefundStatus.PENDING), eq(0), anyInt());
+    verify(service).list(eq(ORG), eq(RefundStatus.PENDING), any(), eq(0), anyInt());
   }
 
   @Test
@@ -94,7 +94,7 @@ class MoneyReadsHandlerAuthTest {
     refundHandler(service).handle("GET", reqWith(null, Map.of()), resp.mock, ORG, "");
 
     assertEquals(401, resp.status, "missing auth must be 401");
-    verify(service, never()).list(any(), any(), anyInt(), anyInt());
+    verify(service, never()).list(any(), any(), any(), anyInt(), anyInt());
   }
 
   @Test
@@ -111,7 +111,7 @@ class MoneyReadsHandlerAuthTest {
             "");
 
     assertEquals(400, resp.status, "unknown status must fail loudly");
-    verify(service, never()).list(any(), any(), anyInt(), anyInt());
+    verify(service, never()).list(any(), any(), any(), anyInt(), anyInt());
   }
 
   @Test
@@ -128,7 +128,39 @@ class MoneyReadsHandlerAuthTest {
             "");
 
     assertEquals(400, resp.status);
-    verify(service, never()).list(any(), any(), anyInt(), anyInt());
+    verify(service, never()).list(any(), any(), any(), anyInt(), anyInt());
+  }
+
+  @Test
+  void refundsList_creditNoteIdFilter_malformedIs400_validIsThreaded() throws IOException {
+    RefundService service = Mockito.mock(RefundService.class);
+    when(service.list(eq(ORG), any(), any(), anyInt(), anyInt()))
+        .thenReturn(new RefundPage(List.of(), 0));
+
+    // Malformed credit_note_id → 400 before the service is touched.
+    Resp bad = new Resp();
+    refundHandler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.VIEWER), Map.of("credit_note_id", "not-a-uuid")),
+            bad.mock,
+            ORG,
+            "");
+    assertEquals(400, bad.status);
+    verify(service, never()).list(any(), any(), any(), anyInt(), anyInt());
+
+    // A valid credit_note_id is parsed and threaded to the service.
+    UUID cn = UUID.randomUUID();
+    Resp ok = new Resp();
+    refundHandler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.VIEWER), Map.of("credit_note_id", cn.toString())),
+            ok.mock,
+            ORG,
+            "");
+    assertEquals(200, ok.status);
+    verify(service).list(eq(ORG), any(), eq(cn), eq(0), anyInt());
   }
 
   // GET /credit-notes?sales_invoice_id=

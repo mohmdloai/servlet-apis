@@ -126,7 +126,12 @@ public class RefundHandler implements OrgResourceHandler {
             Math.max(intParam(req, "size", RefundService.DEFAULT_PAGE_SIZE), 1),
             RefundService.MAX_PAGE_SIZE);
     RefundPage result =
-        service.list(orgId, RefundMapper.toStatusFilter(req.getParameter("status")), page, size);
+        service.list(
+            orgId,
+            RefundMapper.toStatusFilter(req.getParameter("status")),
+            parseCreditNoteId(req.getParameter("credit_note_id")),
+            page,
+            size);
     List<RefundResponse> data = result.items().stream().map(RefundMapper::toResponse).toList();
     writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
   }
@@ -172,6 +177,18 @@ public class RefundHandler implements OrgResourceHandler {
       return UUID.fromString(s);
     } catch (IllegalArgumentException e) {
       throw new ValidationException("Invalid refund id: " + s);
+    }
+  }
+
+  /** Parse the optional {@code credit_note_id} list filter; blank → null (no filter), bad → 400. */
+  private static UUID parseCreditNoteId(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(raw.trim());
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid credit_note_id: " + raw);
     }
   }
 

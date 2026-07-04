@@ -573,19 +573,26 @@ public final class RefundService {
   public static final int DEFAULT_PAGE_SIZE = 20;
   public static final int MAX_PAGE_SIZE = 100;
 
+  /** No-credit-note-filter shorthand: the whole worklist/ledger for the given {@code status}. */
+  public RefundPage list(UUID orgId, RefundStatus status, int page, int size) {
+    return list(orgId, status, null, page, size);
+  }
+
   /**
    * Read one page of the org's refunds — filtered by {@code status} it is a worklist ({@code
    * ?status=PENDING} is the to-execute queue, oldest first); unfiltered it is the ledger (newest
-   * first). Mirrors {@code PaymentTransactionService#list}: {@code page} floors at 0, {@code size}
-   * is clamped to {@code [1, MAX_PAGE_SIZE]}. Source context is batch-loaded — one projection per
-   * source aggregate per page (payments → orders → numbers; credit notes), never per row.
+   * first). A non-null {@code creditNoteId} narrows to one note's refund history (it only filters —
+   * ordering stays keyed on {@code status}). Mirrors {@code PaymentTransactionService#list}: {@code
+   * page} floors at 0, {@code size} is clamped to {@code [1, MAX_PAGE_SIZE]}. Source context is
+   * batch-loaded — one projection per source aggregate per page (payments → orders → numbers;
+   * credit notes), never per row.
    */
-  public RefundPage list(UUID orgId, RefundStatus status, int page, int size) {
+  public RefundPage list(UUID orgId, RefundStatus status, UUID creditNoteId, int page, int size) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
     RefundRepository refundRepo = refundRepoFactory.create(rootDsl);
-    List<Refund> items = refundRepo.list(orgId, status, p * s, s);
-    long total = refundRepo.count(orgId, status);
+    List<Refund> items = refundRepo.list(orgId, status, creditNoteId, p * s, s);
+    long total = refundRepo.count(orgId, status, creditNoteId);
 
     Map<UUID, UUID> orderIdsByPayment =
         paymentRepoFactory
