@@ -32,6 +32,15 @@ public interface RefundRepository {
   /** Total amount of EXECUTED refunds against a credit note — drives the SETTLED threshold. */
   BigDecimal sumExecutedByCreditNote(UUID orgId, UUID creditNoteId);
 
+  /**
+   * Batch variant of {@link #sumExecutedByCreditNote}: the EXECUTED-refund total per credit note,
+   * for the given ids, keyed by {@code credit_note_id}. Credit notes with no EXECUTED refund are
+   * absent from the map (callers default to zero). Backs the per-note refunded/remaining decoration
+   * on the invoice's credit-note list without an N+1.
+   */
+  java.util.Map<UUID, BigDecimal> sumExecutedByCreditNotes(
+      UUID orgId, java.util.Collection<UUID> creditNoteIds);
+
   /** True if any EXECUTED refund references this credit note — blocks voiding it. */
   boolean existsExecutedByCreditNote(UUID orgId, UUID creditNoteId);
 

@@ -25,7 +25,13 @@ public class InvoiceCreditNotesResponse {
     InvoiceCreditNotesResponse r = new InvoiceCreditNotesResponse();
     r.invoice = InvoiceSummary.from(result.invoice());
     r.creditedTotal = result.creditedTotal();
-    r.data = result.notes().stream().map(CreditNoteResponse::from).toList();
+    r.data =
+        result.notes().stream()
+            .map(
+                n ->
+                    CreditNoteResponse.from(
+                        n, result.refundedTotals().getOrDefault(n.getId(), BigDecimal.ZERO)))
+            .toList();
     return r;
   }
 

@@ -2,7 +2,6 @@ package com.loai.inventory.api.servlet.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
-import com.loai.inventory.api.dto.CreditNoteResponse;
 import com.loai.inventory.api.dto.IssueCreditNoteRequest;
 import com.loai.inventory.api.mapper.CreditNoteMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -11,6 +10,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.CreditNoteService;
+import com.loai.inventory.service.CreditNoteService.Detail;
 import com.loai.inventory.service.CreditNoteService.Issued;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -102,8 +102,8 @@ public class CreditNoteHandler implements OrgResourceHandler {
   private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
       throws IOException {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
-    Issued issued = service.get(orgId, id);
-    writeJson(resp, 200, CreditNoteMapper.toResponse(issued));
+    Detail detail = service.get(orgId, id);
+    writeJson(resp, 200, CreditNoteMapper.toResponse(detail));
   }
 
   /**
@@ -138,8 +138,8 @@ public class CreditNoteHandler implements OrgResourceHandler {
   private void doVoid(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
       throws IOException {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.OWNER);
-    var note = service.voidNote(orgId, id);
-    writeJson(resp, 200, CreditNoteResponse.from(note, service.get(orgId, id).lines()));
+    service.voidNote(orgId, id);
+    writeJson(resp, 200, CreditNoteMapper.toResponse(service.get(orgId, id)));
   }
 
   private static boolean isOwnerOrAdmin(SecurityContext sc, UUID orgId) {

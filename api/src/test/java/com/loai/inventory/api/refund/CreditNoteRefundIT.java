@@ -270,6 +270,50 @@ class CreditNoteRefundIT {
     assertEquals("PAID", invoiceStatus(f.invoiceId));
   }
 
+  /**
+   * The CN reads expose the executed/remaining meter (G1): the detail read ({@code get}) carries
+   * {@code refundedTotal}, and the invoice's credit-note list carries it per note — a client reads
+   * the meter straight off the note instead of reconstructing it by scanning the refund ledger.
+   */
+  @Test
+  void creditNoteReads_exposeRefundedTotal_detailAndList() {
+    Fixture f = deliverPaidInvoice("30.00", "30.00");
+    UUID cnId =
+        creditNoteService
+            .issue(f.org, returnCommand(f.invoiceId, "30.00"), false)
+            .creditNote()
+            .getId();
+
+    // Nothing refunded yet.
+    assertEquals(0, BigDecimal.ZERO.compareTo(creditNoteService.get(f.org, cnId).refundedTotal()));
+
+    // Partial refund of 10 → both reads report 10 executed.
+    refundService.execute(f.org, createCnRefund(f.org, cnId, "10.00"), null, actorId);
+    assertEquals(
+        0, new BigDecimal("10.00").compareTo(creditNoteService.get(f.org, cnId).refundedTotal()));
+    assertEquals(
+        0,
+        new BigDecimal("10.00")
+            .compareTo(
+                creditNoteService
+                    .listForInvoice(f.org, f.invoiceId, null)
+                    .refundedTotals()
+                    .getOrDefault(cnId, BigDecimal.ZERO)));
+
+    // Settle the remaining 20 → 30 executed on both reads.
+    refundService.execute(f.org, createCnRefund(f.org, cnId, "20.00"), null, actorId);
+    assertEquals(
+        0, new BigDecimal("30.00").compareTo(creditNoteService.get(f.org, cnId).refundedTotal()));
+    assertEquals(
+        0,
+        new BigDecimal("30.00")
+            .compareTo(
+                creditNoteService
+                    .listForInvoice(f.org, f.invoiceId, null)
+                    .refundedTotals()
+                    .getOrDefault(cnId, BigDecimal.ZERO)));
+  }
+
   // Direct-from-Payment
 
   /**
@@ -423,7 +467,8 @@ class CreditNoteRefundIT {
         () -> creditNoteService.issue(f.org, badLineCommand(f.invoiceId, 1, "-1.00", "0"), true));
     assertThrows(
         ValidationException.class,
-        () -> creditNoteService.issue(f.org, badLineCommand(f.invoiceId, 1, "10.00", "-0.1"), true));
+        () ->
+            creditNoteService.issue(f.org, badLineCommand(f.invoiceId, 1, "10.00", "-0.1"), true));
   }
 
   /** Exactly one authorization source — both or neither set is a 400. */
@@ -624,8 +669,11 @@ class CreditNoteRefundIT {
         "customer returned goods",
         List.of(
             new CreditNoteService.LineSpec(
-                null, "returned item", quantity, new BigDecimal(unitPrice), new BigDecimal(
-                    taxRate))));
+                null,
+                "returned item",
+                quantity,
+                new BigDecimal(unitPrice),
+                new BigDecimal(taxRate))));
   }
 
   private IssueCommand returnCommand(UUID invoiceId, String total) {

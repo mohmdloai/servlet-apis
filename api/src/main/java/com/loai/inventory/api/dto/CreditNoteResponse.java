@@ -19,14 +19,29 @@ public class CreditNoteResponse {
   private BigDecimal subtotal;
   private BigDecimal taxTotal;
   private BigDecimal total;
+  private BigDecimal refundedTotal;
+  private BigDecimal remainingRefundable;
   private String currency;
   private OffsetDateTime issuedAt;
   private List<Line> lines;
 
   private CreditNoteResponse() {}
 
+  /** Detail shape (issuance response): lines, no refund decoration. */
   public static CreditNoteResponse from(CreditNote n, List<CreditNoteLine> lines) {
     CreditNoteResponse r = from(n);
+    r.lines = lines.stream().map(Line::from).toList();
+    return r;
+  }
+
+  /**
+   * Detail shape for the GET read: lines plus the refund meter — {@code refunded_total} (sum of
+   * EXECUTED refunds against this note) and {@code remaining_refundable} ({@code total −
+   * refunded_total}), so a client never reconstructs it from the refund ledger.
+   */
+  public static CreditNoteResponse from(
+      CreditNote n, List<CreditNoteLine> lines, BigDecimal refundedTotal) {
+    CreditNoteResponse r = from(n, refundedTotal);
     r.lines = lines.stream().map(Line::from).toList();
     return r;
   }
@@ -49,6 +64,14 @@ public class CreditNoteResponse {
     r.total = n.getTotal();
     r.currency = n.getCurrency();
     r.issuedAt = n.getIssuedAt();
+    return r;
+  }
+
+  /** Header row + the refund meter, for the invoice's credit-note list. */
+  public static CreditNoteResponse from(CreditNote n, BigDecimal refundedTotal) {
+    CreditNoteResponse r = from(n);
+    r.refundedTotal = refundedTotal;
+    r.remainingRefundable = n.getTotal().subtract(refundedTotal);
     return r;
   }
 
@@ -90,6 +113,14 @@ public class CreditNoteResponse {
 
   public BigDecimal getTotal() {
     return total;
+  }
+
+  public BigDecimal getRefundedTotal() {
+    return refundedTotal;
+  }
+
+  public BigDecimal getRemainingRefundable() {
+    return remainingRefundable;
   }
 
   public String getCurrency() {

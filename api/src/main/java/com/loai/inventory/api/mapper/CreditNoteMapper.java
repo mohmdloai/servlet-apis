@@ -6,6 +6,7 @@ import com.loai.inventory.api.dto.IssueCreditNoteRequest;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.CreditNoteReason;
 import com.loai.inventory.domain.model.CreditNoteStatus;
+import com.loai.inventory.service.CreditNoteService.Detail;
 import com.loai.inventory.service.CreditNoteService.InvoiceCreditNotes;
 import com.loai.inventory.service.CreditNoteService.IssueCommand;
 import com.loai.inventory.service.CreditNoteService.Issued;
@@ -42,6 +43,10 @@ public final class CreditNoteMapper {
 
   public static CreditNoteResponse toResponse(Issued issued) {
     return CreditNoteResponse.from(issued.creditNote(), issued.lines());
+  }
+
+  public static CreditNoteResponse toResponse(Detail detail) {
+    return CreditNoteResponse.from(detail.creditNote(), detail.lines(), detail.refundedTotal());
   }
 
   public static InvoiceCreditNotesResponse toInvoiceCreditNotesResponse(InvoiceCreditNotes result) {

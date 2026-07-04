@@ -139,7 +139,7 @@ class MoneyReadsHandlerAuthTest {
     SalesInvoice invoice = Mockito.mock(SalesInvoice.class);
     when(invoice.getStatus()).thenReturn(com.loai.inventory.domain.model.InvoiceStatus.ISSUED);
     when(service.listForInvoice(ORG, INVOICE, null))
-        .thenReturn(new InvoiceCreditNotes(invoice, BigDecimal.ZERO, List.of()));
+        .thenReturn(new InvoiceCreditNotes(invoice, BigDecimal.ZERO, List.of(), Map.of()));
     Resp resp = new Resp();
 
     creditNoteHandler(service)

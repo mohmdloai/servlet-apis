@@ -23,6 +23,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -185,12 +186,22 @@ public final class CreditNoteService {
         });
   }
 
-  /** Read a credit note (with lines) for the GET endpoint. */
-  public Issued get(UUID orgId, UUID id) {
+  /**
+   * A credit note's detail read: the note, its lines, and {@code refundedTotal} — the sum of
+   * EXECUTED refunds against it. {@code remaining = note.total − refundedTotal} is what a client
+   * can still refund against the note; exposing both here means the UI never has to reconstruct it
+   * by scanning the refund ledger.
+   */
+  public record Detail(
+      CreditNote creditNote, List<CreditNoteLine> lines, BigDecimal refundedTotal) {}
+
+  /** Read a credit note (with lines and its EXECUTED-refund total) for the GET endpoint. */
+  public Detail get(UUID orgId, UUID id) {
     CreditNoteRepository repo = creditNoteRepoFactory.create(rootDsl);
     CreditNote note =
         repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("CreditNote", id));
-    return new Issued(note, repo.findLinesByCreditNoteId(id));
+    BigDecimal refundedTotal = refundRepoFactory.create(rootDsl).sumExecutedByCreditNote(orgId, id);
+    return new Detail(note, repo.findLinesByCreditNoteId(id), refundedTotal);
   }
 
   /**
@@ -201,7 +212,10 @@ public final class CreditNoteService {
    * instead of discovering the cap by a 400.
    */
   public record InvoiceCreditNotes(
-      SalesInvoice invoice, BigDecimal creditedTotal, List<CreditNote> notes) {}
+      SalesInvoice invoice,
+      BigDecimal creditedTotal,
+      List<CreditNote> notes,
+      Map<UUID, BigDecimal> refundedTotals) {}
 
   /**
    * List the credit notes raised against one invoice, optionally filtered by {@code status} (VOID
@@ -222,10 +236,13 @@ public final class CreditNoteService {
             .findById(orgId, salesInvoiceId)
             .orElseThrow(() -> new NotFoundException("SalesInvoice", salesInvoiceId));
     CreditNoteRepository repo = creditNoteRepoFactory.create(rootDsl);
+    List<CreditNote> notes = repo.findByInvoiceId(orgId, salesInvoiceId, status);
+    Map<UUID, BigDecimal> refundedTotals =
+        refundRepoFactory
+            .create(rootDsl)
+            .sumExecutedByCreditNotes(orgId, notes.stream().map(CreditNote::getId).toList());
     return new InvoiceCreditNotes(
-        invoice,
-        repo.sumIssuedTotalByInvoice(orgId, salesInvoiceId),
-        repo.findByInvoiceId(orgId, salesInvoiceId, status));
+        invoice, repo.sumIssuedTotalByInvoice(orgId, salesInvoiceId), notes, refundedTotals);
   }
 
   /** Void an ISSUED CreditNote — rejected if any refund has been EXECUTED against it. */

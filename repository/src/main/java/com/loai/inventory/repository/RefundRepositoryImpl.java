@@ -8,7 +8,9 @@ import com.loai.inventory.domain.model.RefundStatus;
 import com.loai.inventory.domain.repository.RefundRepository;
 import com.loai.inventory.repository.generated.tables.records.RefundRecord;
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -109,6 +111,26 @@ public final class RefundRepositoryImpl implements RefundRepository {
                             com.loai.inventory.repository.generated.enums.RefundStatus.EXECUTED)))
             .fetchOne(0, BigDecimal.class);
     return sum == null ? BigDecimal.ZERO : sum;
+  }
+
+  @Override
+  public Map<UUID, BigDecimal> sumExecutedByCreditNotes(
+      UUID orgId, Collection<UUID> creditNoteIds) {
+    if (creditNoteIds == null || creditNoteIds.isEmpty()) {
+      return Map.of();
+    }
+    return dsl.select(REFUND.CREDIT_NOTE_ID, DSL.sum(REFUND.AMOUNT))
+        .from(REFUND)
+        .where(
+            REFUND
+                .ORG_ID
+                .eq(orgId)
+                .and(REFUND.CREDIT_NOTE_ID.in(creditNoteIds))
+                .and(
+                    REFUND.STATUS.eq(
+                        com.loai.inventory.repository.generated.enums.RefundStatus.EXECUTED)))
+        .groupBy(REFUND.CREDIT_NOTE_ID)
+        .fetchMap(REFUND.CREDIT_NOTE_ID, DSL.sum(REFUND.AMOUNT));
   }
 
   @Override
