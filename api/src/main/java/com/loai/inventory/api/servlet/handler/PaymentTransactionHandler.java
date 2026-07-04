@@ -39,7 +39,9 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li>{@code GET /api/orgs/{orgId}/payment-transactions} — the reconciliation worklist / ledger
  *       ({@code stories/list_payment_transactions.md}). Optional ANDed filters {@code
- *       verification_status}, {@code reconciliation_status}, {@code has_payment} plus {@code
+ *       verification_status}, {@code reconciliation_status}, {@code has_payment}, {@code provider},
+ *       {@code provider_ref} (exact after trimming, case-sensitive — the support lookup "did we
+ *       record this reference?", {@code stories/lookup_transaction_by_reference.md}) plus {@code
  *       page}/{@code size}; the open orphan queue is {@code
  *       ?reconciliation_status=ORPHAN&has_payment=false}.
  *   <li>{@code GET /api/orgs/{orgId}/payment-transactions/{id}} — one transaction plus its
@@ -126,7 +128,10 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
         new ListFilter(
             enumParam(req, "verification_status", PaymentVerificationStatus.class),
             enumParam(req, "reconciliation_status", PaymentReconciliationStatus.class),
-            boolParam(req, "has_payment"));
+            boolParam(req, "has_payment"),
+            PaymentTransactionMapper.toProviderFilter(req.getParameter("provider")),
+            // ListFilter's canonical constructor trims (references arrive by copy-paste).
+            req.getParameter("provider_ref"));
     // Clamp here too so the envelope echoes the page/size actually served.
     int page = Math.max(intParam(req, "page", 0), 0);
     int size =

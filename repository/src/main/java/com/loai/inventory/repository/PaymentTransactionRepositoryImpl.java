@@ -178,6 +178,16 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
                   .where(PAYMENT.PAYMENT_TRANSACTION_ID.eq(PAYMENT_TRANSACTION.ID)));
       c = c.and(filter.hasPayment() ? payment : DSL.not(payment));
     }
+    if (filter.provider() != null) {
+      c =
+          c.and(
+              PAYMENT_TRANSACTION.PROVIDER.eq(
+                  com.loai.inventory.repository.generated.enums.PaymentProvider.valueOf(
+                      filter.provider().dbLiteral())));
+    }
+    if (filter.providerRef() != null) {
+      c = c.and(PAYMENT_TRANSACTION.PROVIDER_REF.eq(filter.providerRef()));
+    }
     return c;
   }
 

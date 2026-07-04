@@ -383,6 +383,86 @@ class PaymentTransactionReadIT {
                 otherOrg, filter(null, PaymentReconciliationStatus.ORPHAN, false), 0, 20)));
   }
 
+  // ─────────────── list: lookup by provider reference (G6 follow-up) ───────────────
+
+  @Test
+  void providerRefFilter_recordedReference_exactlyThatRow_unknownIsEmptyNotError() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    Order order = seedPendingOrder(orgId, "500.00");
+    UUID recorded = verifyWithRef(orgId, admin, "IP-778899", "500.00", order.number(), "MATCHED");
+    verify(orgId, admin, "250.00", null, "ORPHAN"); // noise the filter must exclude
+
+    TransactionPage hit = service.list(orgId, refFilter("IP-778899", null), 0, 20);
+    assertEquals(1, hit.total());
+    assertEquals(List.of(recorded), ids(hit));
+
+    // "Never recorded here" is an empty list, not a 404 — the support-flow answer.
+    TransactionPage miss = service.list(orgId, refFilter("IP-000000", null), 0, 20);
+    assertEquals(0, miss.total());
+    assertTrue(miss.items().isEmpty());
+  }
+
+  @Test
+  void providerRefFilter_trimsWhitespace_butStaysCaseSensitive() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    Order order = seedPendingOrder(orgId, "500.00");
+    UUID recorded = verifyWithRef(orgId, admin, "IP-778899", "500.00", order.number(), "MATCHED");
+
+    // Copy-paste padding matches (ListFilter's canonical constructor trims)…
+    assertEquals(
+        List.of(recorded), ids(service.list(orgId, refFilter("  IP-778899  ", null), 0, 20)));
+    // …but the reference is the provider's identifier, not user prose — case must match.
+    assertEquals(0, service.list(orgId, refFilter("ip-778899", null), 0, 20).total());
+  }
+
+  @Test
+  void providerRefFilter_isOrgScoped_overTheGlobalNaturalKey() {
+    UUID orgA = createOrg("acme");
+    UUID adminA = createUser("admin@acme.test");
+    Order order = seedPendingOrder(orgA, "500.00");
+    verifyWithRef(orgA, adminA, "IP-778899", "500.00", order.number(), "MATCHED");
+    UUID orgB = createOrg("other");
+
+    // The reference exists globally (org A's row) but org B sees nothing — never a leak.
+    assertEquals(0, service.list(orgB, refFilter("IP-778899", null), 0, 20).total());
+  }
+
+  @Test
+  void providerRefFilter_composesWithHasPayment_theWhatHappenedFollowUp() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    Order order = seedPendingOrder(orgId, "500.00");
+    UUID recorded = verifyWithRef(orgId, admin, "IP-778899", "500.00", order.number(), "MATCHED");
+
+    // MATCHED created its payment, so the ref is found with has_payment=true and not without.
+    assertEquals(List.of(recorded), ids(service.list(orgId, refFilter("IP-778899", true), 0, 20)));
+    assertEquals(0, service.list(orgId, refFilter("IP-778899", false), 0, 20).total());
+  }
+
+  @Test
+  void providerFilter_literalColumnMatch() {
+    UUID orgId = createOrg("acme");
+    UUID admin = createUser("admin@acme.test");
+    Order order = seedPendingOrder(orgId, "500.00");
+    UUID recorded = verifyWithRef(orgId, admin, "IP-778899", "500.00", order.number(), "MATCHED");
+
+    assertEquals(
+        List.of(recorded),
+        ids(
+            service.list(
+                orgId,
+                new ListFilter(null, null, null, PaymentProvider.INSTAPAY_MANUAL, null),
+                0,
+                20)));
+    assertEquals(
+        0,
+        service
+            .list(orgId, new ListFilter(null, null, null, PaymentProvider.CASH, null), 0, 20)
+            .total());
+  }
+
   // ───────────────────────────── detail ─────────────────────────────
 
   @Test
@@ -446,7 +526,11 @@ class PaymentTransactionReadIT {
 
   private static ListFilter filter(
       PaymentVerificationStatus v, PaymentReconciliationStatus r, Boolean hasPayment) {
-    return new ListFilter(v, r, hasPayment);
+    return new ListFilter(v, r, hasPayment, null, null);
+  }
+
+  private static ListFilter refFilter(String providerRef, Boolean hasPayment) {
+    return new ListFilter(null, null, hasPayment, null, providerRef);
   }
 
   private static List<UUID> ids(TransactionPage page) {
@@ -459,12 +543,19 @@ class PaymentTransactionReadIT {
    * Record-and-verify a credit with a distinct occurred_at; asserts the expected reconciliation.
    */
   private UUID verify(UUID orgId, UUID admin, String amount, String orderNumber, String expected) {
+    return verifyWithRef(
+        orgId, admin, "IPN-" + refSeq.getAndIncrement(), amount, orderNumber, expected);
+  }
+
+  /** Like {@link #verify} but with an explicit provider reference (the lookup tests key on it). */
+  private UUID verifyWithRef(
+      UUID orgId, UUID admin, String ref, String amount, String orderNumber, String expected) {
     VerifyResult r =
         service.verify(
             orgId,
             new VerifyCommand(
                 PaymentProvider.INSTAPAY_MANUAL,
-                "IPN-" + refSeq.getAndIncrement(),
+                ref,
                 new BigDecimal(amount),
                 "EGP",
                 null,
