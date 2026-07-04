@@ -30,7 +30,8 @@ public final class FulfillmentMapper {
   }
 
   public static FulfillmentResponse toResponse(FulfillmentView view) {
-    return FulfillmentResponse.from(view.fulfillment(), view.lines());
+    return FulfillmentResponse.from(
+        view.fulfillment(), view.lines(), view.salesOrderNumber(), view.fulfillmentValue());
   }
 
   public static List<FulfillmentResponse> toResponses(List<FulfillmentView> views) {

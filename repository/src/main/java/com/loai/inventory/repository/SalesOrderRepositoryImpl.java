@@ -70,6 +70,17 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   }
 
   @Override
+  public Map<UUID, String> findOrderNumbersByIds(UUID orgId, Collection<UUID> salesOrderIds) {
+    if (salesOrderIds.isEmpty()) {
+      return Map.of();
+    }
+    return dsl.select(SALES_ORDER.ID, SALES_ORDER.ORDER_NUMBER)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.ID.in(salesOrderIds)))
+        .fetchMap(SALES_ORDER.ID, SALES_ORDER.ORDER_NUMBER);
+  }
+
+  @Override
   public Optional<SalesOrder> findByOrderNumber(UUID orgId, String orderNumber) {
     if (orderNumber == null || orderNumber.isBlank()) {
       return Optional.empty();

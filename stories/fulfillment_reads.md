@@ -55,6 +55,14 @@ purely serialization.
   (default 20), `PageResponse` envelope. Unknown `status` → 400 (fail loudly).
 - Every list row carries its lines (the packing queue is unusable without them); lines are
   batch-loaded — one query per page, not per row.
+- Every read row also carries `sales_order_number` (batch-loaded the same way), so a queue card can
+  name its order without a per-row lookup.
+- The detail and by-order reads carry `fulfillment_value` — the grand total the invoice for this
+  fulfillment's lines would carry at delivery, computed by the **same helper** `refundFailed` sizes
+  its refund (and the OWNER-approval threshold check) by, so a client-side threshold pre-warning can
+  never disagree with the guard. (The actual executed refund may still be capped by the order's
+  remaining unallocated prepayment.) The queue list omits it — pricing a page would need every
+  parent order's lines, and the refund flow lives on the detail screen.
 - The by-order list returns **all** fulfillments regardless of status, oldest first — CANCELLED and
   FAILED are part of the story — plus the order header (`OrderSummary`) so the panel renders
   standalone. No pagination: fulfillment count is bounded by the order's line count.
@@ -88,6 +96,7 @@ GET /api/orgs/{orgId}/fulfillments?status=PENDING&page=0&size=20
       "id": "<uuid>",
       "org_id": "<uuid>",
       "sales_order_id": "<uuid>",
+      "sales_order_number": "SO-2026-000123",
       "status": "FAILED",
       "carrier": "Bosta",
       "tracking_number": "TRK-1",
@@ -112,7 +121,8 @@ GET /api/orgs/{orgId}/fulfillments?status=PENDING&page=0&size=20
 `delivered_at`; a CANCELLED one `cancelled_at`. Null fields are omitted, as everywhere.)
 
 ```
-GET /api/orgs/{orgId}/fulfillments/{id}          → the same row shape, single object
+GET /api/orgs/{orgId}/fulfillments/{id}          → the same row shape, single object,
+                                                   plus "fulfillment_value": 30.00
 GET /api/orgs/{orgId}/sales-orders/{id}          → the existing SalesOrderResponse
 GET /api/orgs/{orgId}/sales-orders/{id}/fulfillments
 ```
@@ -154,7 +164,10 @@ routes keep their existing STAFF/MANAGER gates.
 - `FulfillmentService.get/list/listForOrder` + `FulfillmentPage`/`OrderFulfillments` records;
   `SalesOrderService.getById`.
 - GET branches in `FulfillmentHandler` and `SalesOrderHandler`; `OrderFulfillmentsResponse` DTO;
-  the four missing `FulfillmentResponse` fields.
+  the four missing `FulfillmentResponse` fields, plus the read decorations `sales_order_number`
+  (all reads; `SalesOrderRepository.findOrderNumbersByIds` batch projection) and
+  `fulfillment_value` (detail + by-order; the extracted `fulfillmentValueOf` helper shared with
+  `refundFailed`).
 - Docs: CLAUDE.md endpoint list.
 
 ### Out (deferred)
@@ -174,7 +187,10 @@ services):
   exposes `failed_reason`, `returned_at`, `resolution=REPLACED` and the replacement's
   `replaces_fulfillment_id`; unknown/foreign id → 404.
 - list: status filter (queue ASC), unfiltered ledger DESC with batch-loaded lines, pagination
-  tiling without overlap, page/size clamping, org scoping.
+  tiling without overlap, page/size clamping, org scoping; each row carries its own order's
+  `sales_order_number` (and no `fulfillment_value`).
+- value: the detail's `fulfillment_value` is the invoice arithmetic (subtotal + tax), and —
+  guard-parity end-to-end — equals the PENDING refund total `refundFailed` actually creates.
 - by-order: every status oldest-first + FULFILLING header; empty `data` for a fulfillment-less
   order; unknown/foreign order → 404.
 
