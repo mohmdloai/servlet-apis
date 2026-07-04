@@ -107,9 +107,11 @@ class OrphanRefundIT {
 
     PaymentService paymentService =
         new PaymentService(
+            dsl,
             new PaymentRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl(),
-            new PaymentTransactionRepositoryFactoryImpl());
+            new PaymentTransactionRepositoryFactoryImpl(),
+            new RefundRepositoryFactoryImpl());
     refundService =
         new RefundService(
             dsl,

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CancelOrderRequest;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
+import com.loai.inventory.api.mapper.PaymentMapper;
 import com.loai.inventory.api.mapper.SalesOrderMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
@@ -15,6 +16,7 @@ import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderCancellationService.CancelResult;
+import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.SalesOrderService.InStoreSale;
 import com.loai.inventory.service.SalesOrderService.Placed;
@@ -26,13 +28,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Handles {@code POST /api/orgs/{orgId}/sales-orders}, dispatching by request {@code channel}:
- * {@code IN_STORE} runs the whole sale in one txn ({@code stories/in_store_sale.md}); {@code
- * ONLINE} / {@code PHONE} (the default) place a PENDING_PAYMENT order with reservations ({@code
- * stories/place_online_order.md}). Both require STAFF (system ADMIN bypasses).
+ * Handles {@code /api/orgs/{orgId}/sales-orders}:
  *
- * <p>Other methods (GET/PUT/DELETE) and the {@code /sales-orders/{id}} sub-paths are not
- * implemented yet — later slices.
+ * <ul>
+ *   <li>{@code POST /} — place an order, dispatching by request {@code channel}: {@code IN_STORE}
+ *       runs the whole sale in one txn ({@code stories/in_store_sale.md}); {@code ONLINE} / {@code
+ *       PHONE} (the default) place a PENDING_PAYMENT order with reservations ({@code
+ *       stories/place_online_order.md}). Both require STAFF (system ADMIN bypasses).
+ *   <li>{@code POST /{id}/cancel} — cancel an order (MANAGER).
+ *   <li>{@code GET /{id}/payments} — the order's money story: every payment FIFO with its refunds
+ *       ({@code stories/list_order_payments.md}). VIEWER.
+ * </ul>
+ *
+ * <p>Other methods and the {@code /sales-orders/{id}} sub-paths are not implemented yet — later
+ * slices.
  */
 public class SalesOrderHandler implements OrgResourceHandler {
 
@@ -41,14 +50,17 @@ public class SalesOrderHandler implements OrgResourceHandler {
 
   private final SalesOrderService service;
   private final OrderCancellationService cancellationService;
+  private final PaymentService paymentService;
   private final ObjectMapper mapper;
 
   public SalesOrderHandler(
       SalesOrderService service,
       OrderCancellationService cancellationService,
+      PaymentService paymentService,
       ObjectMapper mapper) {
     this.service = service;
     this.cancellationService = cancellationService;
+    this.paymentService = paymentService;
     this.mapper = mapper;
   }
 
@@ -61,12 +73,16 @@ public class SalesOrderHandler implements OrgResourceHandler {
       String remainingPath)
       throws IOException {
     try {
+      String[] parts = splitPath(remainingPath);
+      if ("GET".equals(method) && parts.length == 2 && "payments".equals(parts[1])) {
+        doGetPayments(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
       if (!"POST".equals(method)) {
         writeError(resp, 405, "Method not allowed");
         return;
       }
 
-      String[] parts = splitPath(remainingPath);
       if (parts.length == 0) {
         doPost(req, resp, orgId);
         return;
@@ -145,6 +161,20 @@ public class SalesOrderHandler implements OrgResourceHandler {
             orgId, orderId, reason, refundMethod, sc.actorId(), isOwnerOrAdmin(sc, orgId));
 
     writeJson(resp, 200, SalesOrderMapper.toCancelResponse(result));
+  }
+
+  /**
+   * {@code GET /{id}/payments} — every payment ever applied to the order, FIFO ({@code received_at
+   * ASC, id ASC}), each with its refunds. VIEWER — the project-wide read bar.
+   */
+  private void doGetPayments(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID orderId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(
+        resp,
+        200,
+        PaymentMapper.toOrderPaymentsResponse(paymentService.listForOrder(orgId, orderId)));
   }
 
   /** OWNER in the org (or system ADMIN) — gates an above-threshold cancellation refund. */

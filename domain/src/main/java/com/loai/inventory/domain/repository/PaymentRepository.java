@@ -30,6 +30,15 @@ public interface PaymentRepository {
   Optional<Payment> findByIdForUpdate(UUID orgId, UUID id);
 
   /**
+   * All payments ever applied to an order, regardless of status (RECEIVED, ALLOCATED, DISPUTED,
+   * REFUNDED), ordered {@code received_at ASC, id ASC} — the same FIFO order invoice allocation
+   * consumes them in, so the list reads as the audit trail of {@code prepaid_amount}. Unlocked,
+   * unfiltered sibling of {@link #findUnallocatedByOrderForUpdate} for the read-only order money
+   * story.
+   */
+  List<Payment> findByOrderId(UUID orgId, UUID salesOrderId);
+
+  /**
    * The order's prepayment Payments still carrying an unallocated balance, locked {@code FOR
    * UPDATE} and ordered for FIFO consumption at invoice issuance:
    *

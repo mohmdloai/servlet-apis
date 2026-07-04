@@ -28,6 +28,7 @@ import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
+import com.loai.inventory.repository.RefundRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.generated.enums.ActorType;
@@ -136,9 +137,11 @@ class InStoreSaleIT {
                 new com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl()));
     PaymentService paymentService =
         new PaymentService(
+            dsl,
             new PaymentRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl(),
-            new PaymentTransactionRepositoryFactoryImpl());
+            new PaymentTransactionRepositoryFactoryImpl(),
+            new RefundRepositoryFactoryImpl());
     com.loai.inventory.service.MagicLinkService magicLink =
         new com.loai.inventory.service.MagicLinkService(
             dsl,
