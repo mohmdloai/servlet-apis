@@ -408,6 +408,24 @@ class CreditNoteRefundIT {
     assertEquals("ISSUED", creditNoteStatus(cn2));
   }
 
+  /**
+   * Bad per-line input (non-positive quantity, negative money) is a 400 from the service's own
+   * validation — not a 500 leaking out of {@code CreditNoteLine.create}'s IllegalArgumentException.
+   */
+  @Test
+  void invalidLineInput_isRejectedAsValidation() {
+    Fixture f = deliverPaidInvoice("100.00", "100.00");
+    assertThrows(
+        ValidationException.class,
+        () -> creditNoteService.issue(f.org, badLineCommand(f.invoiceId, 0, "10.00", "0"), true));
+    assertThrows(
+        ValidationException.class,
+        () -> creditNoteService.issue(f.org, badLineCommand(f.invoiceId, 1, "-1.00", "0"), true));
+    assertThrows(
+        ValidationException.class,
+        () -> creditNoteService.issue(f.org, badLineCommand(f.invoiceId, 1, "10.00", "-0.1"), true));
+  }
+
   /** Exactly one authorization source — both or neither set is a 400. */
   @Test
   void exactlyOneSource_isEnforced() {
@@ -597,6 +615,18 @@ class CreditNoteRefundIT {
   // fixtures & helpers
 
   private record Fixture(UUID org, UUID customer, UUID invoiceId, UUID paymentId) {}
+
+  private IssueCommand badLineCommand(
+      UUID invoiceId, int quantity, String unitPrice, String taxRate) {
+    return new IssueCommand(
+        invoiceId,
+        CreditNoteReason.RETURN,
+        "customer returned goods",
+        List.of(
+            new CreditNoteService.LineSpec(
+                null, "returned item", quantity, new BigDecimal(unitPrice), new BigDecimal(
+                    taxRate))));
+  }
 
   private IssueCommand returnCommand(UUID invoiceId, String total) {
     // qty=1 at unit_price=total, taxRate 0 → line total == total.

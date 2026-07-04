@@ -274,5 +274,31 @@ public final class CreditNoteService {
     if (cmd.lines() == null || cmd.lines().isEmpty()) {
       throw new ValidationException("at least one line is required");
     }
+    // Validate each line here so bad input is a 400, not a 500 from CreditNoteLine.create's
+    // IllegalArgumentException (which the servlet's generic catch maps to Internal server error).
+    for (int i = 0; i < cmd.lines().size(); i++) {
+      LineSpec line = cmd.lines().get(i);
+      if (line == null) {
+        throw new ValidationException("lines[" + i + "] is required");
+      }
+      if (line.description() == null) {
+        throw new ValidationException("lines[" + i + "].description is required");
+      }
+      if (line.unitPrice() == null) {
+        throw new ValidationException("lines[" + i + "].unit_price is required");
+      }
+      if (line.taxRate() == null) {
+        throw new ValidationException("lines[" + i + "].tax_rate is required");
+      }
+      if (line.quantity() <= 0) {
+        throw new ValidationException("lines[" + i + "].quantity must be > 0");
+      }
+      if (line.unitPrice().signum() < 0) {
+        throw new ValidationException("lines[" + i + "].unit_price must be >= 0");
+      }
+      if (line.taxRate().signum() < 0) {
+        throw new ValidationException("lines[" + i + "].tax_rate must be >= 0");
+      }
+    }
   }
 }
