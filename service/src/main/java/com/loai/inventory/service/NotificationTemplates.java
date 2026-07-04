@@ -23,6 +23,20 @@ final class NotificationTemplates {
             "New order " + orderNumber,
             "Order " + orderNumber + " was placed and is awaiting payment.");
       }
+      case ORDER_PAID -> {
+        String orderNumber = str(payload, "order_number");
+        String amount = str(payload, "amount");
+        String currency = str(payload, "currency");
+        yield new Rendered(
+            "Payment received for " + orderNumber,
+            "We received your payment of "
+                + amount
+                + " "
+                + currency
+                + " for order "
+                + orderNumber
+                + ". Your order is confirmed.");
+      }
     };
   }
 

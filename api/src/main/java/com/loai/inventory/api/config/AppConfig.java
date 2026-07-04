@@ -299,13 +299,17 @@ public class AppConfig {
             inventoryLogRepositoryFactory);
     this.orderExpiryService =
         new OrderExpiryService(dsl, salesOrderRepositoryFactory, reservationService);
+    // NotificationService + MagicLinkService are both constructed above — the ORDER_PAID producer
+    // (stories/notify_order_paid.md) mints a fresh order-view link per customer email.
     this.paymentService =
         new PaymentService(
             dsl,
             paymentRepositoryFactory,
             salesOrderRepositoryFactory,
             paymentTransactionRepositoryFactory,
-            refundRepositoryFactory);
+            refundRepositoryFactory,
+            notificationService,
+            magicLinkService);
     this.paymentDisputeService =
         new PaymentDisputeService(dsl, paymentRepositoryFactory, refundAllocationRepositoryFactory);
     // RefundService is built before PaymentTransactionService and FulfillmentService: the
