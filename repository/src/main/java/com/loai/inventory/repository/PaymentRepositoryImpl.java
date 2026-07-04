@@ -77,6 +77,16 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
   }
 
   @Override
+  public List<Payment> findByOrderId(UUID orgId, UUID salesOrderId) {
+    return dsl.selectFrom(PAYMENT)
+        .where(PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.SALES_ORDER_ID.eq(salesOrderId)))
+        // id is the stable tiebreaker when two payments share a received_at millisecond.
+        .orderBy(PAYMENT.RECEIVED_AT.asc(), PAYMENT.ID.asc())
+        .fetch()
+        .map(this::toPayment);
+  }
+
+  @Override
   public List<Payment> findUnallocatedByOrderForUpdate(UUID orgId, UUID salesOrderId) {
     return dsl.selectFrom(PAYMENT)
         .where(

@@ -301,9 +301,11 @@ public class AppConfig {
         new OrderExpiryService(dsl, salesOrderRepositoryFactory, reservationService);
     this.paymentService =
         new PaymentService(
+            dsl,
             paymentRepositoryFactory,
             salesOrderRepositoryFactory,
-            paymentTransactionRepositoryFactory);
+            paymentTransactionRepositoryFactory,
+            refundRepositoryFactory);
     this.paymentDisputeService =
         new PaymentDisputeService(dsl, paymentRepositoryFactory, refundAllocationRepositoryFactory);
     // RefundService is built before PaymentTransactionService and FulfillmentService: the

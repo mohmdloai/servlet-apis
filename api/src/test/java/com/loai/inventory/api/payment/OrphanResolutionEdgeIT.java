@@ -115,9 +115,11 @@ class OrphanResolutionEdgeIT {
 
     PaymentService paymentService =
         new PaymentService(
+            dsl,
             new PaymentRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl(),
-            new PaymentTransactionRepositoryFactoryImpl());
+            new PaymentTransactionRepositoryFactoryImpl(),
+            new RefundRepositoryFactoryImpl());
     RefundService refundService =
         new RefundService(
             dsl,

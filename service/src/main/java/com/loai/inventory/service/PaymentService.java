@@ -1,21 +1,27 @@
 package com.loai.inventory.service;
 
 import com.loai.inventory.common.exception.ConflictException;
+import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
 import com.loai.inventory.domain.model.PaymentTransaction;
+import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesOrder;
+import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
+import com.loai.inventory.domain.repository.RefundRepository;
+import com.loai.inventory.domain.repository.RefundRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -26,10 +32,11 @@ import org.slf4j.LoggerFactory;
  * Reconcile a VERIFIED {@link PaymentTransaction} against a sales order and, on an exact match,
  * create the {@link Payment} that flips the order to PAID.
  *
- * <p>Collaborator service — like {@code ReservationService}, it runs entirely inside the caller's
- * transaction ({@code txDsl}) and never opens its own. The caller ({@link
+ * <p>Collaborator service — like {@code ReservationService}, its write paths run entirely inside
+ * the caller's transaction ({@code txDsl}) and never open their own. The caller ({@link
  * PaymentTransactionService}) owns the transaction boundary so the txn-verify and the
- * payment-creation commit (or roll back) together.
+ * payment-creation commit (or roll back) together. The read-only {@link #listForOrder} runs on
+ * {@code rootDsl} with no explicit transaction, same as every other read.
  *
  * <p>Classification:
  *
@@ -55,17 +62,23 @@ public final class PaymentService {
   public static final String IN_STORE_PROVIDER_REJECT_MSG =
       "INSTAPAY_MANUAL is the online path; in-store accepts CASH or INSTAPAY_IN_STORE";
 
+  private final DSLContext rootDsl;
   private final PaymentRepositoryFactory paymentRepoFactory;
   private final SalesOrderRepositoryFactory salesOrderRepoFactory;
   private final PaymentTransactionRepositoryFactory txnRepoFactory;
+  private final RefundRepositoryFactory refundRepoFactory;
 
   public PaymentService(
+      DSLContext rootDsl,
       PaymentRepositoryFactory paymentRepoFactory,
       SalesOrderRepositoryFactory salesOrderRepoFactory,
-      PaymentTransactionRepositoryFactory txnRepoFactory) {
+      PaymentTransactionRepositoryFactory txnRepoFactory,
+      RefundRepositoryFactory refundRepoFactory) {
+    this.rootDsl = rootDsl;
     this.paymentRepoFactory = paymentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.txnRepoFactory = txnRepoFactory;
+    this.refundRepoFactory = refundRepoFactory;
   }
 
   /** Target order for a transaction; at most one of the two fields is populated. */
@@ -305,6 +318,36 @@ public final class PaymentService {
       return orderRepo.findByIdForUpdate(orgId, ref.salesOrderId());
     }
     return orderRepo.findByOrderNumberForUpdate(orgId, ref.orderNumber());
+  }
+
+  /** One payment applied to an order together with its refunds, oldest first. */
+  public record PaymentWithRefunds(Payment payment, List<Refund> refunds) {}
+
+  /** An order's full money story: the order header + every payment FIFO, each with refunds. */
+  public record OrderPayments(SalesOrder order, List<PaymentWithRefunds> payments) {}
+
+  /**
+   * The money story of an order ({@code stories/list_order_payments.md}): every payment ever
+   * applied to it regardless of status — RECEIVED, ALLOCATED, DISPUTED, REFUNDED — ordered {@code
+   * received_at ASC, id ASC} (the FIFO order invoice allocation consumes them in), each carrying
+   * its refunds oldest first. Standalone orphan-refund payments ({@code sales_order_id} NULL) can
+   * never appear here by construction. Read-only on {@code rootDsl}, no explicit transaction.
+   *
+   * @throws NotFoundException if the order is not in {@code orgId}
+   */
+  public OrderPayments listForOrder(UUID orgId, UUID salesOrderId) {
+    SalesOrder order =
+        salesOrderRepoFactory
+            .create(rootDsl)
+            .findById(orgId, salesOrderId)
+            .orElseThrow(() -> new NotFoundException("SalesOrder", salesOrderId));
+    PaymentRepository paymentRepo = paymentRepoFactory.create(rootDsl);
+    RefundRepository refundRepo = refundRepoFactory.create(rootDsl);
+    List<PaymentWithRefunds> payments =
+        paymentRepo.findByOrderId(orgId, salesOrderId).stream()
+            .map(p -> new PaymentWithRefunds(p, refundRepo.findByPaymentId(orgId, p.getId())))
+            .toList();
+    return new OrderPayments(order, payments);
   }
 
   /**
