@@ -36,6 +36,10 @@ import org.slf4j.LoggerFactory;
  *       PHONE} (the default) place a PENDING_PAYMENT order with reservations ({@code
  *       stories/place_online_order.md}). Both require STAFF (system ADMIN bypasses).
  *   <li>{@code POST /{id}/cancel} — cancel an order (MANAGER).
+ *   <li>{@code GET /?order_number=} — exact-match lookup by human-readable number, the pre-flight
+ *       for the manual money path ({@code stories/lookup_order_by_number.md}). VIEWER. The bare
+ *       {@code GET} without the param is a 400 — the route is reserved for the future unfiltered
+ *       list slice.
  *   <li>{@code GET /{id}/payments} — the order's money story: every payment FIFO with its refunds
  *       ({@code stories/list_order_payments.md}). VIEWER.
  * </ul>
@@ -74,6 +78,10 @@ public class SalesOrderHandler implements OrgResourceHandler {
       throws IOException {
     try {
       String[] parts = splitPath(remainingPath);
+      if ("GET".equals(method) && parts.length == 0) {
+        doGetByNumber(req, resp, orgId);
+        return;
+      }
       if ("GET".equals(method) && parts.length == 2 && "payments".equals(parts[1])) {
         doGetPayments(req, resp, orgId, parseId(parts[0]));
         return;
@@ -161,6 +169,23 @@ public class SalesOrderHandler implements OrgResourceHandler {
             orgId, orderId, reason, refundMethod, sc.actorId(), isOwnerOrAdmin(sc, orgId));
 
     writeJson(resp, 200, SalesOrderMapper.toCancelResponse(result));
+  }
+
+  /**
+   * {@code GET /?order_number=SO-…} — exact-match, case-sensitive lookup (trimmed: numbers arrive
+   * by copy-paste from transfer notes); a single object, not a list. VIEWER. A bare {@code GET}
+   * without the param 400s: the unfiltered Sales Order list (status tabs, paging) is its own future
+   * slice and this deliberately reserves the route for it.
+   */
+  private void doGetByNumber(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    String orderNumber = req.getParameter("order_number");
+    if (orderNumber == null || orderNumber.isBlank()) {
+      throw new ValidationException(
+          "order_number query parameter is required (the unfiltered list is not implemented)");
+    }
+    writeJson(resp, 200, SalesOrderMapper.toResponse(service.getByNumber(orgId, orderNumber)));
   }
 
   /**

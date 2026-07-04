@@ -405,6 +405,29 @@ public class SalesOrderService {
   }
 
   /**
+   * Look up an order by its human-readable number — the pre-flight for the manual money path
+   * ({@code stories/lookup_order_by_number.md}): the admin previews status / outstanding balance
+   * before recording or resolving a transaction against the number. Exact, case-sensitive match
+   * after trimming (numbers arrive by copy-paste from transfer notes). Read-only on {@code
+   * rootDsl}, no lock — the money endpoints re-read {@code FOR UPDATE} inside their own
+   * transactions, so a stale preview can never corrupt a write.
+   *
+   * @throws ValidationException on a missing/blank number
+   * @throws NotFoundException if no order with that number exists in {@code orgId}
+   */
+  public Placed getByNumber(UUID orgId, String orderNumber) {
+    if (orderNumber == null || orderNumber.isBlank()) {
+      throw new ValidationException("order_number is required");
+    }
+    String number = orderNumber.trim();
+    SalesOrderRepository repo = repoFactory.create(rootDsl);
+    SalesOrder order =
+        repo.findByOrderNumber(orgId, number)
+            .orElseThrow(() -> new NotFoundException("SalesOrder not found: " + number));
+    return new Placed(order, repo.findLinesByOrderId(order.getId()), null);
+  }
+
+  /**
    * Load an order + its lines + customer for a read-only view (the anonymous magic-link route). The
    * caller has already proven access via the token, so this takes no {@link ActorContext}; it is
    * still org-scoped. Returns empty if the order does not exist in {@code orgId}.
