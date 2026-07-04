@@ -5,6 +5,8 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CancelRefundRequest;
 import com.loai.inventory.api.dto.CreateRefundRequest;
 import com.loai.inventory.api.dto.ExecuteRefundRequest;
+import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.dto.RefundResponse;
 import com.loai.inventory.api.mapper.RefundMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
@@ -14,9 +16,11 @@ import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.RefundService.Executed;
+import com.loai.inventory.service.RefundService.RefundPage;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -26,6 +30,10 @@ import org.slf4j.LoggerFactory;
  * Handles {@code /api/orgs/{orgId}/refunds}:
  *
  * <ul>
+ *   <li>{@code GET /refunds?status=&page=&size=} — the refunds worklist / ledger ({@code
+ *       stories/money_reads.md}): filtered = queue oldest-first ({@code ?status=PENDING} is the
+ *       to-execute queue), unfiltered = ledger newest-first; rows carry their source context (order
+ *       number / credit-note number). VIEWER+.
  *   <li>{@code POST /refunds} — create a PENDING refund (MANAGER+; OWNER above the org's refund
  *       approval threshold for the direct-from-Payment path, enforced in the service)
  *   <li>{@code GET /refunds/{id}} — read (VIEWER+)
@@ -58,6 +66,8 @@ public class RefundHandler implements OrgResourceHandler {
       if (parts.length == 0) {
         if ("POST".equals(method)) {
           doCreate(req, resp, orgId);
+        } else if ("GET".equals(method)) {
+          doList(req, resp, orgId);
         } else {
           writeError(resp, 405, "Method not allowed");
         }
@@ -105,6 +115,22 @@ public class RefundHandler implements OrgResourceHandler {
     writeJson(resp, 200, RefundMapper.toResponse(service.get(orgId, id)));
   }
 
+  /** {@code GET /} — the refunds worklist (filtered queue views) / refund ledger. */
+  private void doList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    // Clamp here too so the envelope echoes the page/size actually served.
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", RefundService.DEFAULT_PAGE_SIZE), 1),
+            RefundService.MAX_PAGE_SIZE);
+    RefundPage result =
+        service.list(orgId, RefundMapper.toStatusFilter(req.getParameter("status")), page, size);
+    List<RefundResponse> data = result.items().stream().map(RefundMapper::toResponse).toList();
+    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+  }
+
   private void doExecute(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
       throws IOException {
     SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
@@ -146,6 +172,18 @@ public class RefundHandler implements OrgResourceHandler {
       return UUID.fromString(s);
     } catch (IllegalArgumentException e) {
       throw new ValidationException("Invalid refund id: " + s);
+    }
+  }
+
+  private static int intParam(HttpServletRequest req, String name, int defaultValue) {
+    String value = req.getParameter(name);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new ValidationException("Parameter '" + name + "' must be an integer");
     }
   }
 

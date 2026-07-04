@@ -107,7 +107,8 @@ class ReplaceFailedFulfillmentIT {
             new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
             new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
             new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.OrgRepositoryFactoryImpl());
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl());
     service =
         new FulfillmentService(
             dsl,
@@ -154,7 +155,7 @@ class ReplaceFailedFulfillmentIT {
             + " customer, product, org, invoice_number_counter RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── happy paths ─────────────────────────────
+  // happy paths
 
   @Test
   void replace_failedFulfillment_createsLinkedPendingFulfillment_withFreshReservation() {
@@ -222,7 +223,7 @@ class ReplaceFailedFulfillmentIT {
     assertEquals("CLOSED", orderStatus(t.orderId));
   }
 
-  // ───────────────────────────── adversarial ─────────────────────────────
+  // adversarial
 
   @Test
   void replace_withoutStock_isRejected_andRollsBack() {
@@ -340,7 +341,7 @@ class ReplaceFailedFulfillmentIT {
     assertEquals(3, reservedQty(s.org, s.product)); // the replacement's reservation is intact
   }
 
-  // ───────────────────────────── fixtures ─────────────────────────────
+  // fixtures
 
   private record Shipped(
       UUID org, UUID product, UUID orderId, UUID paymentId, UUID lineId, UUID fulfillmentId) {}
@@ -494,7 +495,7 @@ class ReplaceFailedFulfillmentIT {
         .execute();
   }
 
-  // ───────────────────────────── query helpers ─────────────────────────────
+  // query helpers
 
   private static OffsetDateTime now() {
     return OffsetDateTime.now(ZoneOffset.UTC);

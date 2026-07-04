@@ -131,7 +131,8 @@ class OrderLookupByNumberIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     FulfillmentService fulfillmentService =
         new FulfillmentService(
             dsl,
@@ -205,7 +206,7 @@ class OrderLookupByNumberIT {
             + " order_number_counter, invoice_number_counter RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   @Test
   void placedOnlineOrder_foundByNumber_fullShape() {
@@ -295,7 +296,7 @@ class OrderLookupByNumberIT {
     assertThrows(ValidationException.class, () -> service.getByNumber(org, "   "));
   }
 
-  // ───────────── lookup by id ({@code stories/fulfillment_reads.md}) ─────────────
+  // lookup by id ({@code stories/fulfillment_reads.md})
 
   @Test
   void getById_returnsSameShapeAsNumberLookup() {
@@ -329,7 +330,7 @@ class OrderLookupByNumberIT {
     assertThrows(ValidationException.class, () -> service.getById(orgA, null));
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   private Placed placeOnline(UUID org, UUID staff, UUID product, int qty) {
     return service.placeOnlineOrder(

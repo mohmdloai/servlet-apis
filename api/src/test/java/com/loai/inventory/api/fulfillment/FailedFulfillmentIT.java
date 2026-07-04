@@ -113,7 +113,8 @@ class FailedFulfillmentIT {
             new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
             new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
             new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.OrgRepositoryFactoryImpl());
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl());
     service =
         new FulfillmentService(
             dsl,
@@ -160,7 +161,7 @@ class FailedFulfillmentIT {
             + " customer, product, org, invoice_number_counter RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── happy paths ─────────────────────────────
+  // happy paths
 
   @Test
   void fail_shippedFulfillment_marksFailed_noStockOrOrderMove() {
@@ -288,7 +289,7 @@ class FailedFulfillmentIT {
     assertEquals(0, new BigDecimal("600.00").compareTo(ok.pendingRefundTotal()));
   }
 
-  // ───────────────────────────── adversarial ─────────────────────────────
+  // adversarial
 
   @Test
   void fail_pendingFulfillment_isRejected() {
@@ -328,7 +329,7 @@ class FailedFulfillmentIT {
         ConflictException.class, () -> service.recordReturn(s.org, s.fulfillmentId, actor));
   }
 
-  // ───────────────────────────── fixtures ─────────────────────────────
+  // fixtures
 
   private record Setup(
       UUID org, UUID product, UUID orderId, UUID paymentId, UUID lineId, UUID fulfillmentId) {}
@@ -545,7 +546,7 @@ class FailedFulfillmentIT {
         .execute();
   }
 
-  // ───────────────────────────── query helpers ─────────────────────────────
+  // query helpers
 
   private static OffsetDateTime now() {
     return OffsetDateTime.now(ZoneOffset.UTC);

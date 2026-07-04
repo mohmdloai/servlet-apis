@@ -158,7 +158,8 @@ class OrderPaidNotificationIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     txnService =
         new PaymentTransactionService(
             dsl,
@@ -223,7 +224,7 @@ class OrderPaidNotificationIT {
             + " invoice_number_counter RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── the happy paths ─────────────────────────────
+  // the happy paths
 
   @Test
   void exactCoverVerify_firesOnce_sweepDeliversEmailWithFreshMagicLink() {
@@ -286,7 +287,7 @@ class OrderPaidNotificationIT {
     assertEquals("PAID", orderStatus(s.orderId()));
   }
 
-  // ───────────────────────────── the silences ─────────────────────────────
+  // the silences
 
   @Test
   void currencyMismatch_rollsBackWholeTxn_noNotificationRow() {
@@ -362,7 +363,7 @@ class OrderPaidNotificationIT {
         0, orderPaidNotificationIds(orgId).size(), "in-store PAID flip must not fire ORDER_PAID");
   }
 
-  // ───────────────────────────── preferences ─────────────────────────────
+  // preferences
 
   @Test
   void exactPreferenceDisabled_recordedDispatched_zeroDeliveries() {
@@ -392,7 +393,7 @@ class OrderPaidNotificationIT {
     assertEquals(0, deliveryCount(paid.get(0)));
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   private record Seed(UUID orgId, UUID admin, UUID customerId, UUID orderId, String orderNumber) {}
 

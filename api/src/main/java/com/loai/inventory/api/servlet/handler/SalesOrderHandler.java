@@ -5,6 +5,7 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CancelOrderRequest;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.mapper.FulfillmentMapper;
+import com.loai.inventory.api.mapper.InvoiceMapper;
 import com.loai.inventory.api.mapper.PaymentMapper;
 import com.loai.inventory.api.mapper.SalesOrderMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -16,6 +17,7 @@ import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.FulfillmentService;
+import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderCancellationService.CancelResult;
 import com.loai.inventory.service.PaymentService;
@@ -48,6 +50,8 @@ import org.slf4j.LoggerFactory;
  *       ({@code stories/list_order_payments.md}). VIEWER.
  *   <li>{@code GET /{id}/fulfillments} — the order's shipment story: every fulfillment oldest-first
  *       with its lines ({@code stories/fulfillment_reads.md}). VIEWER.
+ *   <li>{@code GET /{id}/invoices} — the order's billing story: every invoice oldest-first with its
+ *       lines ({@code stories/money_reads.md}). VIEWER.
  * </ul>
  *
  * <p>Other methods and sub-paths are not implemented yet — later slices.
@@ -61,6 +65,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
   private final OrderCancellationService cancellationService;
   private final PaymentService paymentService;
   private final FulfillmentService fulfillmentService;
+  private final InvoiceAdminService invoiceAdminService;
   private final ObjectMapper mapper;
 
   public SalesOrderHandler(
@@ -68,11 +73,13 @@ public class SalesOrderHandler implements OrgResourceHandler {
       OrderCancellationService cancellationService,
       PaymentService paymentService,
       FulfillmentService fulfillmentService,
+      InvoiceAdminService invoiceAdminService,
       ObjectMapper mapper) {
     this.service = service;
     this.cancellationService = cancellationService;
     this.paymentService = paymentService;
     this.fulfillmentService = fulfillmentService;
+    this.invoiceAdminService = invoiceAdminService;
     this.mapper = mapper;
   }
 
@@ -100,6 +107,10 @@ public class SalesOrderHandler implements OrgResourceHandler {
       }
       if ("GET".equals(method) && parts.length == 2 && "fulfillments".equals(parts[1])) {
         doGetFulfillments(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
+      if ("GET".equals(method) && parts.length == 2 && "invoices".equals(parts[1])) {
+        doGetInvoices(req, resp, orgId, parseId(parts[0]));
         return;
       }
       if (!"POST".equals(method)) {
@@ -229,6 +240,21 @@ public class SalesOrderHandler implements OrgResourceHandler {
         200,
         FulfillmentMapper.toOrderFulfillmentsResponse(
             fulfillmentService.listForOrder(orgId, orderId)));
+  }
+
+  /**
+   * {@code GET /{id}/invoices} — the order's billing story: every invoice ever issued against it
+   * (VOID included) oldest-first, each with its lines, plus the order header — the billing mirror
+   * of {@code /{id}/payments} and {@code /{id}/fulfillments}. VIEWER.
+   */
+  private void doGetInvoices(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID orderId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(
+        resp,
+        200,
+        InvoiceMapper.toOrderInvoicesResponse(invoiceAdminService.listForOrder(orgId, orderId)));
   }
 
   /**

@@ -7,6 +7,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.CreditNote;
 import com.loai.inventory.domain.model.CreditNoteLine;
 import com.loai.inventory.domain.model.CreditNoteReason;
+import com.loai.inventory.domain.model.CreditNoteStatus;
 import com.loai.inventory.domain.model.InvoiceStatus;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.SalesInvoice;
@@ -190,6 +191,41 @@ public final class CreditNoteService {
     CreditNote note =
         repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("CreditNote", id));
     return new Issued(note, repo.findLinesByCreditNoteId(id));
+  }
+
+  /**
+   * An invoice's crediting story: the invoice, the cap guard's own already-credited sum ({@code
+   * sumIssuedTotalByInvoice} — ISSUED + SETTLED, VOID excluded, regardless of the {@code status}
+   * filter), and its credit notes oldest-first. Backs {@code GET /credit-notes?sales_invoice_id=}
+   * so a client can render "X of Y already credited" from the same numbers {@link #issue} enforces,
+   * instead of discovering the cap by a 400.
+   */
+  public record InvoiceCreditNotes(
+      SalesInvoice invoice, BigDecimal creditedTotal, List<CreditNote> notes) {}
+
+  /**
+   * List the credit notes raised against one invoice, optionally filtered by {@code status} (VOID
+   * included when unfiltered — voided notes are part of the story). No pagination: the count is
+   * bounded by the cumulative-credit cap. Notes carry no lines — the detail read ({@code GET
+   * /credit-notes/{id}}) has them.
+   *
+   * @throws NotFoundException if the invoice is not in {@code orgId}
+   */
+  public InvoiceCreditNotes listForInvoice(
+      UUID orgId, UUID salesInvoiceId, CreditNoteStatus status) {
+    if (salesInvoiceId == null) {
+      throw new ValidationException("sales_invoice_id is required");
+    }
+    SalesInvoice invoice =
+        invoiceRepoFactory
+            .create(rootDsl)
+            .findById(orgId, salesInvoiceId)
+            .orElseThrow(() -> new NotFoundException("SalesInvoice", salesInvoiceId));
+    CreditNoteRepository repo = creditNoteRepoFactory.create(rootDsl);
+    return new InvoiceCreditNotes(
+        invoice,
+        repo.sumIssuedTotalByInvoice(orgId, salesInvoiceId),
+        repo.findByInvoiceId(orgId, salesInvoiceId, status));
   }
 
   /** Void an ISSUED CreditNote — rejected if any refund has been EXECUTED against it. */

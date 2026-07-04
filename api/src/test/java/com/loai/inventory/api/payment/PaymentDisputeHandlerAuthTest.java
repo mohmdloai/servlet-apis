@@ -14,6 +14,7 @@ import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.PaymentDisputeService;
+import com.loai.inventory.service.PaymentDisputeService.PaymentView;
 import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.ServletOutputStream;
@@ -127,7 +128,8 @@ class PaymentDisputeHandlerAuthTest {
   @Test
   void get_allowedForViewer_serviceCalled() throws IOException {
     PaymentDisputeService service = Mockito.mock(PaymentDisputeService.class);
-    when(service.get(eq(ORG), eq(PAYMENT))).thenReturn(aPayment());
+    when(service.get(eq(ORG), eq(PAYMENT)))
+        .thenReturn(new PaymentView(aPayment(), java.util.List.of()));
     Resp resp = new Resp();
 
     handler(service)
@@ -185,7 +187,7 @@ class PaymentDisputeHandlerAuthTest {
     verify(service, never()).dispute(any(), any(), any(), any());
   }
 
-  // ─────────────── harness (mirrors SalesOrderCancelAuthTest) ───────────────
+  // harness (mirrors SalesOrderCancelAuthTest)
 
   private static final class Resp {
     final HttpServletResponse mock;

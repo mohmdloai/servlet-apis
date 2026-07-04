@@ -74,6 +74,7 @@ class OrderPaymentsHandlerAuthTest {
         Mockito.mock(OrderCancellationService.class),
         paymentService,
         Mockito.mock(com.loai.inventory.service.FulfillmentService.class),
+        Mockito.mock(com.loai.inventory.service.InvoiceAdminService.class),
         com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 
@@ -137,7 +138,7 @@ class OrderPaymentsHandlerAuthTest {
     verify(service, never()).listForOrder(any(), any());
   }
 
-  // ─────────────── harness (mirrors SalesOrderCancelAuthTest) ───────────────
+  // harness (mirrors SalesOrderCancelAuthTest)
 
   private static final class Resp {
     final HttpServletResponse mock;

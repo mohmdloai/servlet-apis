@@ -1,6 +1,7 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Refund;
+import com.loai.inventory.domain.model.RefundStatus;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
@@ -36,4 +37,15 @@ public interface RefundRepository {
 
   /** All refunds backed directly by this payment, oldest first. */
   List<Refund> findByPaymentId(UUID orgId, UUID paymentId);
+
+  /**
+   * One page of the org's refunds — the to-execute worklist / refund ledger. A non-null {@code
+   * status} makes it a queue: {@code created_at ASC, id ASC} (execute the oldest first); {@code
+   * null} makes it the audit ledger: {@code created_at DESC, id DESC}. Same queue-vs-ledger
+   * convention as {@code PaymentTransactionRepository#list}.
+   */
+  List<Refund> list(UUID orgId, RefundStatus status, int offset, int limit);
+
+  /** Total rows {@link #list} would page through for the same {@code status} filter. */
+  long count(UUID orgId, RefundStatus status);
 }

@@ -311,7 +311,12 @@ public class AppConfig {
             notificationService,
             magicLinkService);
     this.paymentDisputeService =
-        new PaymentDisputeService(dsl, paymentRepositoryFactory, refundAllocationRepositoryFactory);
+        new PaymentDisputeService(
+            dsl,
+            paymentRepositoryFactory,
+            refundAllocationRepositoryFactory,
+            paymentAllocationRepositoryFactory,
+            salesInvoiceRepositoryFactory);
     // RefundService is built before PaymentTransactionService and FulfillmentService: the
     // orphan-refund path (PaymentTransactionService.refundOrphan) and the failed-fulfillment
     // refund path (FulfillmentService.refundFailed) both reuse
@@ -325,7 +330,8 @@ public class AppConfig {
             paymentRepositoryFactory,
             paymentAllocationRepositoryFactory,
             paymentTransactionRepositoryFactory,
-            orgRepositoryFactory);
+            orgRepositoryFactory,
+            salesOrderRepositoryFactory);
     this.paymentTransactionService =
         new PaymentTransactionService(
             dsl,

@@ -143,7 +143,8 @@ class CreditNoteRefundIT {
                 new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl()),
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
@@ -164,7 +165,8 @@ class CreditNoteRefundIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
 
     actorId = UUID.randomUUID();
     dsl.insertInto(com.loai.inventory.repository.generated.Tables.APP_USER)
@@ -194,7 +196,7 @@ class CreditNoteRefundIT {
             + " credit_note_number_counter RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── CreditNote-backed ─────────────────────────────
+  // CreditNote-backed
 
   /**
    * Full return: refund covers the whole invoice → payment REFUNDED, CN SETTLED, invoice stays
@@ -268,7 +270,7 @@ class CreditNoteRefundIT {
     assertEquals("PAID", invoiceStatus(f.invoiceId));
   }
 
-  // ───────────────────────────── Direct-from-Payment ─────────────────────────────
+  // Direct-from-Payment
 
   /**
    * Overpayment: refund the unallocated excess → no refund_allocation rows; payment back to
@@ -347,7 +349,7 @@ class CreditNoteRefundIT {
     assertEquals(0, new BigDecimal("40.00").compareTo(paymentUnallocated(paymentId)));
   }
 
-  // ───────────────────────────── guards ─────────────────────────────
+  // guards
 
   /** Over-refund is rejected on both paths before any side effect. */
   @Test
@@ -526,7 +528,7 @@ class CreditNoteRefundIT {
     assertEquals("VOID", creditNoteStatus(freshCn));
   }
 
-  // ───────────────────────────── threshold ─────────────────────────────
+  // threshold
 
   /** Above the org threshold, issuing a credit note requires OWNER; below, MANAGER suffices. */
   @Test
@@ -592,7 +594,7 @@ class CreditNoteRefundIT {
     assertEquals("ISSUED", creditNoteStatus(cnId)); // 600 < raised threshold 1000
   }
 
-  // ───────────────────────────── fixtures & helpers ─────────────────────────────
+  // fixtures & helpers
 
   private record Fixture(UUID org, UUID customer, UUID invoiceId, UUID paymentId) {}
 
@@ -804,7 +806,7 @@ class CreditNoteRefundIT {
     return paymentId;
   }
 
-  // ───────────────────────────── query helpers ─────────────────────────────
+  // query helpers
 
   private String refundStatus(UUID id) {
     return dsl.select(REFUND.STATUS)

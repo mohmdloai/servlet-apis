@@ -125,7 +125,8 @@ class DeliverInvoiceIT {
                 new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl()),
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
@@ -148,7 +149,7 @@ class DeliverInvoiceIT {
             + " invoice_number_counter RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   /** The magic moment: fully-prepaid single-fulfillment order → invoice PAID, order CLOSED. */
   @Test
@@ -315,7 +316,7 @@ class DeliverInvoiceIT {
     assertEquals("CLOSED", orderStatus(order.id()));
   }
 
-  // ───────────────────────────── flow helpers ─────────────────────────────
+  // flow helpers
 
   /** Create a single-line PENDING fulfillment and ship it; returns the fulfillment id. */
   private UUID shipLine(UUID org, Order order, Line line) {
@@ -328,7 +329,7 @@ class DeliverInvoiceIT {
     return f;
   }
 
-  // ───────────────────────────── seed helpers ─────────────────────────────
+  // seed helpers
 
   private record Want(UUID productId, int qty) {}
 
@@ -475,7 +476,7 @@ class DeliverInvoiceIT {
         .execute();
   }
 
-  // ───────────────────────────── query helpers ─────────────────────────────
+  // query helpers
 
   private UUID fulfillmentId(UUID org, Order order) {
     return dsl.select(com.loai.inventory.repository.generated.Tables.FULFILLMENT.ID)

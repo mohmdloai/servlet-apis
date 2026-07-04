@@ -27,9 +27,12 @@ import com.loai.inventory.domain.repository.RefundAllocationRepository;
 import com.loai.inventory.domain.repository.RefundAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.RefundRepository;
 import com.loai.inventory.domain.repository.RefundRepositoryFactory;
+import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -69,6 +72,7 @@ public final class RefundService {
   private final PaymentAllocationRepositoryFactory paymentAllocationRepoFactory;
   private final PaymentTransactionRepositoryFactory txnRepoFactory;
   private final OrgRepositoryFactory orgRepoFactory;
+  private final SalesOrderRepositoryFactory salesOrderRepoFactory;
 
   public RefundService(
       DSLContext rootDsl,
@@ -78,7 +82,8 @@ public final class RefundService {
       PaymentRepositoryFactory paymentRepoFactory,
       PaymentAllocationRepositoryFactory paymentAllocationRepoFactory,
       PaymentTransactionRepositoryFactory txnRepoFactory,
-      OrgRepositoryFactory orgRepoFactory) {
+      OrgRepositoryFactory orgRepoFactory,
+      SalesOrderRepositoryFactory salesOrderRepoFactory) {
     this.rootDsl = rootDsl;
     this.refundRepoFactory = refundRepoFactory;
     this.refundAllocationRepoFactory = refundAllocationRepoFactory;
@@ -87,6 +92,7 @@ public final class RefundService {
     this.paymentAllocationRepoFactory = paymentAllocationRepoFactory;
     this.txnRepoFactory = txnRepoFactory;
     this.orgRepoFactory = orgRepoFactory;
+    this.salesOrderRepoFactory = salesOrderRepoFactory;
   }
 
   /** Admin-supplied refund-creation command; exactly one of the two source ids must be set. */
@@ -543,6 +549,86 @@ public final class RefundService {
         .create(rootDsl)
         .findById(orgId, id)
         .orElseThrow(() -> new NotFoundException("Refund", id));
+  }
+
+  // ---- list (stories/money_reads.md) ----
+
+  /**
+   * A worklist row: the refund plus its source context, so a card can say what the money is for
+   * without a per-row fetch. A payment-backed refund carries the payment's order ({@code
+   * salesOrderId}/{@code salesOrderNumber} — both {@code null} for an orphan payment: an unmatched
+   * transfer has no order); a CreditNote-backed refund carries {@code creditNoteNumber} and the
+   * credited invoice's {@code salesInvoiceId}.
+   */
+  public record RefundView(
+      Refund refund,
+      UUID salesOrderId,
+      String salesOrderNumber,
+      UUID salesInvoiceId,
+      String creditNoteNumber) {}
+
+  /** One page of the refund queue/ledger plus the filtered total (for tab badges). */
+  public record RefundPage(List<RefundView> items, long total) {}
+
+  public static final int DEFAULT_PAGE_SIZE = 20;
+  public static final int MAX_PAGE_SIZE = 100;
+
+  /**
+   * Read one page of the org's refunds — filtered by {@code status} it is a worklist ({@code
+   * ?status=PENDING} is the to-execute queue, oldest first); unfiltered it is the ledger (newest
+   * first). Mirrors {@code PaymentTransactionService#list}: {@code page} floors at 0, {@code size}
+   * is clamped to {@code [1, MAX_PAGE_SIZE]}. Source context is batch-loaded — one projection per
+   * source aggregate per page (payments → orders → numbers; credit notes), never per row.
+   */
+  public RefundPage list(UUID orgId, RefundStatus status, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    RefundRepository refundRepo = refundRepoFactory.create(rootDsl);
+    List<Refund> items = refundRepo.list(orgId, status, p * s, s);
+    long total = refundRepo.count(orgId, status);
+
+    Map<UUID, UUID> orderIdsByPayment =
+        paymentRepoFactory
+            .create(rootDsl)
+            .findOrderIdsByIds(
+                orgId,
+                items.stream()
+                    .map(Refund::getPaymentId)
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .toList());
+    Map<UUID, String> orderNumbers =
+        salesOrderRepoFactory
+            .create(rootDsl)
+            .findOrderNumbersByIds(orgId, orderIdsByPayment.values().stream().distinct().toList());
+    Map<UUID, CreditNoteRepository.CreditNoteRef> creditNoteRefs =
+        creditNoteRepoFactory
+            .create(rootDsl)
+            .findRefsByIds(
+                orgId,
+                items.stream()
+                    .map(Refund::getCreditNoteId)
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .toList());
+
+    List<RefundView> views =
+        items.stream()
+            .map(
+                r -> {
+                  UUID orderId =
+                      r.getPaymentId() == null ? null : orderIdsByPayment.get(r.getPaymentId());
+                  CreditNoteRepository.CreditNoteRef ref =
+                      r.getCreditNoteId() == null ? null : creditNoteRefs.get(r.getCreditNoteId());
+                  return new RefundView(
+                      r,
+                      orderId,
+                      orderId == null ? null : orderNumbers.get(orderId),
+                      ref == null ? null : ref.salesInvoiceId(),
+                      ref == null ? null : ref.creditNoteNumber());
+                })
+            .toList();
+    return new RefundPage(views, total);
   }
 
   private BigDecimal orgThreshold(DSLContext txDsl, UUID orgId) {

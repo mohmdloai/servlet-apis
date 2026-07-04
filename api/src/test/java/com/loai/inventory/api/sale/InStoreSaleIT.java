@@ -119,7 +119,8 @@ class InStoreSaleIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.OrgRepositoryFactoryImpl());
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl());
     FulfillmentService fulfillmentService =
         new FulfillmentService(
             dsl,
@@ -189,7 +190,7 @@ class InStoreSaleIT {
             + " RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   /**
    * Happy path (cash, single line): CLOSED order, PAID invoice, ALLOCATED payment, stock dropped.
@@ -466,7 +467,7 @@ class InStoreSaleIT {
     assertEquals(7, stockQty(org, product));
   }
 
-  // ───────────────────────────── seed helpers ─────────────────────────────
+  // seed helpers
 
   private static ActorContext actor(UUID userId) {
     return ActorContext.user(userId.toString());
@@ -514,7 +515,7 @@ class InStoreSaleIT {
         .execute();
   }
 
-  // ───────────────────────────── query helpers ─────────────────────────────
+  // query helpers
 
   private String orderStatus(UUID orderId) {
     return dsl.select(SALES_ORDER.STATUS)

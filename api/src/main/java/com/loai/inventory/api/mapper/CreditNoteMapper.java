@@ -1,9 +1,12 @@
 package com.loai.inventory.api.mapper;
 
 import com.loai.inventory.api.dto.CreditNoteResponse;
+import com.loai.inventory.api.dto.InvoiceCreditNotesResponse;
 import com.loai.inventory.api.dto.IssueCreditNoteRequest;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.CreditNoteReason;
+import com.loai.inventory.domain.model.CreditNoteStatus;
+import com.loai.inventory.service.CreditNoteService.InvoiceCreditNotes;
 import com.loai.inventory.service.CreditNoteService.IssueCommand;
 import com.loai.inventory.service.CreditNoteService.Issued;
 import com.loai.inventory.service.CreditNoteService.LineSpec;
@@ -39,6 +42,22 @@ public final class CreditNoteMapper {
 
   public static CreditNoteResponse toResponse(Issued issued) {
     return CreditNoteResponse.from(issued.creditNote(), issued.lines());
+  }
+
+  public static InvoiceCreditNotesResponse toInvoiceCreditNotesResponse(InvoiceCreditNotes result) {
+    return InvoiceCreditNotesResponse.from(result);
+  }
+
+  /** Parse the optional {@code status} list filter; blank → null (no filter), unknown → 400. */
+  public static CreditNoteStatus toStatusFilter(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return CreditNoteStatus.valueOf(raw.trim().toUpperCase());
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Unknown status: " + raw);
+    }
   }
 
   private static CreditNoteReason parseReason(String raw) {

@@ -122,7 +122,8 @@ class PaymentTransactionReadIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     service =
         new PaymentTransactionService(
             dsl,
@@ -204,7 +205,7 @@ class PaymentTransactionReadIT {
         overpaid);
   }
 
-  // ───────────────────────────── list: the orphan queue ─────────────────────────────
+  // list: the orphan queue
 
   @Test
   void openOrphanQueue_isOrphanPlusNoPayment_excludingBothDispositions() {
@@ -257,7 +258,7 @@ class PaymentTransactionReadIT {
     assertNull(detail.payment().getSalesOrderId());
   }
 
-  // ───────────────────────────── list: the other filters ─────────────────────────────
+  // list: the other filters
 
   @Test
   void statusFilters_matchColumnsLiterally() {
@@ -303,7 +304,7 @@ class PaymentTransactionReadIT {
                 s.matched(), s.resolvedOrphan(), s.refundedOrphan(), s.underpaid(), s.overpaid())));
   }
 
-  // ───────────────────────────── list: ordering + paging ─────────────────────────────
+  // list: ordering + paging
 
   @Test
   void unfilteredLedger_returnsEverything_newestRecordedFirst() {
@@ -383,7 +384,7 @@ class PaymentTransactionReadIT {
                 otherOrg, filter(null, PaymentReconciliationStatus.ORPHAN, false), 0, 20)));
   }
 
-  // ─────────────── list: lookup by provider reference (G6 follow-up) ───────────────
+  // list: lookup by provider reference (G6 follow-up)
 
   @Test
   void providerRefFilter_recordedReference_exactlyThatRow_unknownIsEmptyNotError() {
@@ -463,7 +464,7 @@ class PaymentTransactionReadIT {
             .total());
   }
 
-  // ───────────────────────────── detail ─────────────────────────────
+  // detail
 
   @Test
   void detail_openOrphan_hasNoMoneyContext() {
@@ -522,7 +523,7 @@ class PaymentTransactionReadIT {
     assertThrows(NotFoundException.class, () -> service.get(s.orgId(), foreign));
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   private static ListFilter filter(
       PaymentVerificationStatus v, PaymentReconciliationStatus r, Boolean hasPayment) {

@@ -26,6 +26,16 @@ public class CreditNoteResponse {
   private CreditNoteResponse() {}
 
   public static CreditNoteResponse from(CreditNote n, List<CreditNoteLine> lines) {
+    CreditNoteResponse r = from(n);
+    r.lines = lines.stream().map(Line::from).toList();
+    return r;
+  }
+
+  /**
+   * The header-only shape for list rows ({@code GET /credit-notes?sales_invoice_id=}): {@code
+   * lines} is omitted — the detail read has them.
+   */
+  public static CreditNoteResponse from(CreditNote n) {
     CreditNoteResponse r = new CreditNoteResponse();
     r.id = n.getId();
     r.salesInvoiceId = n.getSalesInvoiceId();
@@ -39,7 +49,6 @@ public class CreditNoteResponse {
     r.total = n.getTotal();
     r.currency = n.getCurrency();
     r.issuedAt = n.getIssuedAt();
-    r.lines = lines.stream().map(Line::from).toList();
     return r;
   }
 

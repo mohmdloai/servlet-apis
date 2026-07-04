@@ -118,7 +118,8 @@ class CustomerResolutionAtPlacementIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.OrgRepositoryFactoryImpl());
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl());
     FulfillmentService fulfillmentService =
         new FulfillmentService(
             dsl,
@@ -185,7 +186,7 @@ class CustomerResolutionAtPlacementIT {
             + " RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   /** New email → a customer is created on the fly and the order points at it. */
   @Test
@@ -500,7 +501,7 @@ class CustomerResolutionAtPlacementIT {
     dsl.update(ORG).set(ORG.ORDER_TTL_MINUTES, minutes).where(ORG.ID.eq(org)).execute();
   }
 
-  // ───────────────────────────── seed helpers ─────────────────────────────
+  // seed helpers
 
   private static ActorContext actor(UUID userId) {
     return ActorContext.user(userId.toString());
@@ -548,7 +549,7 @@ class CustomerResolutionAtPlacementIT {
         .execute();
   }
 
-  // ───────────────────────────── query helpers ─────────────────────────────
+  // query helpers
 
   private int customerCount(UUID org) {
     return dsl.fetchCount(dsl.selectFrom(CUSTOMER).where(CUSTOMER.ORG_ID.eq(org)));

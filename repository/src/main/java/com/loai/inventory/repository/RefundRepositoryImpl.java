@@ -135,6 +135,35 @@ public final class RefundRepositoryImpl implements RefundRepository {
         .map(this::toRefund);
   }
 
+  @Override
+  public List<Refund> list(UUID orgId, RefundStatus status, int offset, int limit) {
+    var query = dsl.selectFrom(REFUND).where(conditions(orgId, status));
+    // Queue vs ledger: a status filter is a worklist — execute the oldest first (FIFO);
+    // no filter is the audit ledger — newest first.
+    var ordered =
+        status != null
+            ? query.orderBy(REFUND.CREATED_AT.asc(), REFUND.ID.asc())
+            : query.orderBy(REFUND.CREATED_AT.desc(), REFUND.ID.desc());
+    return ordered.offset(offset).limit(limit).fetch().map(this::toRefund);
+  }
+
+  @Override
+  public long count(UUID orgId, RefundStatus status) {
+    return dsl.fetchCount(dsl.selectFrom(REFUND).where(conditions(orgId, status)));
+  }
+
+  private static org.jooq.Condition conditions(UUID orgId, RefundStatus status) {
+    org.jooq.Condition c = REFUND.ORG_ID.eq(orgId);
+    if (status != null) {
+      c =
+          c.and(
+              REFUND.STATUS.eq(
+                  com.loai.inventory.repository.generated.enums.RefundStatus.valueOf(
+                      status.name())));
+    }
+    return c;
+  }
+
   private Refund toRefund(RefundRecord r) {
     return Refund.rehydrate(
         r.getId(),

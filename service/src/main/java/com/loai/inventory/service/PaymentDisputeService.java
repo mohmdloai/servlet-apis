@@ -4,11 +4,17 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Payment;
+import com.loai.inventory.domain.model.PaymentAllocation;
+import com.loai.inventory.domain.model.SalesInvoice;
+import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.RefundAllocationRepositoryFactory;
+import com.loai.inventory.domain.repository.SalesInvoiceRepository;
+import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -49,14 +55,20 @@ public final class PaymentDisputeService {
   private final DSLContext rootDsl;
   private final PaymentRepositoryFactory paymentRepoFactory;
   private final RefundAllocationRepositoryFactory refundAllocationRepoFactory;
+  private final PaymentAllocationRepositoryFactory paymentAllocationRepoFactory;
+  private final SalesInvoiceRepositoryFactory invoiceRepoFactory;
 
   public PaymentDisputeService(
       DSLContext rootDsl,
       PaymentRepositoryFactory paymentRepoFactory,
-      RefundAllocationRepositoryFactory refundAllocationRepoFactory) {
+      RefundAllocationRepositoryFactory refundAllocationRepoFactory,
+      PaymentAllocationRepositoryFactory paymentAllocationRepoFactory,
+      SalesInvoiceRepositoryFactory invoiceRepoFactory) {
     this.rootDsl = rootDsl;
     this.paymentRepoFactory = paymentRepoFactory;
     this.refundAllocationRepoFactory = refundAllocationRepoFactory;
+    this.paymentAllocationRepoFactory = paymentAllocationRepoFactory;
+    this.invoiceRepoFactory = invoiceRepoFactory;
   }
 
   /**
@@ -123,12 +135,42 @@ public final class PaymentDisputeService {
         });
   }
 
-  /** Read a payment for the GET endpoint. */
-  public Payment get(UUID orgId, UUID id) {
-    return paymentRepoFactory
-        .create(rootDsl)
-        .findById(orgId, id)
-        .orElseThrow(() -> new NotFoundException("Payment", id));
+  /** One allocation of the payment, joined to the invoice it funded. */
+  public record AllocationView(PaymentAllocation allocation, SalesInvoice invoice) {}
+
+  /**
+   * The payment plus every invoice it was allocated to (FIFO, the order they were applied in) — the
+   * dispute-resolution entry point: the refund path issues a {@code DISPUTE_RESOLUTION} CreditNote
+   * <em>against one of these invoices</em>, so the read must surface them. Empty for a RECEIVED /
+   * fully-unallocated payment.
+   */
+  public record PaymentView(Payment payment, List<AllocationView> allocations) {}
+
+  /** Read a payment + its allocations for the GET endpoint. */
+  public PaymentView get(UUID orgId, UUID id) {
+    Payment payment =
+        paymentRepoFactory
+            .create(rootDsl)
+            .findById(orgId, id)
+            .orElseThrow(() -> new NotFoundException("Payment", id));
+    SalesInvoiceRepository invoiceRepo = invoiceRepoFactory.create(rootDsl);
+    List<AllocationView> allocations =
+        paymentAllocationRepoFactory.create(rootDsl).findByPaymentId(orgId, id).stream()
+            .map(
+                a ->
+                    new AllocationView(
+                        a,
+                        invoiceRepo
+                            .findById(orgId, a.getSalesInvoiceId())
+                            .orElseThrow(
+                                () ->
+                                    new IllegalStateException(
+                                        "allocation "
+                                            + a.getId()
+                                            + " references missing invoice "
+                                            + a.getSalesInvoiceId()))))
+            .toList();
+    return new PaymentView(payment, allocations);
   }
 
   private static void requireIds(UUID paymentId, UUID actorId) {

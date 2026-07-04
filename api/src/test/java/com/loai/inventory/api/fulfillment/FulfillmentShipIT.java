@@ -110,7 +110,8 @@ class FulfillmentShipIT {
                 new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl()),
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
@@ -131,7 +132,7 @@ class FulfillmentShipIT {
             + " sales_order_line, sales_order, product, org RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   @Test
   void shipFullLine_decrementsOnHand_consumesReservation_orderFulfilling() {
@@ -370,7 +371,7 @@ class FulfillmentShipIT {
                 org, order.id(), List.of(new LineInput(line.lineId())), null, null, null, actor));
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   private int fulfillmentLineQty(UUID fulfillmentId) {
     return dsl.select(FULFILLMENT_LINE.QUANTITY)

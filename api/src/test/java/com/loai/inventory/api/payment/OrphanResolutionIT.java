@@ -112,7 +112,8 @@ class OrphanResolutionIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     service =
         new PaymentTransactionService(
             dsl,
@@ -136,7 +137,7 @@ class OrphanResolutionIT {
             + " app_user, org RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   @Test
   void resolveByOrderNumber_exactCover_createsPaymentAndFlipsOrderToPaid() {
@@ -312,7 +313,7 @@ class OrphanResolutionIT {
     assertEquals(1, paymentCountForOrder(order.id()));
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   /** Record a VERIFIED manual-InstaPay arrival with no order reference → lands as ORPHAN. */
   private UUID seedOrphan(UUID orgId, UUID admin, String amount) {

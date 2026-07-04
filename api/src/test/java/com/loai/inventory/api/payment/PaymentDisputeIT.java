@@ -12,6 +12,7 @@ import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.domain.model.ActorContext;
@@ -134,7 +135,8 @@ class PaymentDisputeIT {
                 new com.loai.inventory.repository.PaymentRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.OrgRepositoryFactoryImpl()),
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl()),
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
@@ -155,10 +157,15 @@ class PaymentDisputeIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     disputeService =
         new PaymentDisputeService(
-            dsl, new PaymentRepositoryFactoryImpl(), new RefundAllocationRepositoryFactoryImpl());
+            dsl,
+            new PaymentRepositoryFactoryImpl(),
+            new RefundAllocationRepositoryFactoryImpl(),
+            new PaymentAllocationRepositoryFactoryImpl(),
+            new SalesInvoiceRepositoryFactoryImpl());
 
     actorId = UUID.randomUUID();
     dsl.insertInto(com.loai.inventory.repository.generated.Tables.APP_USER)
@@ -188,7 +195,7 @@ class PaymentDisputeIT {
             + " credit_note_number_counter RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── lifecycle ─────────────────────────────
+  // lifecycle
 
   /** dispute records reason + timestamp and freezes the (ALLOCATED) payment as DISPUTED. */
   @Test
@@ -252,7 +259,7 @@ class PaymentDisputeIT {
     assertEquals("SETTLED", creditNoteStatus(cnId));
   }
 
-  // ───────────────────────────── guards ─────────────────────────────
+  // guards
 
   /** A payment that isn't ALLOCATED can't be disputed (RECEIVED orphan → 409). */
   @Test
@@ -405,6 +412,45 @@ class PaymentDisputeIT {
     refundService.execute(f.org, refundId, providerRef, actorId);
   }
 
+  /**
+   * The detail read carries every invoice the payment funded — the dispute-resolution entry point:
+   * one payment auto-allocated across two deliveries surfaces both invoices, each with its
+   * identity, so the admin can pick which one to credit ({@code stories/money_reads.md}).
+   */
+  @Test
+  void get_carriesAllocations_oneInvoicePerFundedDelivery() {
+    TwoInvoiceFixture f = deliverTwoInvoicesOnePayment("30.00", "20.00");
+
+    PaymentDisputeService.PaymentView view = disputeService.get(f.org, f.paymentId);
+
+    assertEquals(f.paymentId, view.payment().getId());
+    assertEquals(2, view.allocations().size());
+    var byInvoice = new java.util.HashMap<UUID, PaymentDisputeService.AllocationView>();
+    view.allocations().forEach(a -> byInvoice.put(a.allocation().getSalesInvoiceId(), a));
+    assertEquals(
+        0, new BigDecimal("30.00").compareTo(byInvoice.get(f.invoice1).allocation().getAmount()));
+    assertEquals(
+        0, new BigDecimal("20.00").compareTo(byInvoice.get(f.invoice2).allocation().getAmount()));
+    for (var a : view.allocations()) {
+      assertNotNull(a.invoice().getInvoiceNumber(), "allocation must name its invoice");
+      // The allocation fully funded each invoice, so delivery marked them PAID.
+      assertEquals("PAID", a.invoice().getStatus().name());
+    }
+  }
+
+  /** A never-allocated payment reads back with an empty allocation list, not a null. */
+  @Test
+  void get_unallocatedPayment_hasNoAllocations() {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "Omar", "omar@acme.test");
+    UUID paymentId = seedOrphanPayment(org, customer, "75.00");
+
+    PaymentDisputeService.PaymentView view = disputeService.get(org, paymentId);
+
+    assertEquals(paymentId, view.payment().getId());
+    assertTrue(view.allocations().isEmpty());
+  }
+
   /** Reading a missing payment is a 404. */
   @Test
   void get_missingPayment_is404() {
@@ -414,7 +460,7 @@ class PaymentDisputeIT {
         () -> disputeService.get(org, UUID.randomUUID()));
   }
 
-  // ───────────────────────────── fixtures & helpers ─────────────────────────────
+  // fixtures & helpers
 
   private record Fixture(UUID org, UUID customer, UUID invoiceId, UUID paymentId) {}
 
@@ -721,7 +767,7 @@ class PaymentDisputeIT {
     return paymentId;
   }
 
-  // ───────────────────────────── query helpers ─────────────────────────────
+  // query helpers
 
   private String paymentStatus(UUID id) {
     return dsl.select(PAYMENT.STATUS)

@@ -116,7 +116,8 @@ class PaymentVerifyIT {
             new PaymentRepositoryFactoryImpl(),
             new PaymentAllocationRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
-            new OrgRepositoryFactoryImpl());
+            new OrgRepositoryFactoryImpl(),
+            new SalesOrderRepositoryFactoryImpl());
     service =
         new PaymentTransactionService(
             dsl,
@@ -140,7 +141,7 @@ class PaymentVerifyIT {
             + " app_user, org RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────────── scenarios ─────────────────────────────
+  // scenarios
 
   @Test
   void matched_createsPaymentAndFlipsOrderToPaid() {
@@ -324,7 +325,7 @@ class PaymentVerifyIT {
     }
   }
 
-  // ───────────────────────────── helpers ─────────────────────────────
+  // helpers
 
   private VerifyCommand cmd(PaymentProvider provider, String amount, String orderNumber) {
     return new VerifyCommand(

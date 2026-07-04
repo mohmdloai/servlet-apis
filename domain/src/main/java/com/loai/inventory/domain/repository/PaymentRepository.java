@@ -1,7 +1,9 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Payment;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -37,6 +39,14 @@ public interface PaymentRepository {
    * story.
    */
   List<Payment> findByOrderId(UUID orgId, UUID salesOrderId);
+
+  /**
+   * Batch projection {@code payment id → sales_order_id} for the given payments, scoped to {@code
+   * orgId} — one query decorates a whole worklist page (mirrors {@code
+   * SalesOrderRepository#findOrderNumbersByIds}). Payments not in {@code orgId} and <em>orphan</em>
+   * payments ({@code sales_order_id IS NULL}) are simply absent from the map.
+   */
+  Map<UUID, UUID> findOrderIdsByIds(UUID orgId, Collection<UUID> paymentIds);
 
   /**
    * The order's prepayment Payments still carrying an unallocated balance, locked {@code FOR
