@@ -1102,6 +1102,81 @@ public final class FulfillmentService {
     return new FulfillmentView(fulfillment, fulfillmentLines);
   }
 
+  // ─────────────────────── Reads (stories/fulfillment_reads.md) ───────────────────────
+
+  /** One page of the fulfillment queue/ledger plus the filtered total (for tab badges). */
+  public record FulfillmentPage(List<FulfillmentView> items, long total) {}
+
+  /** An order's shipment story: the header + every fulfillment oldest-first, each with lines. */
+  public record OrderFulfillments(SalesOrder order, List<FulfillmentView> fulfillments) {}
+
+  public static final int DEFAULT_PAGE_SIZE = 20;
+  public static final int MAX_PAGE_SIZE = 100;
+
+  /**
+   * Read one fulfillment + its lines — the detail view behind the queue row. Read-only on {@code
+   * rootDsl}, no lock: mutations re-read {@code FOR UPDATE} inside their own transactions, so a
+   * stale read can never corrupt a write.
+   *
+   * @throws NotFoundException if the fulfillment is not in {@code orgId}
+   */
+  public FulfillmentView get(UUID orgId, UUID fulfillmentId) {
+    if (fulfillmentId == null) {
+      throw new ValidationException("fulfillment id is required");
+    }
+    FulfillmentRepository repo = fulfillmentRepoFactory.create(rootDsl);
+    Fulfillment fulfillment =
+        repo.findById(orgId, fulfillmentId)
+            .orElseThrow(() -> new NotFoundException("Fulfillment", fulfillmentId));
+    return new FulfillmentView(fulfillment, repo.findLinesByFulfillmentId(fulfillmentId));
+  }
+
+  /**
+   * Read one page of the org's fulfillments — filtered by {@code status} it is the packing/shipping
+   * queue (oldest first, the FIFO worklist); unfiltered it is the ledger (newest first). Mirrors
+   * {@code PaymentTransactionService#list}: {@code page} floors at 0, {@code size} is clamped to
+   * {@code [1, MAX_PAGE_SIZE]}; lines are batch-loaded (one query per page, not per row).
+   */
+  public FulfillmentPage list(UUID orgId, FulfillmentStatus status, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    FulfillmentRepository repo = fulfillmentRepoFactory.create(rootDsl);
+    List<Fulfillment> items = repo.list(orgId, status, p * s, s);
+    long total = repo.count(orgId, status);
+    return new FulfillmentPage(withLines(repo, items), total);
+  }
+
+  /**
+   * The shipment story of an order — every fulfillment ever created for it regardless of status,
+   * oldest first ({@code created_at ASC}), each with its lines, plus the order header so the panel
+   * renders standalone. The by-order mirror of {@code PaymentService#listForOrder}. No pagination:
+   * fulfillment count is bounded by the order's line count.
+   *
+   * @throws NotFoundException if the order is not in {@code orgId}
+   */
+  public OrderFulfillments listForOrder(UUID orgId, UUID salesOrderId) {
+    if (salesOrderId == null) {
+      throw new ValidationException("sales order id is required");
+    }
+    SalesOrder order =
+        salesOrderRepoFactory
+            .create(rootDsl)
+            .findById(orgId, salesOrderId)
+            .orElseThrow(() -> new NotFoundException("SalesOrder", salesOrderId));
+    FulfillmentRepository repo = fulfillmentRepoFactory.create(rootDsl);
+    return new OrderFulfillments(order, withLines(repo, repo.findByOrderId(orgId, salesOrderId)));
+  }
+
+  /** Assemble views with one batch line query, preserving the repository's ordering. */
+  private static List<FulfillmentView> withLines(
+      FulfillmentRepository repo, List<Fulfillment> fulfillments) {
+    Map<UUID, List<FulfillmentLine>> lines =
+        repo.findLinesByFulfillmentIds(fulfillments.stream().map(Fulfillment::getId).toList());
+    return fulfillments.stream()
+        .map(f -> new FulfillmentView(f, lines.getOrDefault(f.getId(), List.of())))
+        .toList();
+  }
+
   /**
    * Roll the order forward after an online delivery: FULFILLING → FULFILLED once every order line's
    * delivered quantity equals its ordered quantity, then FULFILLED → CLOSED once every invoice for

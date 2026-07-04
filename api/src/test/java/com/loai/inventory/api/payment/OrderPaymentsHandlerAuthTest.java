@@ -73,6 +73,7 @@ class OrderPaymentsHandlerAuthTest {
         Mockito.mock(SalesOrderService.class),
         Mockito.mock(OrderCancellationService.class),
         paymentService,
+        Mockito.mock(com.loai.inventory.service.FulfillmentService.class),
         com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 

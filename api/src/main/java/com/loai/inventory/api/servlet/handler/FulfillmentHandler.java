@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CreateFulfillmentRequest;
 import com.loai.inventory.api.dto.FailFulfillmentRequest;
+import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.RefundFulfillmentRequest;
 import com.loai.inventory.api.dto.ReplaceFulfillmentRequest;
 import com.loai.inventory.api.mapper.FulfillmentMapper;
@@ -11,12 +12,14 @@ import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.FulfillmentStatus;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.FulfillmentService.DeliveredView;
 import com.loai.inventory.service.FulfillmentService.FailedRefundResult;
+import com.loai.inventory.service.FulfillmentService.FulfillmentPage;
 import com.loai.inventory.service.FulfillmentService.FulfillmentView;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -29,6 +32,10 @@ import org.slf4j.LoggerFactory;
  * Handles fulfillment routes under {@code /api/orgs/{orgId}/fulfillments}:
  *
  * <ul>
+ *   <li>{@code GET /fulfillments?status=&page=&size=} — the packing/shipping queue (filtered,
+ *       oldest first) / fulfillment ledger (unfiltered, newest first); {@code PageResponse}
+ *       envelope ({@code stories/fulfillment_reads.md})
+ *   <li>{@code GET /fulfillments/{id}} — one fulfillment + its lines
  *   <li>{@code POST /fulfillments} — create a PENDING fulfillment from a paid order's lines (201)
  *   <li>{@code POST /fulfillments/{id}/ship} — mark it SHIPPED, decrementing stock (200)
  *   <li>{@code POST /fulfillments/{id}/deliver} — mark it DELIVERED: issue the SalesInvoice and
@@ -43,8 +50,8 @@ import org.slf4j.LoggerFactory;
  *       fulfillment (201)
  * </ul>
  *
- * <p>Create/ship/deliver/fail require STAFF; the money-moving {@code refund} and the stock-moving
- * {@code return} / {@code replace} require MANAGER (system ADMIN bypasses).
+ * <p>Reads require VIEWER; create/ship/deliver/fail require STAFF; the money-moving {@code refund}
+ * and the stock-moving {@code return} / {@code replace} require MANAGER (system ADMIN bypasses).
  */
 public class FulfillmentHandler implements OrgResourceHandler {
 
@@ -67,12 +74,24 @@ public class FulfillmentHandler implements OrgResourceHandler {
       String remainingPath)
       throws IOException {
     try {
+      String tail = normalize(remainingPath);
+      if ("GET".equals(method)) {
+        if (tail.isEmpty()) {
+          doList(req, resp, orgId);
+          return;
+        }
+        String[] getParts = tail.split("/");
+        if (getParts.length == 1) {
+          doGet(req, resp, orgId, parseId(getParts[0]));
+          return;
+        }
+        throw new ValidationException("Unknown route: GET /fulfillments/" + tail);
+      }
       if (!"POST".equals(method)) {
         writeError(resp, 405, "Method not allowed");
         return;
       }
 
-      String tail = normalize(remainingPath);
       if (tail.isEmpty()) {
         doCreate(req, resp, orgId);
         return;
@@ -100,6 +119,39 @@ public class FulfillmentHandler implements OrgResourceHandler {
       log.error("Unexpected error in /api/orgs/{}/fulfillments{}", orgId, remainingPath, e);
       writeError(resp, 500, "Internal server error");
     }
+  }
+
+  /**
+   * {@code GET /} — one page of the org's fulfillments ({@code stories/fulfillment_reads.md}).
+   * Filtered by {@code status} it is the packing/shipping queue (oldest first); unfiltered it is
+   * the ledger (newest first). VIEWER — the project-wide read bar.
+   */
+  private void doList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+
+    FulfillmentStatus status = FulfillmentMapper.toStatusFilter(req.getParameter("status"));
+    // Clamp here too so the envelope echoes the page/size actually served.
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", FulfillmentService.DEFAULT_PAGE_SIZE), 1),
+            FulfillmentService.MAX_PAGE_SIZE);
+
+    FulfillmentPage result = service.list(orgId, status, page, size);
+    writeJson(
+        resp,
+        200,
+        new PageResponse<>(
+            FulfillmentMapper.toResponses(result.items()), result.total(), page, size));
+  }
+
+  /** {@code GET /{id}} — one fulfillment + its lines: every timestamp, disposition, lineage. */
+  private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+
+    writeJson(resp, 200, FulfillmentMapper.toResponse(service.get(orgId, id)));
   }
 
   private void doCreate(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
@@ -235,6 +287,18 @@ public class FulfillmentHandler implements OrgResourceHandler {
       return UUID.fromString(raw);
     } catch (IllegalArgumentException e) {
       throw new ValidationException("Invalid fulfillment id format: " + raw);
+    }
+  }
+
+  private static int intParam(HttpServletRequest req, String name, int defaultValue) {
+    String value = req.getParameter(name);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new ValidationException("Parameter '" + name + "' must be an integer");
     }
   }
 

@@ -295,6 +295,40 @@ class OrderLookupByNumberIT {
     assertThrows(ValidationException.class, () -> service.getByNumber(org, "   "));
   }
 
+  // ───────────── lookup by id ({@code stories/fulfillment_reads.md}) ─────────────
+
+  @Test
+  void getById_returnsSameShapeAsNumberLookup() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("staff@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10);
+    Placed placed = placeOnline(org, staff, product, 2);
+
+    Placed found = service.getById(org, placed.order().getId());
+
+    assertEquals(placed.order().getId(), found.order().getId());
+    assertEquals(placed.order().getOrderNumber(), found.order().getOrderNumber());
+    assertEquals(OrderStatus.PENDING_PAYMENT, found.order().getStatus());
+    assertEquals(1, found.lines().size());
+    assertEquals(2, found.lines().get(0).getQuantity());
+  }
+
+  @Test
+  void getById_unknownOrForeignId_is404_nullId_is400() {
+    UUID orgA = createOrg("acme");
+    UUID orgB = createOrg("globex");
+    UUID staffA = createUser("a@acme.test");
+    UUID productA = createProduct(orgA, "A");
+    createInventory(orgA, productA, 10);
+    Placed placed = placeOnline(orgA, staffA, productA, 1);
+
+    assertThrows(NotFoundException.class, () -> service.getById(orgA, UUID.randomUUID()));
+    // Another org's order is invisible, not forbidden — scoping over the shared schema.
+    assertThrows(NotFoundException.class, () -> service.getById(orgB, placed.order().getId()));
+    assertThrows(ValidationException.class, () -> service.getById(orgA, null));
+  }
+
   // ───────────────────────────── helpers ─────────────────────────────
 
   private Placed placeOnline(UUID org, UUID staff, UUID product, int qty) {

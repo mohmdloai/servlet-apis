@@ -77,6 +77,7 @@ public class OrgServlet extends HttpServlet {
                     config.salesOrderService,
                     config.orderCancellationService,
                     config.paymentService,
+                    config.fulfillmentService,
                     mapper)),
             Map.entry(
                 "payment-transactions",

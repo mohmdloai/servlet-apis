@@ -2,6 +2,8 @@ package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.FulfillmentLine;
+import com.loai.inventory.domain.model.FulfillmentStatus;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -27,8 +29,25 @@ public interface FulfillmentRepository {
 
   List<FulfillmentLine> findLinesByFulfillmentId(UUID fulfillmentId);
 
+  /**
+   * Lines of every fulfillment in {@code fulfillmentIds}, keyed by fulfillment id — one query for a
+   * whole list page instead of one per row. Ids with no lines are absent from the map.
+   */
+  Map<UUID, List<FulfillmentLine>> findLinesByFulfillmentIds(Collection<UUID> fulfillmentIds);
+
   /** All fulfillments of {@code salesOrderId}, any status. Non-locking. */
   List<Fulfillment> findByOrderId(UUID orgId, UUID salesOrderId);
+
+  /**
+   * One page of the org's fulfillments, optionally filtered by {@code status} ({@code null} = no
+   * filter). Filtered = queue view, oldest first ({@code created_at ASC} — the packing/shipping
+   * FIFO worklist); unfiltered = ledger, newest first ({@code created_at DESC}). Same
+   * queue-vs-ledger split as {@code PaymentTransactionRepository#list}.
+   */
+  List<Fulfillment> list(UUID orgId, FulfillmentStatus status, int offset, int limit);
+
+  /** Count the fulfillments {@link #list} would return for the same filter. */
+  long count(UUID orgId, FulfillmentStatus status);
 
   /**
    * Atomically cancel a fulfillment iff it is still PENDING — {@code UPDATE … WHERE status =

@@ -202,7 +202,7 @@ class FailedFulfillmentHandlerAuthTest {
   }
 
   @Test
-  void refund_wrongVerb_is405_serviceNeverCalled() throws IOException {
+  void refund_wrongVerb_isRejected_serviceNeverCalled() throws IOException {
     FulfillmentService service = Mockito.mock(FulfillmentService.class);
     Resp resp = new Resp();
 
@@ -214,7 +214,26 @@ class FailedFulfillmentHandlerAuthTest {
             ORG,
             "/" + FULFILLMENT + "/refund");
 
-    assertEquals(405, resp.status, "GET on /refund must be 405");
+    // GET is a supported verb since the reads slice, so an unknown GET path is the house 400
+    // ("Unknown route"), not a 405 — either way the mutation service must never run.
+    assertEquals(400, resp.status, "GET on /refund must be rejected as an unknown route");
+    verify(service, never()).refundFailed(any(), any(), any(), any(), anyBoolean());
+  }
+
+  @Test
+  void refund_unsupportedVerb_is405_serviceNeverCalled() throws IOException {
+    FulfillmentService service = Mockito.mock(FulfillmentService.class);
+    Resp resp = new Resp();
+
+    handler(service)
+        .handle(
+            "DELETE",
+            reqWith(ctxWith(OrgRole.MANAGER), ""),
+            resp.mock,
+            ORG,
+            "/" + FULFILLMENT + "/refund");
+
+    assertEquals(405, resp.status, "DELETE must be 405 (only GET and POST are supported)");
     verify(service, never()).refundFailed(any(), any(), any(), any(), anyBoolean());
   }
 
