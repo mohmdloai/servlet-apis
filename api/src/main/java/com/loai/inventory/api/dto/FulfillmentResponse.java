@@ -2,6 +2,7 @@ package com.loai.inventory.api.dto;
 
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.FulfillmentLine;
+import com.loai.inventory.domain.model.FulfillmentResolution;
 import com.loai.inventory.domain.model.FulfillmentStatus;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -16,9 +17,13 @@ public class FulfillmentResponse {
   private String trackingNumber;
   private String notes;
   private OffsetDateTime shippedAt;
+  private OffsetDateTime deliveredAt;
+  private OffsetDateTime cancelledAt;
   private OffsetDateTime failedAt;
   private String failedReason;
   private OffsetDateTime returnedAt;
+  private FulfillmentResolution resolution;
+  private UUID replacesFulfillmentId;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
   private List<FulfillmentLineResponse> lines;
@@ -35,9 +40,13 @@ public class FulfillmentResponse {
     r.trackingNumber = fulfillment.getTrackingNumber();
     r.notes = fulfillment.getNotes();
     r.shippedAt = fulfillment.getShippedAt();
+    r.deliveredAt = fulfillment.getDeliveredAt();
+    r.cancelledAt = fulfillment.getCancelledAt();
     r.failedAt = fulfillment.getFailedAt();
     r.failedReason = fulfillment.getFailedReason();
     r.returnedAt = fulfillment.getReturnedAt();
+    r.resolution = fulfillment.getResolution();
+    r.replacesFulfillmentId = fulfillment.getReplacesFulfillmentId();
     r.createdAt = fulfillment.getCreatedAt();
     r.updatedAt = fulfillment.getUpdatedAt();
     r.lines = lines.stream().map(FulfillmentLineResponse::from).toList();
@@ -76,6 +85,14 @@ public class FulfillmentResponse {
     return shippedAt;
   }
 
+  public OffsetDateTime getDeliveredAt() {
+    return deliveredAt;
+  }
+
+  public OffsetDateTime getCancelledAt() {
+    return cancelledAt;
+  }
+
   public OffsetDateTime getFailedAt() {
     return failedAt;
   }
@@ -86,6 +103,14 @@ public class FulfillmentResponse {
 
   public OffsetDateTime getReturnedAt() {
     return returnedAt;
+  }
+
+  public FulfillmentResolution getResolution() {
+    return resolution;
+  }
+
+  public UUID getReplacesFulfillmentId() {
+    return replacesFulfillmentId;
   }
 
   public OffsetDateTime getCreatedAt() {

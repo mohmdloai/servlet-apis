@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CancelOrderRequest;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
+import com.loai.inventory.api.mapper.FulfillmentMapper;
 import com.loai.inventory.api.mapper.PaymentMapper;
 import com.loai.inventory.api.mapper.SalesOrderMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -14,6 +15,7 @@ import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
+import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderCancellationService.CancelResult;
 import com.loai.inventory.service.PaymentService;
@@ -40,12 +42,15 @@ import org.slf4j.LoggerFactory;
  *       for the manual money path ({@code stories/lookup_order_by_number.md}). VIEWER. The bare
  *       {@code GET} without the param is a 400 — the route is reserved for the future unfiltered
  *       list slice.
+ *   <li>{@code GET /{id}} — one order + its lines by stable id ({@code
+ *       stories/fulfillment_reads.md}). VIEWER.
  *   <li>{@code GET /{id}/payments} — the order's money story: every payment FIFO with its refunds
  *       ({@code stories/list_order_payments.md}). VIEWER.
+ *   <li>{@code GET /{id}/fulfillments} — the order's shipment story: every fulfillment oldest-first
+ *       with its lines ({@code stories/fulfillment_reads.md}). VIEWER.
  * </ul>
  *
- * <p>Other methods and the {@code /sales-orders/{id}} sub-paths are not implemented yet — later
- * slices.
+ * <p>Other methods and sub-paths are not implemented yet — later slices.
  */
 public class SalesOrderHandler implements OrgResourceHandler {
 
@@ -55,16 +60,19 @@ public class SalesOrderHandler implements OrgResourceHandler {
   private final SalesOrderService service;
   private final OrderCancellationService cancellationService;
   private final PaymentService paymentService;
+  private final FulfillmentService fulfillmentService;
   private final ObjectMapper mapper;
 
   public SalesOrderHandler(
       SalesOrderService service,
       OrderCancellationService cancellationService,
       PaymentService paymentService,
+      FulfillmentService fulfillmentService,
       ObjectMapper mapper) {
     this.service = service;
     this.cancellationService = cancellationService;
     this.paymentService = paymentService;
+    this.fulfillmentService = fulfillmentService;
     this.mapper = mapper;
   }
 
@@ -82,8 +90,16 @@ public class SalesOrderHandler implements OrgResourceHandler {
         doGetByNumber(req, resp, orgId);
         return;
       }
+      if ("GET".equals(method) && parts.length == 1) {
+        doGetById(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
       if ("GET".equals(method) && parts.length == 2 && "payments".equals(parts[1])) {
         doGetPayments(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
+      if ("GET".equals(method) && parts.length == 2 && "fulfillments".equals(parts[1])) {
+        doGetFulfillments(req, resp, orgId, parseId(parts[0]));
         return;
       }
       if (!"POST".equals(method)) {
@@ -186,6 +202,33 @@ public class SalesOrderHandler implements OrgResourceHandler {
           "order_number query parameter is required (the unfiltered list is not implemented)");
     }
     writeJson(resp, 200, SalesOrderMapper.toResponse(service.getByNumber(orgId, orderNumber)));
+  }
+
+  /**
+   * {@code GET /{id}} — one order + its lines, by stable id ({@code stories/fulfillment_reads.md}):
+   * the detail read behind the worklist row. Same {@code SalesOrderResponse} shape as the {@code
+   * ?order_number=} lookup. VIEWER.
+   */
+  private void doGetById(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID orderId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(resp, 200, SalesOrderMapper.toResponse(service.getById(orgId, orderId)));
+  }
+
+  /**
+   * {@code GET /{id}/fulfillments} — the order's shipment story: every fulfillment ever created for
+   * it (any status) oldest-first, each with its lines, plus the order header — the shipment mirror
+   * of {@code /{id}/payments}. VIEWER.
+   */
+  private void doGetFulfillments(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID orderId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(
+        resp,
+        200,
+        FulfillmentMapper.toOrderFulfillmentsResponse(
+            fulfillmentService.listForOrder(orgId, orderId)));
   }
 
   /**

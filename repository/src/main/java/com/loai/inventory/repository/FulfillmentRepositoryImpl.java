@@ -97,12 +97,58 @@ public final class FulfillmentRepositoryImpl implements FulfillmentRepository {
   }
 
   @Override
+  public Map<UUID, List<FulfillmentLine>> findLinesByFulfillmentIds(
+      java.util.Collection<UUID> fulfillmentIds) {
+    if (fulfillmentIds.isEmpty()) {
+      return Map.of();
+    }
+    Map<UUID, List<FulfillmentLine>> byFulfillment = new HashMap<>();
+    for (FulfillmentLineRecord r :
+        dsl.selectFrom(FULFILLMENT_LINE)
+            .where(FULFILLMENT_LINE.FULFILLMENT_ID.in(fulfillmentIds))
+            .fetch()) {
+      byFulfillment
+          .computeIfAbsent(r.getFulfillmentId(), k -> new ArrayList<>())
+          .add(toFulfillmentLine(r));
+    }
+    return byFulfillment;
+  }
+
+  @Override
   public List<Fulfillment> findByOrderId(UUID orgId, UUID salesOrderId) {
     return dsl.selectFrom(FULFILLMENT)
         .where(FULFILLMENT.ORG_ID.eq(orgId).and(FULFILLMENT.SALES_ORDER_ID.eq(salesOrderId)))
         .orderBy(FULFILLMENT.CREATED_AT.asc())
         .fetch()
         .map(this::toFulfillment);
+  }
+
+  @Override
+  public List<Fulfillment> list(UUID orgId, FulfillmentStatus status, int offset, int limit) {
+    var query = dsl.selectFrom(FULFILLMENT).where(listConditions(orgId, status));
+    // Filtered = queue view, oldest first (FIFO worklist); unfiltered = ledger, newest first.
+    var ordered =
+        status != null
+            ? query.orderBy(FULFILLMENT.CREATED_AT.asc(), FULFILLMENT.ID.asc())
+            : query.orderBy(FULFILLMENT.CREATED_AT.desc(), FULFILLMENT.ID.desc());
+    return ordered.offset(offset).limit(limit).fetch().map(this::toFulfillment);
+  }
+
+  @Override
+  public long count(UUID orgId, FulfillmentStatus status) {
+    return dsl.fetchCount(dsl.selectFrom(FULFILLMENT).where(listConditions(orgId, status)));
+  }
+
+  private static org.jooq.Condition listConditions(UUID orgId, FulfillmentStatus status) {
+    org.jooq.Condition c = FULFILLMENT.ORG_ID.eq(orgId);
+    if (status != null) {
+      c =
+          c.and(
+              FULFILLMENT.STATUS.eq(
+                  com.loai.inventory.repository.generated.enums.FulfillmentStatus.valueOf(
+                      status.name())));
+    }
+    return c;
   }
 
   @Override

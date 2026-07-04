@@ -428,6 +428,21 @@ public class SalesOrderService {
   }
 
   /**
+   * Look up an order by id — the detail read behind the worklist row ({@code
+   * stories/fulfillment_reads.md}). Same response shape as {@link #getByNumber}, keyed by the
+   * stable id instead of the human-readable number. Read-only on {@code rootDsl}, no lock.
+   *
+   * @throws NotFoundException if the order is not in {@code orgId}
+   */
+  public Placed getById(UUID orgId, UUID orderId) {
+    if (orderId == null) {
+      throw new ValidationException("order id is required");
+    }
+    return findPlaced(orgId, orderId)
+        .orElseThrow(() -> new NotFoundException("SalesOrder", orderId));
+  }
+
+  /**
    * Load an order + its lines + customer for a read-only view (the anonymous magic-link route). The
    * caller has already proven access via the token, so this takes no {@link ActorContext}; it is
    * still org-scoped. Returns empty if the order does not exist in {@code orgId}.
