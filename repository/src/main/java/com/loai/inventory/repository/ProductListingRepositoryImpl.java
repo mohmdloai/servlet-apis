@@ -273,6 +273,18 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   }
 
   @Override
+  public java.util.Map<UUID, List<UUID>> findCategoryIdsForListings(
+      java.util.Collection<UUID> listingIds) {
+    if (listingIds.isEmpty()) {
+      return java.util.Map.of();
+    }
+    return dsl.select(PRODUCT_LISTING_CATEGORY.LISTING_ID, PRODUCT_LISTING_CATEGORY.CATEGORY_ID)
+        .from(PRODUCT_LISTING_CATEGORY)
+        .where(PRODUCT_LISTING_CATEGORY.LISTING_ID.in(listingIds))
+        .fetchGroups(PRODUCT_LISTING_CATEGORY.LISTING_ID, PRODUCT_LISTING_CATEGORY.CATEGORY_ID);
+  }
+
+  @Override
   public long countCategoriesInOrg(UUID orgId, Set<UUID> categoryIds) {
     if (categoryIds.isEmpty()) {
       return 0L;
@@ -324,6 +336,27 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
             PRODUCT_LISTING_IMAGE.CREATED_AT.asc())
         .fetch()
         .map(this::toImage);
+  }
+
+  @Override
+  public ProductListingImage updateImage(
+      UUID orgId, UUID listingId, UUID imageId, String altText, int sortOrder) {
+    ProductListingImageRecord record =
+        dsl.update(PRODUCT_LISTING_IMAGE)
+            .set(PRODUCT_LISTING_IMAGE.ALT_TEXT, altText)
+            .set(PRODUCT_LISTING_IMAGE.SORT_ORDER, sortOrder)
+            .where(
+                PRODUCT_LISTING_IMAGE
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(PRODUCT_LISTING_IMAGE.LISTING_ID.eq(listingId))
+                    .and(PRODUCT_LISTING_IMAGE.ID.eq(imageId)))
+            .returning()
+            .fetchOne();
+    if (record == null) {
+      throw new NotFoundException("ProductListingImage", imageId);
+    }
+    return toImage(record);
   }
 
   @Override

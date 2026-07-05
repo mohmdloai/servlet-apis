@@ -53,7 +53,7 @@ public class ProductHandler implements OrgResourceHandler {
         case "GET" -> doGet(req, resp, orgId, productId);
         case "POST" -> doPost(req, resp, orgId, productId);
         case "PUT" -> doPut(req, resp, orgId, productId);
-        case "DELETE" -> doDelete(resp, orgId, productId);
+        case "DELETE" -> doDelete(req, resp, orgId, productId);
         default -> writeError(resp, 405, "Method not allowed");
       }
     } catch (AppException e) {
@@ -114,7 +114,10 @@ public class ProductHandler implements OrgResourceHandler {
     writeJson(resp, 200, ProductResponse.from(updated));
   }
 
-  private void doDelete(HttpServletResponse resp, UUID orgId, UUID productId) throws IOException {
+  private void doDelete(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID productId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
     if (productId == null) {
       throw new ValidationException("Product id is required for delete");
     }

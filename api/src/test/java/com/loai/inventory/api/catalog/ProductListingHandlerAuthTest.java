@@ -232,6 +232,38 @@ class ProductListingHandlerAuthTest {
   }
 
   @Test
+  void updateImage_forbiddenForViewer() throws IOException {
+    ProductListingService service = Mockito.mock(ProductListingService.class);
+    Resp resp = new Resp();
+    handler(service)
+        .handle(
+            "PATCH",
+            reqWith(ctxWith(OrgRole.VIEWER), "{\"alt_text\":\"a\",\"sort_order\":1}"),
+            resp.mock,
+            ORG,
+            "/" + ID + "/images/" + IMG);
+    assertEquals(403, resp.status);
+    verify(service, never()).updateImage(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void updateImage_allowedForStaff() throws IOException {
+    ProductListingService service = Mockito.mock(ProductListingService.class);
+    when(service.updateImage(any(), any(), any(), any(), any()))
+        .thenReturn(new ImageView(IMG, "http://x/y", "a", 1));
+    Resp resp = new Resp();
+    handler(service)
+        .handle(
+            "PATCH",
+            reqWith(ctxWith(OrgRole.STAFF), "{\"alt_text\":\"a\",\"sort_order\":1}"),
+            resp.mock,
+            ORG,
+            "/" + ID + "/images/" + IMG);
+    assertEquals(200, resp.status);
+    verify(service).updateImage(ORG, ID, IMG, "a", 1);
+  }
+
+  @Test
   void deleteImage_allowedForStaff() throws IOException {
     ProductListingService service = Mockito.mock(ProductListingService.class);
     Resp resp = new Resp();
