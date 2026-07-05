@@ -31,6 +31,7 @@ import org.slf4j.LoggerFactory;
 
 public class AuthService {
   private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+  private static final int MIN_PASSWORD_LENGTH = 8;
 
   private final UserRepository userRepo;
   private final RefreshTokenStore refreshTokenStore;
@@ -102,6 +103,64 @@ public class AuthService {
     refreshTokenStore.cacheTokenVersion(user.getId(), tokenVersion);
 
     log.info("User logged in: id={} email={}", user.getId(), user.getEmail());
+    return new LoginResult(accessToken, rawRefreshToken, jwtUtil.getAccessTtlMillis() / 1000, user);
+  }
+
+  /**
+   * Self-service password change: verify the current password, rotate the hash, and revoke every
+   * existing session (bump {@code token_version} + logout-all) so the change signs the user out of
+   * all *other* devices. To keep the device that just changed the password signed in, a fresh
+   * session (access + refresh) is minted at the new version and returned for the servlet to cookie.
+   * Blocked upstream while impersonating — an overlay must never rotate the target's credential.
+   */
+  public LoginResult changePassword(
+      UUID userId, String currentPassword, String newPassword, String deviceInfo, String sourceIp) {
+    if (currentPassword == null || newPassword == null) {
+      throw new ValidationException("current_password and new_password are required");
+    }
+    AppUser user =
+        userRepo.findById(userId).orElseThrow(() -> new AuthenticationException("User not found"));
+    if (!user.isActive()) {
+      throw new AuthenticationException("Account is disabled");
+    }
+    if (!PasswordHasher.verify(currentPassword, user.getPasswordHash())) {
+      throw new ValidationException("current password is incorrect");
+    }
+    if (newPassword.length() < MIN_PASSWORD_LENGTH) {
+      throw new ValidationException(
+          "new password must be at least " + MIN_PASSWORD_LENGTH + " characters");
+    }
+    if (PasswordHasher.verify(newPassword, user.getPasswordHash())) {
+      throw new ValidationException("new password must differ from the current password");
+    }
+
+    // Rotate the hash, then bump token_version + revoke every refresh family (all other devices
+    // die).
+    // revokeAllForUser runs inside propagateLogoutAll BEFORE we store the new family below, so the
+    // current device's fresh session survives.
+    userRepo.updatePasswordHash(userId, PasswordHasher.hash(newPassword));
+    int newVersion = userRepo.incrementTokenVersion(userId);
+    propagateLogoutAll(userId, newVersion);
+
+    Map<UUID, Set<String>> orgRoles = buildOrgRolesMap(userRepo.findOrgRoles(userId));
+    Set<String> systemRoles = buildSystemRolesSet(userRepo.findSystemRoles(userId));
+    UUID familyId = UUID.randomUUID();
+    String accessToken =
+        jwtUtil.generateAccessToken(
+            userId,
+            user.getActorType().name(),
+            orgRoles,
+            systemRoles,
+            Set.of(),
+            newVersion,
+            familyId);
+    String rawRefreshToken = UUID.randomUUID().toString();
+    refreshTokenStore.store(
+        RefreshTokenStore.hashToken(rawRefreshToken),
+        new RefreshTokenStore.TokenData(userId, familyId, deviceInfo, sourceIp, Instant.now()));
+    refreshTokenStore.cacheTokenVersion(userId, newVersion);
+
+    log.info("User changed password: id={}", userId);
     return new LoginResult(accessToken, rawRefreshToken, jwtUtil.getAccessTtlMillis() / 1000, user);
   }
 

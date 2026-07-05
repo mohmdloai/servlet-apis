@@ -67,6 +67,7 @@ import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceService;
 import com.loai.inventory.service.MagicLinkService;
+import com.loai.inventory.service.MemberService;
 import com.loai.inventory.service.NotificationService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderExpiryService;
@@ -157,6 +158,7 @@ public class AppConfig {
   public final RefreshTokenStore refreshTokenStore;
   public final AuthService authService;
   public final OrgService orgService;
+  public final MemberService memberService;
   public final PlatformAuditService platformAuditService;
   public final OrgStatusService orgStatusService;
   public final PlatformOrgService platformOrgService;
@@ -246,6 +248,7 @@ public class AppConfig {
             impersonationEventRepository,
             impersonationTtl);
     this.orgService = new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory);
+    this.memberService = new MemberService(dsl, userRepositoryFactory, authService);
     this.platformAuditService = new PlatformAuditService(dsl, platformAuditRepositoryFactory);
     this.orgStatusService = new OrgStatusService(jedisPool, dsl, orgRepositoryFactory);
     // Enforce org suspension on the hot authorization path, backed by the Redis-mirrored gate.

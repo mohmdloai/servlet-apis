@@ -1,6 +1,7 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.AppUser;
+import com.loai.inventory.domain.model.OrgMember;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.domain.model.UserOrgRole;
@@ -46,6 +47,32 @@ public interface UserRepository {
 
   /** Revoke one org role. Returns the number of rows deleted (0 if the user lacked it). */
   int deleteOrgRole(UUID userId, UUID orgId, OrgRole role);
+
+  // ── Org-scoped membership (see stories/09_st_org_settings.md) ──
+
+  /**
+   * Every member of {@code orgId}: each {@code app_user} that holds at least one role there, with
+   * its full role set aggregated. Ordered by email. Backs {@code GET /api/orgs/{orgId}/members}.
+   */
+  List<OrgMember> findMembers(UUID orgId);
+
+  /**
+   * The roles {@code userId} holds in {@code orgId} (empty ⇒ not a member). Used to decide whether
+   * a PUT edits an existing member and whether a change is a demotion.
+   */
+  Set<OrgRole> findRolesInOrg(UUID userId, UUID orgId);
+
+  /**
+   * Lock and return the ids of every user holding OWNER in {@code orgId}, taking a {@code FOR
+   * UPDATE} row lock so concurrent de-privileges serialize. Backs the last-owner guard (an org must
+   * always keep at least one OWNER). Must be called on a transaction-bound repository.
+   */
+  Set<UUID> ownerIdsForUpdate(UUID orgId);
+
+  /**
+   * Remove every role {@code userId} holds in {@code orgId}. Returns the number of rows deleted.
+   */
+  int deleteAllOrgRoles(UUID userId, UUID orgId);
 
   /**
    * Paged user list, optionally filtered by a case-insensitive email prefix ({@code null} = all).
