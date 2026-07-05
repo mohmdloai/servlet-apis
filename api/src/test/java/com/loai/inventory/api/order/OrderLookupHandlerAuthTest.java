@@ -2,7 +2,9 @@ package com.loai.inventory.api.order;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -34,9 +36,9 @@ import org.mockito.Mockito;
 
 /**
  * Runtime auth + param verification for {@code GET /sales-orders?order_number=} ({@code
- * stories/lookup_order_by_number.md}): a read, so VIEWER suffices; non-member 403 / anon 401; the
- * bare {@code GET} without the param is a 400 that never reaches the service (the route is reserved
- * for the future list slice).
+ * stories/lookup_order_by_number.md}): a read, so VIEWER suffices; non-member 403 / anon 401. The
+ * bare {@code GET} without the param now returns the order worklist page (the reserved route was
+ * implemented — see {@code SalesOrderService#list}).
  */
 class OrderLookupHandlerAuthTest {
 
@@ -77,6 +79,7 @@ class OrderLookupHandlerAuthTest {
         Mockito.mock(PaymentService.class),
         Mockito.mock(com.loai.inventory.service.FulfillmentService.class),
         Mockito.mock(com.loai.inventory.service.InvoiceAdminService.class),
+        Mockito.mock(com.loai.inventory.service.InventoryService.class),
         com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 
@@ -94,13 +97,16 @@ class OrderLookupHandlerAuthTest {
   }
 
   @Test
-  void lookup_missingParam_is400_serviceNeverCalled() throws IOException {
+  void bareGet_returnsTheWorklist_serviceListCalled() throws IOException {
     SalesOrderService service = Mockito.mock(SalesOrderService.class);
+    when(service.list(eq(ORG), any(), anyInt(), anyInt()))
+        .thenReturn(new SalesOrderService.OrderListPage(List.of(), 0));
     Resp resp = new Resp();
 
     handler(service).handle("GET", reqWith(ctxWith(ORG, OrgRole.VIEWER), null), resp.mock, ORG, "");
 
-    assertEquals(400, resp.status, "bare GET must 400 (route reserved for the list slice)");
+    assertEquals(200, resp.status, "bare GET now returns the order worklist page");
+    verify(service).list(eq(ORG), any(), anyInt(), anyInt());
     verify(service, never()).getByNumber(any(), anyString());
   }
 

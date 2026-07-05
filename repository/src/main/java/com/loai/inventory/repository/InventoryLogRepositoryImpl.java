@@ -80,6 +80,25 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
         .fetch(this::toInventoryLog);
   }
 
+  @Override
+  public List<InventoryLog> findByProductId(UUID orgId, UUID productId, int offset, int limit) {
+    // Audit ledger — newest first; id DESC is the tiebreak within an equal created_at (same txn).
+    return dsl.selectFrom(INVENTORY_LOG)
+        .where(INVENTORY_LOG.ORG_ID.eq(orgId).and(INVENTORY_LOG.PRODUCT_ID.eq(productId)))
+        .orderBy(INVENTORY_LOG.CREATED_AT.desc(), INVENTORY_LOG.ID.desc())
+        .offset(offset)
+        .limit(limit)
+        .fetch(this::toInventoryLog);
+  }
+
+  @Override
+  public long countByProductId(UUID orgId, UUID productId) {
+    return dsl.fetchCount(
+        dsl.selectOne()
+            .from(INVENTORY_LOG)
+            .where(INVENTORY_LOG.ORG_ID.eq(orgId).and(INVENTORY_LOG.PRODUCT_ID.eq(productId))));
+  }
+
   private InventoryLog toInventoryLog(InventoryLogRecord r) {
     InventoryLog l = new InventoryLog();
     l.setId(r.getId());

@@ -79,6 +79,7 @@ public class OrgServlet extends HttpServlet {
                     config.paymentService,
                     config.fulfillmentService,
                     config.invoiceAdminService,
+                    config.inventoryService,
                     mapper)),
             Map.entry(
                 "payment-transactions",

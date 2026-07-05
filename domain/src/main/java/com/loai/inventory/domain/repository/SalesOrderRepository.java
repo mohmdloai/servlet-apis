@@ -1,6 +1,7 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Customer;
+import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
 import java.math.BigDecimal;
@@ -74,6 +75,23 @@ public interface SalesOrderRepository {
   Optional<SalesOrder> findByIdempotencyKey(UUID orgId, String idempotencyKey);
 
   List<SalesOrderLine> findLinesByOrderId(UUID salesOrderId);
+
+  /**
+   * One page of the org's orders for the worklist. A non-null {@code status} filters and is a queue
+   * view (oldest first, {@code created_at ASC}); {@code null} is the unfiltered ledger (newest
+   * first, {@code created_at DESC}) — same queue-vs-ledger convention as the payment/refund
+   * worklists.
+   */
+  List<SalesOrder> list(UUID orgId, OrderStatus status, int offset, int limit);
+
+  /** Count of the filtered orders (drives the pager / tab badges). */
+  long count(UUID orgId, OrderStatus status);
+
+  /**
+   * Batch-load lines for a set of orders, keyed by {@code sales_order_id} — one query per page so
+   * the worklist doesn't fetch lines per row. Orders with no lines are absent from the map.
+   */
+  Map<UUID, List<SalesOrderLine>> findLinesByOrderIds(Collection<UUID> salesOrderIds);
 
   /**
    * Snapshot lookup for the products on a new order. Returns only products that belong to {@code

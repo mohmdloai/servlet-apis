@@ -5,14 +5,19 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.InitInventoryRequest;
 import com.loai.inventory.api.dto.InventoryQtyRequest;
 import com.loai.inventory.api.dto.InventoryResponse;
+import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.mapper.InventoryMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Inventory;
+import com.loai.inventory.domain.model.InventoryStockFilter;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.InventoryService;
+import com.loai.inventory.service.InventoryService.LogPage;
+import com.loai.inventory.service.InventoryService.OverviewPage;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -65,14 +70,103 @@ public class InventoryHandler implements OrgResourceHandler {
   private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, PathParts path)
       throws IOException {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+
+    // GET /inventory — the stock-overview list (product-driven; untracked products appear).
     if (path.productId == null) {
-      throw new ValidationException("GET requires /api/orgs/{orgId}/inventory/{productId}");
+      doGetOverview(req, resp, orgId);
+      return;
     }
-    if (path.action != null) {
-      throw new ValidationException("GET does not support actions");
+
+    // GET /inventory/{productId}[/{sub}] — single read, or the log / reservations sub-reads.
+    if (path.action == null) {
+      Inventory inv = inventoryService.getByProductId(orgId, path.productId);
+      writeJson(resp, 200, InventoryResponse.from(inv));
+      return;
     }
-    Inventory inv = inventoryService.getByProductId(orgId, path.productId);
-    writeJson(resp, 200, InventoryResponse.from(inv));
+    switch (path.action) {
+      case "log" -> doGetLog(req, resp, orgId, path.productId);
+      case "reservations" -> doGetProductReservations(req, resp, orgId, path.productId);
+      default -> throw new ValidationException("GET does not support action: " + path.action);
+    }
+  }
+
+  /** {@code GET /inventory?page=&size=&q=&stock=&low_lte=} — the stock-overview list. */
+  private void doGetOverview(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", InventoryService.DEFAULT_PAGE_SIZE), 1),
+            InventoryService.MAX_PAGE_SIZE);
+    InventoryStockFilter stock = InventoryMapper.parseStockFilter(req.getParameter("stock"));
+    Integer lowLte = lowLteParam(req);
+    OverviewPage result =
+        inventoryService.listOverview(orgId, req.getParameter("q"), stock, lowLte, page, size);
+    writeJson(
+        resp,
+        200,
+        new PageResponse<>(
+            InventoryMapper.toOverviewRows(result.rows()), result.total(), page, size));
+  }
+
+  /** {@code GET /inventory/{productId}/log?page=&size=} — the movement ledger. */
+  private void doGetLog(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID productId)
+      throws IOException {
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", InventoryService.DEFAULT_PAGE_SIZE), 1),
+            InventoryService.MAX_PAGE_SIZE);
+    LogPage result = inventoryService.listLog(orgId, productId, page, size);
+    writeJson(
+        resp,
+        200,
+        new PageResponse<>(InventoryMapper.toLogRows(result), result.total(), page, size));
+  }
+
+  /**
+   * {@code GET /inventory/{productId}/reservations?status=} — per-product holds with order context.
+   */
+  private void doGetProductReservations(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID productId)
+      throws IOException {
+    var status = InventoryMapper.parseReservationStatus(req.getParameter("status"));
+    writeJson(
+        resp,
+        200,
+        InventoryMapper.toProductReservationsResponse(
+            inventoryService.listProductReservations(orgId, productId, status)));
+  }
+
+  /** Parse {@code low_lte} — absent ⇒ null; non-integer or negative ⇒ 400. */
+  private static Integer lowLteParam(HttpServletRequest req) {
+    String raw = req.getParameter("low_lte");
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    int value;
+    try {
+      value = Integer.parseInt(raw.trim());
+    } catch (NumberFormatException e) {
+      throw new ValidationException("low_lte must be an integer");
+    }
+    if (value < 0) {
+      throw new ValidationException("low_lte must be >= 0");
+    }
+    return value;
+  }
+
+  private static int intParam(HttpServletRequest req, String name, int defaultValue) {
+    String value = req.getParameter(name);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new ValidationException("Parameter '" + name + "' must be an integer");
+    }
   }
 
   private void doPost(HttpServletRequest req, HttpServletResponse resp, UUID orgId, PathParts path)

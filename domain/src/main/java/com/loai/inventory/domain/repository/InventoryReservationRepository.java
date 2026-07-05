@@ -1,6 +1,7 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.InventoryReservation;
+import com.loai.inventory.domain.model.ReservationStatus;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -42,4 +43,29 @@ public interface InventoryReservationRepository {
    * of rows actually updated — the caller checks it equals the expected count.
    */
   int markConsumed(Collection<UUID> ids, OffsetDateTime now);
+
+  /**
+   * Every reservation ever created for {@code orderId}, <b>all statuses</b> (ACTIVE / CONSUMED /
+   * RELEASED are all part of the order's stock-holds story), joined through {@code
+   * sales_order_line} and scoped to {@code orgId} (defense-in-depth). Ordered {@code created_at
+   * ASC, id ASC}. Read for the order-detail holds panel ({@code GET
+   * /sales-orders/{id}/reservations}).
+   */
+  List<InventoryReservation> findByOrderId(UUID orgId, UUID orderId);
+
+  /**
+   * One reservation for a product plus its order context — {@code sales_order_id} and
+   * human-readable {@code order_number} joined through {@code sales_order_line → sales_order} — so
+   * the stock detail can itemise {@code reserved_qty} and deep-link each hold. Read for {@code GET
+   * /inventory/{productId}/reservations}.
+   */
+  record ProductReservationRow(
+      InventoryReservation reservation, UUID salesOrderId, String salesOrderNumber) {}
+
+  /**
+   * The product's reservations in {@code status} (the endpoint defaults to ACTIVE — "what is
+   * holding this stock right now"), scoped to {@code orgId}, ordered {@code created_at ASC, id
+   * ASC}. Each row carries its order context.
+   */
+  List<ProductReservationRow> findByProductId(UUID orgId, UUID productId, ReservationStatus status);
 }
