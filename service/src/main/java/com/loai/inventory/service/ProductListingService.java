@@ -13,8 +13,10 @@ import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
 import org.slf4j.Logger;
@@ -60,12 +62,39 @@ public class ProductListingService {
     return new ListingView(listing, categoryIds, images);
   }
 
-  public List<ProductListing> getAll(UUID orgId, ListingStatus status, int page, int size) {
+  /**
+   * A page of listings, each enriched with its category ids and presigned images — the same shape
+   * as {@link #getById}, so list rows can render a thumbnail and category count. The images and
+   * categories are batch-loaded (two queries per page, not per row) to avoid N+1.
+   */
+  public List<ListingView> getAll(UUID orgId, ListingStatus status, int page, int size) {
     int offset = Pagination.offset(page, size);
     ProductListingRepository repo = repoFactory.create(rootDsl);
-    return status == null
-        ? repo.findAll(orgId, offset, size)
-        : repo.findAllByStatus(orgId, status, offset, size);
+    List<ProductListing> listings =
+        status == null
+            ? repo.findAll(orgId, offset, size)
+            : repo.findAllByStatus(orgId, status, offset, size);
+    if (listings.isEmpty()) {
+      return List.of();
+    }
+
+    List<UUID> ids = listings.stream().map(ProductListing::getId).toList();
+    Map<UUID, List<UUID>> categoriesByListing = repo.findCategoryIdsForListings(ids);
+    Map<UUID, List<ImageView>> imagesByListing =
+        repo.findImagesForListings(ids).stream()
+            .collect(
+                Collectors.groupingBy(
+                    ProductListingImage::getListingId,
+                    Collectors.mapping(this::toImageView, Collectors.toList())));
+
+    return listings.stream()
+        .map(
+            l ->
+                new ListingView(
+                    l,
+                    categoriesByListing.getOrDefault(l.getId(), List.of()),
+                    imagesByListing.getOrDefault(l.getId(), List.of())))
+        .toList();
   }
 
   public long count(UUID orgId, ListingStatus status) {
@@ -286,6 +315,26 @@ public class ProductListingService {
     ProductListingRepository repo = repoFactory.create(rootDsl);
     repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("ProductListing", id));
     return repo.findImages(id).stream().map(this::toImageView).toList();
+  }
+
+  /** Edit an existing image's alt text and sort order (reorder without delete-and-re-add). */
+  public ImageView updateImage(
+      UUID orgId, UUID id, UUID imageId, String altText, Integer sortOrder) {
+    if (sortOrder == null) {
+      throw new ValidationException("sort_order is required");
+    }
+    if (sortOrder < 0) {
+      throw new ValidationException("sort_order must be >= 0");
+    }
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          ProductListingRepository repo = repoFactory.create(txDsl);
+          repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("ProductListing", id));
+          ProductListingImage updated = repo.updateImage(orgId, id, imageId, altText, sortOrder);
+          log.info("Updated image id={} on listing id={} orgId={}", imageId, id, orgId);
+          return toImageView(updated);
+        });
   }
 
   public void removeImage(UUID orgId, UUID id, UUID imageId) {

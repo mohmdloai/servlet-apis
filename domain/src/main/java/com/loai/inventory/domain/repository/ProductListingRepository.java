@@ -5,6 +5,7 @@ import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -58,6 +59,13 @@ public interface ProductListingRepository {
 
   List<UUID> findCategoryIds(UUID listingId);
 
+  /**
+   * Category ids for many listings in one query, grouped {@code listingId → [categoryId]}, so a
+   * listing page can carry each row's categories without one {@link #findCategoryIds} per row
+   * (N+1). Listings with no categories are simply absent from the map.
+   */
+  Map<UUID, List<UUID>> findCategoryIdsForListings(Collection<UUID> listingIds);
+
   /** Count how many of {@code categoryIds} actually exist in {@code orgId} (validation). */
   long countCategoriesInOrg(UUID orgId, Set<UUID> categoryIds);
 
@@ -72,6 +80,14 @@ public interface ProductListingRepository {
    * the caller can group in memory instead of issuing one {@link #findImages} per listing (N+1).
    */
   List<ProductListingImage> findImagesForListings(Collection<UUID> listingIds);
+
+  /**
+   * Update an existing image's editable fields ({@code alt_text}, {@code sort_order}), scoped to
+   * {@code orgId} + {@code listingId}. Enables alt-text edits and reordering without a
+   * delete-and-re-add. Throws if no such image exists.
+   */
+  ProductListingImage updateImage(
+      UUID orgId, UUID listingId, UUID imageId, String altText, int sortOrder);
 
   void deleteImage(UUID orgId, UUID listingId, UUID imageId);
 }

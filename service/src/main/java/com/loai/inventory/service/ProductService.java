@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
+import org.jooq.exception.DataAccessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -97,7 +98,20 @@ public class ProductService {
     dsl.transaction(
         config -> {
           repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Product", id));
-          repo.deleteById(orgId, id);
+          try {
+            repo.deleteById(orgId, id);
+          } catch (DataAccessException e) {
+            // A product still referenced by inventory / listings / order lines raises a Postgres
+            // integrity-constraint violation (SQLState class 23). Surface it as a clean 409 rather
+            // than letting the raw jOOQ exception bubble to a 500.
+            String sqlState = e.sqlState();
+            if (sqlState != null && sqlState.startsWith("23")) {
+              throw new ConflictException(
+                  "Product is referenced by other records (inventory, listings, or orders) and"
+                      + " cannot be deleted");
+            }
+            throw e;
+          }
           log.info("Deleted product id={} orgId={}", id, orgId);
         });
   }

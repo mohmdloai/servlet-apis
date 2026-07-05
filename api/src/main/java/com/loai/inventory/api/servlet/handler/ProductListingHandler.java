@@ -10,6 +10,7 @@ import com.loai.inventory.api.dto.PresignImageUploadResponse;
 import com.loai.inventory.api.dto.ProductListingImageResponse;
 import com.loai.inventory.api.dto.ProductListingResponse;
 import com.loai.inventory.api.dto.SetCategoriesRequest;
+import com.loai.inventory.api.dto.UpdateImageRequest;
 import com.loai.inventory.api.dto.UpdateProductListingRequest;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
@@ -40,7 +41,7 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code POST /{id}/publish|unpublish|archive} — lifecycle (STAFF)
  *   <li>{@code GET|PUT /{id}/categories} — read / replace category set
  *   <li>{@code GET /{id}/images}, {@code POST /{id}/images/presign}, {@code POST /{id}/images},
- *       {@code DELETE /{id}/images/{imageId}}
+ *       {@code PATCH|DELETE /{id}/images/{imageId}} — attach / edit (alt + order) / remove
  * </ul>
  *
  * VIEWER read · STAFF write/lifecycle · MANAGER delete (system ADMIN bypasses).
@@ -117,6 +118,7 @@ public class ProductListingHandler implements OrgResourceHandler {
         } else {
           UUID imageId = parseImageId(parts[2]);
           if ("DELETE".equals(method)) doDeleteImage(req, resp, orgId, id, imageId);
+          else if ("PATCH".equals(method)) doUpdateImage(req, resp, orgId, id, imageId);
           else writeError(resp, 405, "Method not allowed");
         }
         return;
@@ -139,10 +141,10 @@ public class ProductListingHandler implements OrgResourceHandler {
     int page = intParam(req, "page", 0);
     int size = intParam(req, "size", 10);
     ListingStatus status = statusParam(req);
-    List<ProductListing> listings = service.getAll(orgId, status, page, size);
+    List<ListingView> listings = service.getAll(orgId, status, page, size);
     long total = service.count(orgId, status);
     List<ProductListingResponse> data =
-        listings.stream().map(ProductListingResponse::from).toList();
+        listings.stream().map(ProductListingResponse::fromView).toList();
     writeJson(resp, 200, new PageResponse<>(data, total, page, size));
   }
 
@@ -261,6 +263,16 @@ public class ProductListingHandler implements OrgResourceHandler {
     ImageView image =
         service.attachImage(orgId, id, body.getObjectKey(), body.getAltText(), body.getSortOrder());
     writeJson(resp, 201, ProductListingImageResponse.from(image));
+  }
+
+  private void doUpdateImage(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id, UUID imageId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    UpdateImageRequest body = readBody(req, UpdateImageRequest.class);
+    ImageView image =
+        service.updateImage(orgId, id, imageId, body.getAltText(), body.getSortOrder());
+    writeJson(resp, 200, ProductListingImageResponse.from(image));
   }
 
   private void doDeleteImage(

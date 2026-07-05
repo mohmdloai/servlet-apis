@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.loai.inventory.common.exception.ConflictException;
+import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.storage.ObjectStorageFactory;
 import com.loai.inventory.domain.model.Category;
@@ -261,6 +262,63 @@ class ProductListingIT {
 
     List<ImageView> images = service.listImages(org, l.getId());
     assertEquals(List.of(0, 1, 2), images.stream().map(ImageView::sortOrder).toList());
+  }
+
+  @Test
+  void updateImage_editsAltAndReorders() {
+    UUID org = createOrg("acme");
+    UUID product = createProduct(org, "SKU1");
+    ProductListing l = service.create(org, product, "W", null, "w", price("5"));
+    PresignResult p = service.presignImageUpload(org, l.getId(), "hero.png", "image/png");
+    ImageView img = service.attachImage(org, l.getId(), p.objectKey(), null, 0);
+
+    ImageView updated = service.updateImage(org, l.getId(), img.id(), "hero shot", 5);
+    assertEquals("hero shot", updated.altText());
+    assertEquals(5, updated.sortOrder());
+
+    ImageView reread = service.listImages(org, l.getId()).get(0);
+    assertEquals("hero shot", reread.altText());
+    assertEquals(5, reread.sortOrder());
+
+    assertThrows(
+        NotFoundException.class,
+        () -> service.updateImage(org, l.getId(), UUID.randomUUID(), "x", 0));
+  }
+
+  // ───────── list enrichment ─────────
+
+  @Test
+  void getAll_enrichesRowsWithCategoriesAndImages() {
+    UUID org = createOrg("acme");
+    UUID product = createProduct(org, "SKU1");
+    ProductListing l = service.create(org, product, "Widget", null, "widget", price("5"));
+    Category c1 = categoryService.create(org, "C1", "c1", null);
+    Category c2 = categoryService.create(org, "C2", "c2", null);
+    service.setCategories(org, l.getId(), Set.of(c1.getId(), c2.getId()));
+    attachAt(org, l.getId(), 1);
+    attachAt(org, l.getId(), 0);
+
+    // A second listing with neither categories nor images stays lean (absent from both batches).
+    UUID product2 = createProduct(org, "SKU2");
+    ProductListing bare = service.create(org, product2, "Bare", null, "bare", price("5"));
+
+    List<ListingView> views = service.getAll(org, null, 0, 10);
+    assertEquals(2, views.size());
+
+    ListingView enriched =
+        views.stream().filter(v -> v.listing().getId().equals(l.getId())).findFirst().orElseThrow();
+    assertEquals(2, enriched.categoryIds().size());
+    assertTrue(enriched.categoryIds().containsAll(List.of(c1.getId(), c2.getId())));
+    // Images batch-loaded in sort order (thumbnail = images.get(0)).
+    assertEquals(List.of(0, 1), enriched.images().stream().map(ImageView::sortOrder).toList());
+
+    ListingView lean =
+        views.stream()
+            .filter(v -> v.listing().getId().equals(bare.getId()))
+            .findFirst()
+            .orElseThrow();
+    assertTrue(lean.categoryIds().isEmpty());
+    assertTrue(lean.images().isEmpty());
   }
 
   // ───────── helpers ─────────
