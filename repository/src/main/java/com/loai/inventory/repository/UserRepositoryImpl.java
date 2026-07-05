@@ -6,6 +6,7 @@ import static com.loai.inventory.repository.generated.Tables.USER_SYSTEM_ROLE;
 
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.AppUser;
+import com.loai.inventory.domain.model.OrgMember;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.domain.model.UserOrgRole;
@@ -13,7 +14,10 @@ import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.repository.generated.tables.records.AppUserRecord;
 import com.loai.inventory.repository.generated.tables.records.UserOrgRoleRecord;
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -197,6 +201,99 @@ public final class UserRepositoryImpl implements UserRepository {
   }
 
   @Override
+  public List<OrgMember> findMembers(UUID orgId) {
+    // Small result set (an org team), so we fetch (user, role) rows and group in Java rather than
+    // wrestle array_agg of the generated enum. Ordered by email — the roster's stable display
+    // order.
+    Map<UUID, OrgMemberAccumulator> byUser = new LinkedHashMap<>();
+    dsl.select(
+            APP_USER.ID,
+            APP_USER.EMAIL,
+            APP_USER.DISPLAY_NAME,
+            APP_USER.ACTIVE,
+            APP_USER.CREATED_AT,
+            USER_ORG_ROLE.ROLE)
+        .from(USER_ORG_ROLE)
+        .join(APP_USER)
+        .on(APP_USER.ID.eq(USER_ORG_ROLE.USER_ID))
+        .where(USER_ORG_ROLE.ORG_ID.eq(orgId))
+        .orderBy(APP_USER.EMAIL.asc())
+        .fetch()
+        .forEach(
+            r ->
+                byUser
+                    .computeIfAbsent(
+                        r.get(APP_USER.ID),
+                        k ->
+                            new OrgMemberAccumulator(
+                                r.get(APP_USER.EMAIL),
+                                r.get(APP_USER.DISPLAY_NAME),
+                                r.get(APP_USER.ACTIVE),
+                                r.get(APP_USER.CREATED_AT)))
+                    .roles
+                    .add(OrgRole.valueOf(r.get(USER_ORG_ROLE.ROLE).getLiteral())));
+    return byUser.entrySet().stream()
+        .map(
+            e ->
+                new OrgMember(
+                    e.getKey(),
+                    e.getValue().email,
+                    e.getValue().displayName,
+                    e.getValue().roles,
+                    e.getValue().active,
+                    e.getValue().createdAt))
+        .toList();
+  }
+
+  private static final class OrgMemberAccumulator {
+    final String email;
+    final String displayName;
+    final boolean active;
+    final OffsetDateTime createdAt;
+    final Set<OrgRole> roles = new LinkedHashSet<>();
+
+    OrgMemberAccumulator(
+        String email, String displayName, boolean active, OffsetDateTime createdAt) {
+      this.email = email;
+      this.displayName = displayName;
+      this.active = active;
+      this.createdAt = createdAt;
+    }
+  }
+
+  @Override
+  public Set<OrgRole> findRolesInOrg(UUID userId, UUID orgId) {
+    return dsl.select(USER_ORG_ROLE.ROLE)
+        .from(USER_ORG_ROLE)
+        .where(USER_ORG_ROLE.USER_ID.eq(userId))
+        .and(USER_ORG_ROLE.ORG_ID.eq(orgId))
+        .fetchSet(r -> OrgRole.valueOf(r.value1().getLiteral()));
+  }
+
+  @Override
+  public Set<UUID> ownerIdsForUpdate(UUID orgId) {
+    // FOR UPDATE so two concurrent OWNER de-privileges contend on the same rows and serialize -
+    // closing the race where both read "2 owners", both pass the guard, and both commit to zero.
+    return dsl.select(USER_ORG_ROLE.USER_ID)
+        .from(USER_ORG_ROLE)
+        .where(USER_ORG_ROLE.ORG_ID.eq(orgId))
+        .and(
+            USER_ORG_ROLE.ROLE.eq(
+                com.loai.inventory.repository.generated.enums.OrgRole.lookupLiteral(
+                    OrgRole.OWNER.name())))
+        .forUpdate()
+        .fetchSet(USER_ORG_ROLE.USER_ID);
+  }
+
+  @Override
+  public int deleteAllOrgRoles(UUID userId, UUID orgId) {
+    return dsl.deleteFrom(USER_ORG_ROLE)
+        .where(USER_ORG_ROLE.USER_ID.eq(userId))
+        .and(USER_ORG_ROLE.ORG_ID.eq(orgId))
+        .execute();
+  }
+
+  @Override
   public List<AppUser> findAll(int offset, int limit, String emailQuery) {
     Condition condition =
         (emailQuery == null || emailQuery.isBlank())
@@ -267,15 +364,18 @@ public final class UserRepositoryImpl implements UserRepository {
   }
 
   private AppUser toAppUser(AppUserRecord r) {
-    return new AppUser(
-        r.getId(),
-        r.getEmail(),
-        r.getPasswordHash(),
-        ActorType.valueOf(r.getActorType().getLiteral()),
-        r.getActive(),
-        r.getTokenVersion(),
-        r.getCreatedAt(),
-        r.getUpdatedAt());
+    AppUser user =
+        new AppUser(
+            r.getId(),
+            r.getEmail(),
+            r.getPasswordHash(),
+            ActorType.valueOf(r.getActorType().getLiteral()),
+            r.getActive(),
+            r.getTokenVersion(),
+            r.getCreatedAt(),
+            r.getUpdatedAt());
+    user.setDisplayName(r.getDisplayName());
+    return user;
   }
 
   private UserOrgRole toUserOrgRole(UserOrgRoleRecord r) {

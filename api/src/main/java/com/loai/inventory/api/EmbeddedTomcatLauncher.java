@@ -6,6 +6,7 @@ import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.api.filter.RateLimitFilter;
 import com.loai.inventory.api.servlet.AdminServlet;
 import com.loai.inventory.api.servlet.AuthServlet;
+import com.loai.inventory.api.servlet.MeServlet;
 import com.loai.inventory.api.servlet.OrgServlet;
 import com.loai.inventory.api.servlet.PlatformImpersonationServlet;
 import com.loai.inventory.api.servlet.PublicOrderServlet;
@@ -45,6 +46,8 @@ public class EmbeddedTomcatLauncher {
       // Servlets
       Tomcat.addServlet(ctx, "authServlet", new AuthServlet());
       ctx.addServletMappingDecoded("/api/auth/*", "authServlet");
+      Tomcat.addServlet(ctx, "meServlet", new MeServlet());
+      ctx.addServletMappingDecoded("/api/me/*", "meServlet");
       Tomcat.addServlet(ctx, "orgServlet", new OrgServlet());
       ctx.addServletMappingDecoded("/api/orgs/*", "orgServlet");
       Tomcat.addServlet(ctx, "publicStorefrontServlet", new PublicStorefrontServlet());

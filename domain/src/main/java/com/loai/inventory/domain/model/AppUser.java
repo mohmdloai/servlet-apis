@@ -6,6 +6,7 @@ import java.util.UUID;
 public class AppUser {
   private UUID id;
   private String email;
+  private String displayName;
   private String passwordHash;
   private ActorType actorType;
   private boolean active;
@@ -48,6 +49,14 @@ public class AppUser {
 
   public void setEmail(String email) {
     this.email = email;
+  }
+
+  public String getDisplayName() {
+    return displayName;
+  }
+
+  public void setDisplayName(String displayName) {
+    this.displayName = displayName;
   }
 
   public String getPasswordHash() {
