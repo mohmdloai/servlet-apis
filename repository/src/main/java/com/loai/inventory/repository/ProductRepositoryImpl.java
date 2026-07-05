@@ -7,7 +7,9 @@ import com.loai.inventory.domain.model.Product;
 import com.loai.inventory.domain.repository.ProductRepository;
 import com.loai.inventory.repository.generated.tables.records.ProductRecord;
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -39,6 +41,17 @@ public class ProductRepositoryImpl implements ProductRepository {
         .limit(limit)
         .fetch()
         .map(this::toProduct);
+  }
+
+  @Override
+  public Map<UUID, String> findNamesByIds(UUID orgId, Collection<UUID> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return Map.of();
+    }
+    return dsl.select(PRODUCT.ID, PRODUCT.NAME)
+        .from(PRODUCT)
+        .where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.ID.in(ids)))
+        .fetchMap(PRODUCT.ID, PRODUCT.NAME);
   }
 
   @Override

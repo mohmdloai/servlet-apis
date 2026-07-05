@@ -3,8 +3,10 @@ package com.loai.inventory.api.servlet.handler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CancelOrderRequest;
+import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.mapper.FulfillmentMapper;
+import com.loai.inventory.api.mapper.InventoryMapper;
 import com.loai.inventory.api.mapper.InvoiceMapper;
 import com.loai.inventory.api.mapper.PaymentMapper;
 import com.loai.inventory.api.mapper.SalesOrderMapper;
@@ -17,6 +19,7 @@ import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.FulfillmentService;
+import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderCancellationService.CancelResult;
@@ -41,9 +44,8 @@ import org.slf4j.LoggerFactory;
  *       stories/place_online_order.md}). Both require STAFF (system ADMIN bypasses).
  *   <li>{@code POST /{id}/cancel} — cancel an order (MANAGER).
  *   <li>{@code GET /?order_number=} — exact-match lookup by human-readable number, the pre-flight
- *       for the manual money path ({@code stories/lookup_order_by_number.md}). VIEWER. The bare
- *       {@code GET} without the param is a 400 — the route is reserved for the future unfiltered
- *       list slice.
+ *       for the manual money path ({@code stories/lookup_order_by_number.md}). VIEWER. A bare {@code
+ *       GET} without the param returns the order worklist page ({@code ?status=&page=&size=}).
  *   <li>{@code GET /{id}} — one order + its lines by stable id ({@code
  *       stories/fulfillment_reads.md}). VIEWER.
  *   <li>{@code GET /{id}/payments} — the order's money story: every payment FIFO with its refunds
@@ -66,6 +68,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
   private final PaymentService paymentService;
   private final FulfillmentService fulfillmentService;
   private final InvoiceAdminService invoiceAdminService;
+  private final InventoryService inventoryService;
   private final ObjectMapper mapper;
 
   public SalesOrderHandler(
@@ -74,12 +77,14 @@ public class SalesOrderHandler implements OrgResourceHandler {
       PaymentService paymentService,
       FulfillmentService fulfillmentService,
       InvoiceAdminService invoiceAdminService,
+      InventoryService inventoryService,
       ObjectMapper mapper) {
     this.service = service;
     this.cancellationService = cancellationService;
     this.paymentService = paymentService;
     this.fulfillmentService = fulfillmentService;
     this.invoiceAdminService = invoiceAdminService;
+    this.inventoryService = inventoryService;
     this.mapper = mapper;
   }
 
@@ -94,7 +99,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
     try {
       String[] parts = splitPath(remainingPath);
       if ("GET".equals(method) && parts.length == 0) {
-        doGetByNumber(req, resp, orgId);
+        doGetOrList(req, resp, orgId);
         return;
       }
       if ("GET".equals(method) && parts.length == 1) {
@@ -111,6 +116,10 @@ public class SalesOrderHandler implements OrgResourceHandler {
       }
       if ("GET".equals(method) && parts.length == 2 && "invoices".equals(parts[1])) {
         doGetInvoices(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
+      if ("GET".equals(method) && parts.length == 2 && "reservations".equals(parts[1])) {
+        doGetReservations(req, resp, orgId, parseId(parts[0]));
         return;
       }
       if (!"POST".equals(method)) {
@@ -199,20 +208,46 @@ public class SalesOrderHandler implements OrgResourceHandler {
   }
 
   /**
-   * {@code GET /?order_number=SO-…} — exact-match, case-sensitive lookup (trimmed: numbers arrive
-   * by copy-paste from transfer notes); a single object, not a list. VIEWER. A bare {@code GET}
-   * without the param 400s: the unfiltered Sales Order list (status tabs, paging) is its own future
-   * slice and this deliberately reserves the route for it.
+   * {@code GET /sales-orders} — two reads on one route (VIEWER):
+   *
+   * <ul>
+   *   <li>{@code ?order_number=SO-…} — exact-match, case-sensitive lookup (trimmed: numbers arrive
+   *       by copy-paste from transfer notes); a single {@code SalesOrderResponse}, not a page
+   *       ({@code stories/lookup_order_by_number.md}).
+   *   <li>otherwise — the order <b>worklist</b>: {@code ?status=&page=&size=}, a {@code
+   *       PageResponse} of full order rows. Filtered by status = queue (oldest first); unfiltered =
+   *       ledger (newest first). Unknown status ⇒ 400.
+   * </ul>
    */
-  private void doGetByNumber(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+  private void doGetOrList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
       throws IOException {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
     String orderNumber = req.getParameter("order_number");
-    if (orderNumber == null || orderNumber.isBlank()) {
-      throw new ValidationException(
-          "order_number query parameter is required (the unfiltered list is not implemented)");
+    if (orderNumber != null && !orderNumber.isBlank()) {
+      writeJson(resp, 200, SalesOrderMapper.toResponse(service.getByNumber(orgId, orderNumber)));
+      return;
     }
-    writeJson(resp, 200, SalesOrderMapper.toResponse(service.getByNumber(orgId, orderNumber)));
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", SalesOrderService.DEFAULT_PAGE_SIZE), 1),
+            SalesOrderService.MAX_PAGE_SIZE);
+    SalesOrderService.OrderListPage result =
+        service.list(orgId, SalesOrderMapper.toOrderStatus(req.getParameter("status")), page, size);
+    var data = result.items().stream().map(SalesOrderMapper::toResponse).toList();
+    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+  }
+
+  private static int intParam(HttpServletRequest req, String name, int defaultValue) {
+    String value = req.getParameter(name);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new ValidationException("Parameter '" + name + "' must be an integer");
+    }
   }
 
   /**
@@ -255,6 +290,22 @@ public class SalesOrderHandler implements OrgResourceHandler {
         resp,
         200,
         InvoiceMapper.toOrderInvoicesResponse(invoiceAdminService.listForOrder(orgId, orderId)));
+  }
+
+  /**
+   * {@code GET /{id}/reservations} — the order's stock-holds story: every reservation ever created
+   * for it (all statuses) oldest-first, each with its product name, plus the order header — the
+   * inventory mirror of {@code /{id}/payments} ({@code stories/inventory_reads.md}). VIEWER.
+   */
+  private void doGetReservations(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID orderId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(
+        resp,
+        200,
+        InventoryMapper.toOrderReservationsResponse(
+            inventoryService.listOrderReservations(orgId, orderId)));
   }
 
   /**

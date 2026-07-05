@@ -291,7 +291,13 @@ public class AppConfig {
             objectStorage);
     this.customerService = new CustomerService(dsl, customerRepositoryFactory);
     this.inventoryService =
-        new InventoryService(dsl, inventoryRepositoryFactory, inventoryLogRepositoryFactory);
+        new InventoryService(
+            dsl,
+            inventoryRepositoryFactory,
+            inventoryLogRepositoryFactory,
+            inventoryReservationRepositoryFactory,
+            productRepository,
+            salesOrderRepositoryFactory);
     this.reservationService =
         new ReservationService(
             inventoryRepositoryFactory,

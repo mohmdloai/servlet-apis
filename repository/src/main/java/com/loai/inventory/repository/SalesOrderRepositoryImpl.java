@@ -152,6 +152,52 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   }
 
   @Override
+  public List<SalesOrder> list(UUID orgId, OrderStatus status, int offset, int limit) {
+    var query = dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status));
+    // Queue vs ledger: a status filter is a worklist — oldest first; no filter is the ledger —
+    // newest first (mirrors the payment/refund worklists).
+    var ordered =
+        status != null
+            ? query.orderBy(SALES_ORDER.CREATED_AT.asc(), SALES_ORDER.ID.asc())
+            : query.orderBy(SALES_ORDER.CREATED_AT.desc(), SALES_ORDER.ID.desc());
+    return ordered.offset(offset).limit(limit).fetch().map(this::toSalesOrder);
+  }
+
+  @Override
+  public long count(UUID orgId, OrderStatus status) {
+    return dsl.fetchCount(dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status)));
+  }
+
+  private static org.jooq.Condition listConditions(UUID orgId, OrderStatus status) {
+    org.jooq.Condition c = SALES_ORDER.ORG_ID.eq(orgId);
+    if (status != null) {
+      c =
+          c.and(
+              SALES_ORDER.STATUS.eq(
+                  com.loai.inventory.repository.generated.enums.OrderStatus.valueOf(
+                      status.name())));
+    }
+    return c;
+  }
+
+  @Override
+  public Map<UUID, List<SalesOrderLine>> findLinesByOrderIds(Collection<UUID> salesOrderIds) {
+    if (salesOrderIds == null || salesOrderIds.isEmpty()) {
+      return Map.of();
+    }
+    Map<UUID, List<SalesOrderLine>> byOrder = new HashMap<>();
+    dsl.selectFrom(SALES_ORDER_LINE)
+        .where(SALES_ORDER_LINE.SALES_ORDER_ID.in(salesOrderIds))
+        .fetch()
+        .forEach(
+            r ->
+                byOrder
+                    .computeIfAbsent(r.getSalesOrderId(), k -> new ArrayList<>())
+                    .add(toSalesOrderLine(r)));
+    return byOrder;
+  }
+
+  @Override
   public Map<UUID, ProductSnapshot> fetchProductSnapshots(UUID orgId, Collection<UUID> productIds) {
     if (productIds == null || productIds.isEmpty()) {
       return Map.of();

@@ -1,6 +1,7 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.INVENTORY_RESERVATION;
+import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 
 import com.loai.inventory.domain.model.InventoryReservation;
@@ -136,6 +137,77 @@ public final class InventoryReservationRepositoryImpl implements InventoryReserv
                     INVENTORY_RESERVATION.STATUS.eq(
                         com.loai.inventory.repository.generated.enums.ReservationStatus.ACTIVE)))
         .execute();
+  }
+
+  @Override
+  public List<InventoryReservation> findByOrderId(UUID orgId, UUID orderId) {
+    // All statuses (the order's full stock-holds story), joined through sales_order_line since a
+    // reservation references the line, not the order. Scoped to org for defense-in-depth.
+    return dsl.select(INVENTORY_RESERVATION.fields())
+        .from(INVENTORY_RESERVATION)
+        .join(SALES_ORDER_LINE)
+        .on(SALES_ORDER_LINE.ID.eq(INVENTORY_RESERVATION.SALES_ORDER_LINE_ID))
+        .where(
+            SALES_ORDER_LINE.SALES_ORDER_ID.eq(orderId).and(INVENTORY_RESERVATION.ORG_ID.eq(orgId)))
+        .orderBy(INVENTORY_RESERVATION.CREATED_AT.asc(), INVENTORY_RESERVATION.ID.asc())
+        .fetchInto(INVENTORY_RESERVATION)
+        .map(this::toReservation);
+  }
+
+  @Override
+  public List<ProductReservationRow> findByProductId(
+      UUID orgId, UUID productId, ReservationStatus status) {
+    // sales_order.id / .order_number collide with inventory_reservation.id by unqualified name in a
+    // flat record — alias them and read every field by explicit reference, no into()-by-name
+    // mapping.
+    var orderIdField = SALES_ORDER.ID.as("so_id");
+    var orderNumberField = SALES_ORDER.ORDER_NUMBER.as("so_number");
+    return dsl.select(
+            INVENTORY_RESERVATION.ID,
+            INVENTORY_RESERVATION.ORG_ID,
+            INVENTORY_RESERVATION.PRODUCT_ID,
+            INVENTORY_RESERVATION.SALES_ORDER_LINE_ID,
+            INVENTORY_RESERVATION.QUANTITY,
+            INVENTORY_RESERVATION.STATUS,
+            INVENTORY_RESERVATION.EXPIRES_AT,
+            INVENTORY_RESERVATION.CREATED_AT,
+            INVENTORY_RESERVATION.CONSUMED_AT,
+            INVENTORY_RESERVATION.RELEASED_AT,
+            INVENTORY_RESERVATION.RELEASED_REASON,
+            orderIdField,
+            orderNumberField)
+        .from(INVENTORY_RESERVATION)
+        .join(SALES_ORDER_LINE)
+        .on(SALES_ORDER_LINE.ID.eq(INVENTORY_RESERVATION.SALES_ORDER_LINE_ID))
+        .join(SALES_ORDER)
+        .on(SALES_ORDER.ID.eq(SALES_ORDER_LINE.SALES_ORDER_ID))
+        .where(
+            INVENTORY_RESERVATION
+                .ORG_ID
+                .eq(orgId)
+                .and(INVENTORY_RESERVATION.PRODUCT_ID.eq(productId))
+                .and(
+                    INVENTORY_RESERVATION.STATUS.eq(
+                        com.loai.inventory.repository.generated.enums.ReservationStatus.valueOf(
+                            status.name()))))
+        .orderBy(INVENTORY_RESERVATION.CREATED_AT.asc(), INVENTORY_RESERVATION.ID.asc())
+        .fetch(
+            r ->
+                new ProductReservationRow(
+                    InventoryReservation.rehydrate(
+                        r.get(INVENTORY_RESERVATION.ID),
+                        r.get(INVENTORY_RESERVATION.ORG_ID),
+                        r.get(INVENTORY_RESERVATION.PRODUCT_ID),
+                        r.get(INVENTORY_RESERVATION.SALES_ORDER_LINE_ID),
+                        r.get(INVENTORY_RESERVATION.QUANTITY),
+                        r.get(INVENTORY_RESERVATION.EXPIRES_AT),
+                        r.get(INVENTORY_RESERVATION.CREATED_AT),
+                        ReservationStatus.valueOf(r.get(INVENTORY_RESERVATION.STATUS).name()),
+                        r.get(INVENTORY_RESERVATION.CONSUMED_AT),
+                        r.get(INVENTORY_RESERVATION.RELEASED_AT),
+                        r.get(INVENTORY_RESERVATION.RELEASED_REASON)),
+                    r.get(orderIdField),
+                    r.get(orderNumberField)));
   }
 
   private InventoryReservation toReservation(InventoryReservationRecord r) {

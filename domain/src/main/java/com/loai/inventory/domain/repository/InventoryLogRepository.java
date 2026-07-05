@@ -20,4 +20,13 @@ public interface InventoryLogRepository {
       ActorContext actor);
 
   List<InventoryLog> findByProductId(UUID orgId, UUID productId);
+
+  /**
+   * One page of the movement ledger for a product, ordered {@code created_at DESC, id DESC} (newest
+   * first). Empty for a tracked product that has never moved.
+   */
+  List<InventoryLog> findByProductId(UUID orgId, UUID productId, int offset, int limit);
+
+  /** Total ledger rows for the product (drives the pager). */
+  long countByProductId(UUID orgId, UUID productId);
 }

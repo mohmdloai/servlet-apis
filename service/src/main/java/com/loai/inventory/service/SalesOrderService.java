@@ -8,6 +8,7 @@ import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrderChannel;
+import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
@@ -459,6 +460,37 @@ public class SalesOrderService {
                       : repo.findCustomerById(orgId, order.getCustomerId()).orElse(null);
               return new Placed(order, lines, customer);
             });
+  }
+
+  /** Paging bounds for the order worklist — mirrors the other worklists. */
+  public static final int DEFAULT_PAGE_SIZE = 20;
+
+  public static final int MAX_PAGE_SIZE = 100;
+
+  /**
+   * One page of the order worklist ({@link Placed} rows carry the order + its lines) + the total.
+   */
+  public record OrderListPage(List<Placed> items, long total) {}
+
+  /**
+   * The order worklist ({@code GET /sales-orders?status=&page=&size=}): filtered by {@code status}
+   * it is a queue (oldest first); unfiltered it is the ledger (newest first). Lines are
+   * batch-loaded (one query per page). Customer is not resolved — the list DTO doesn't carry it.
+   * Read-only on {@code rootDsl}.
+   */
+  public OrderListPage list(UUID orgId, OrderStatus status, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    SalesOrderRepository repo = repoFactory.create(rootDsl);
+    List<SalesOrder> orders = repo.list(orgId, status, p * s, s);
+    long total = repo.count(orgId, status);
+    Map<UUID, List<SalesOrderLine>> linesByOrder =
+        repo.findLinesByOrderIds(orders.stream().map(SalesOrder::getId).toList());
+    List<Placed> items =
+        orders.stream()
+            .map(o -> new Placed(o, linesByOrder.getOrDefault(o.getId(), List.of()), null))
+            .toList();
+    return new OrderListPage(items, total);
   }
 
   // Shared build

@@ -5,11 +5,23 @@ import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Inventory;
+import com.loai.inventory.domain.model.InventoryLog;
+import com.loai.inventory.domain.model.InventoryReservation;
+import com.loai.inventory.domain.model.InventoryStockFilter;
+import com.loai.inventory.domain.model.ReservationStatus;
+import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.StockReason;
 import com.loai.inventory.domain.repository.InventoryLogRepository;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepository;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
+import com.loai.inventory.domain.repository.InventoryReservationRepository;
+import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
+import com.loai.inventory.domain.repository.ProductRepository;
+import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -19,23 +31,133 @@ import org.slf4j.LoggerFactory;
 public class InventoryService {
   private static final Logger log = LoggerFactory.getLogger(InventoryService.class);
 
+  /** Paging bounds for the inventory read lists — mirrors {@code RefundService}. */
+  public static final int DEFAULT_PAGE_SIZE = 20;
+
+  public static final int MAX_PAGE_SIZE = 100;
+
   private final DSLContext rootDsl;
   private final InventoryRepositoryFactory repoFactory;
   private final InventoryLogRepositoryFactory logRepoFactory;
+  private final InventoryReservationRepositoryFactory reservationRepoFactory;
+  private final ProductRepository productRepository;
+  private final SalesOrderRepositoryFactory salesOrderRepoFactory;
 
   public InventoryService(
       DSLContext rootDsl,
       InventoryRepositoryFactory repoFactory,
-      InventoryLogRepositoryFactory logRepoFactory) {
+      InventoryLogRepositoryFactory logRepoFactory,
+      InventoryReservationRepositoryFactory reservationRepoFactory,
+      ProductRepository productRepository,
+      SalesOrderRepositoryFactory salesOrderRepoFactory) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.logRepoFactory = logRepoFactory;
+    this.reservationRepoFactory = reservationRepoFactory;
+    this.productRepository = productRepository;
+    this.salesOrderRepoFactory = salesOrderRepoFactory;
   }
 
   public Inventory getByProductId(UUID orgId, UUID productId) {
     InventoryRepository repo = repoFactory.create(rootDsl);
     return repo.findByProductId(orgId, productId)
         .orElseThrow(() -> new NotFoundException("Inventory", productId));
+  }
+
+  // ---- reads (stories/inventory_reads.md) ----
+
+  /** One page of the stock-overview list plus the filtered total (drives the pager). */
+  public record OverviewPage(List<InventoryRepository.OverviewRow> rows, long total) {}
+
+  /**
+   * The stock-overview list ({@code GET /inventory}): every product in {@code orgId} LEFT JOINed to
+   * its inventory row, so an untracked product surfaces as a row with null stock and {@code
+   * tracked=false}. {@code stock=LOW} with no {@code lowLte} defaults the bound to 5 (frontend
+   * contract). Read-only on {@code rootDsl}.
+   */
+  public OverviewPage listOverview(
+      UUID orgId, String q, InventoryStockFilter stock, Integer lowLte, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    // Guard the unbox trap: `cond ? 5 : lowLte` promotes to int and NPEs on a null lowLte even when
+    // the condition is false. Keep both arms Integer.
+    Integer bound =
+        (stock == InventoryStockFilter.LOW && lowLte == null) ? Integer.valueOf(5) : lowLte;
+    InventoryRepository repo = repoFactory.create(rootDsl);
+    List<InventoryRepository.OverviewRow> rows =
+        repo.listOverview(orgId, q, stock, bound, p * s, s);
+    long total = repo.countOverview(orgId, q, stock, bound);
+    return new OverviewPage(rows, total);
+  }
+
+  /** One page of a product's movement ledger + batch-loaded order numbers + the total. */
+  public record LogPage(List<InventoryLog> logs, Map<UUID, String> orderNumbers, long total) {}
+
+  /**
+   * The movement ledger for one product ({@code GET /inventory/{productId}/log}): the append-only
+   * {@code inventory_log} newest-first, each order-linked row's {@code sales_order_number}
+   * batch-loaded. 404 if the product is not in {@code orgId}; a tracked-but-never-moved product (or
+   * an untracked product that still exists) returns an empty page, not 404.
+   */
+  public LogPage listLog(UUID orgId, UUID productId, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    requireProductInOrg(orgId, productId);
+    InventoryLogRepository logRepo = logRepoFactory.create(rootDsl);
+    List<InventoryLog> logs = logRepo.findByProductId(orgId, productId, p * s, s);
+    long total = logRepo.countByProductId(orgId, productId);
+    Map<UUID, String> orderNumbers =
+        salesOrderRepoFactory
+            .create(rootDsl)
+            .findOrderNumbersByIds(
+                orgId,
+                logs.stream()
+                    .map(InventoryLog::getOrderId)
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .toList());
+    return new LogPage(logs, orderNumbers, total);
+  }
+
+  /** An order's stock holds: the order header + every reservation + batch-loaded product names. */
+  public record OrderReservations(
+      SalesOrder order, List<InventoryReservation> reservations, Map<UUID, String> productNames) {}
+
+  /**
+   * The order-detail holds panel ({@code GET /sales-orders/{id}/reservations}): the order header +
+   * every reservation for it (all statuses), each product name batch-loaded. 404 if the order is
+   * not in {@code orgId}. Read-only on {@code rootDsl}.
+   */
+  public OrderReservations listOrderReservations(UUID orgId, UUID orderId) {
+    SalesOrder order =
+        salesOrderRepoFactory
+            .create(rootDsl)
+            .findById(orgId, orderId)
+            .orElseThrow(() -> new NotFoundException("SalesOrder", orderId));
+    List<InventoryReservation> reservations =
+        reservationRepoFactory.create(rootDsl).findByOrderId(orgId, orderId);
+    Map<UUID, String> productNames =
+        productRepository.findNamesByIds(
+            orgId,
+            reservations.stream().map(InventoryReservation::getProductId).distinct().toList());
+    return new OrderReservations(order, reservations, productNames);
+  }
+
+  /**
+   * The per-product active-holds read ({@code GET /inventory/{productId}/reservations?status=}):
+   * "what is holding this stock right now", each row carrying its order context. 404 if the product
+   * is not in {@code orgId}. Read-only on {@code rootDsl}.
+   */
+  public List<InventoryReservationRepository.ProductReservationRow> listProductReservations(
+      UUID orgId, UUID productId, ReservationStatus status) {
+    requireProductInOrg(orgId, productId);
+    return reservationRepoFactory.create(rootDsl).findByProductId(orgId, productId, status);
+  }
+
+  private void requireProductInOrg(UUID orgId, UUID productId) {
+    if (productRepository.findById(orgId, productId).isEmpty()) {
+      throw new NotFoundException("Product", productId);
+    }
   }
 
   public Inventory initialise(UUID orgId, UUID productId, int stockQty, ActorContext actor) {

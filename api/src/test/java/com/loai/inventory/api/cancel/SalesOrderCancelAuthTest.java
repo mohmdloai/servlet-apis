@@ -84,6 +84,7 @@ class SalesOrderCancelAuthTest {
         Mockito.mock(com.loai.inventory.service.PaymentService.class),
         Mockito.mock(com.loai.inventory.service.FulfillmentService.class),
         Mockito.mock(com.loai.inventory.service.InvoiceAdminService.class),
+        Mockito.mock(com.loai.inventory.service.InventoryService.class),
         com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 

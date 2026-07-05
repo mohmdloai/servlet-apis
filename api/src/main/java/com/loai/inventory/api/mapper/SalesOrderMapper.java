@@ -5,6 +5,7 @@ import com.loai.inventory.api.dto.InStoreSaleResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.dto.SalesOrderResponse;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -52,6 +53,21 @@ public final class SalesOrderMapper {
 
   public static SalesOrderResponse toResponse(Placed placed) {
     return SalesOrderResponse.from(placed.order(), placed.lines());
+  }
+
+  /**
+   * Parse the worklist {@code status} filter. Blank/absent ⇒ null (unfiltered ledger); an unknown
+   * value is a 400, never a silent all-rows fallthrough.
+   */
+  public static OrderStatus toOrderStatus(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return OrderStatus.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Unknown order status: " + raw);
+    }
   }
 
   public static InStoreSaleResponse toInStoreResponse(InStoreSale sale) {

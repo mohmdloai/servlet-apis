@@ -1,7 +1,11 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Inventory;
+import com.loai.inventory.domain.model.InventoryStockFilter;
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -9,6 +13,39 @@ import java.util.UUID;
 public interface InventoryRepository {
 
   Optional<Inventory> findByProductId(UUID orgId, UUID productId);
+
+  /**
+   * One row of the stock-overview list: a product LEFT JOINed to its {@code inventory} row. An
+   * <b>untracked</b> product (no inventory row) has {@code tracked=false} and null {@code stockQty}
+   * / {@code reservedQty} / {@code availableQty} / {@code version} / {@code updatedAt} — the
+   * frontend uses the explicit {@code tracked} flag, never infers trackedness from a zero.
+   */
+  record OverviewRow(
+      UUID productId,
+      String name,
+      String sku,
+      BigDecimal basePrice,
+      boolean tracked,
+      Integer stockQty,
+      Integer reservedQty,
+      Integer availableQty,
+      Long version,
+      OffsetDateTime updatedAt) {}
+
+  /**
+   * One page of the stock overview — every product in {@code orgId} LEFT JOINed to inventory,
+   * ordered {@code name ASC, product_id ASC} (catalog order — not a queue). {@code q} is a
+   * case-insensitive substring on name OR sku (blank ⇒ no filter). {@code stock} narrows by
+   * trackedness / availability ({@code LOW} uses {@code lowLte} as the bound, defaulted upstream).
+   * {@code lowLte} is ignored for every filter but {@code LOW}.
+   */
+  List<OverviewRow> listOverview(
+      UUID orgId, String q, InventoryStockFilter stock, Integer lowLte, int offset, int limit);
+
+  /**
+   * Count of the filtered stock overview (drives the pager). Same filters as {@link #listOverview}.
+   */
+  long countOverview(UUID orgId, String q, InventoryStockFilter stock, Integer lowLte);
 
   Inventory insert(Inventory inventory);
 
