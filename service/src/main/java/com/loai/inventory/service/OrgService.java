@@ -108,18 +108,7 @@ public class OrgService {
   public Org update(
       UUID id, String name, java.math.BigDecimal refundApprovalThreshold, Integer orderTtlMinutes) {
     validateName(name);
-    if (refundApprovalThreshold != null && refundApprovalThreshold.signum() < 0) {
-      throw new ValidationException("refund_approval_threshold must be >= 0");
-    }
-    if (orderTtlMinutes != null
-        && (orderTtlMinutes < MIN_ORDER_TTL_MINUTES || orderTtlMinutes > MAX_ORDER_TTL_MINUTES)) {
-      throw new ValidationException(
-          "order_ttl_minutes must be between "
-              + MIN_ORDER_TTL_MINUTES
-              + " and "
-              + MAX_ORDER_TTL_MINUTES
-              + " (15 minutes to 30 days)");
-    }
+    validatePolicy(refundApprovalThreshold, orderTtlMinutes);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -151,7 +140,28 @@ public class OrgService {
         });
   }
 
-  private void validateName(String name) {
+  /**
+   * Shared business-policy validation (refund-approval threshold ≥ 0, order-TTL within bounds),
+   * reused by the platform-admin edit path. A {@code null} leaves the knob unchanged, so it passes.
+   */
+  public static void validatePolicy(
+      java.math.BigDecimal refundApprovalThreshold, Integer orderTtlMinutes) {
+    if (refundApprovalThreshold != null && refundApprovalThreshold.signum() < 0) {
+      throw new ValidationException("refund_approval_threshold must be >= 0");
+    }
+    if (orderTtlMinutes != null
+        && (orderTtlMinutes < MIN_ORDER_TTL_MINUTES || orderTtlMinutes > MAX_ORDER_TTL_MINUTES)) {
+      throw new ValidationException(
+          "order_ttl_minutes must be between "
+              + MIN_ORDER_TTL_MINUTES
+              + " and "
+              + MAX_ORDER_TTL_MINUTES
+              + " (15 minutes to 30 days)");
+    }
+  }
+
+  /** Shared name validation, reused by the platform-admin provisioning/edit paths. */
+  public static void validateName(String name) {
     if (name == null || name.isBlank()) {
       throw new ValidationException("name is required");
     }
@@ -160,7 +170,8 @@ public class OrgService {
     }
   }
 
-  private void validateSlug(String slug) {
+  /** Shared slug validation, reused by the platform-admin provisioning path. */
+  public static void validateSlug(String slug) {
     if (slug == null || slug.isBlank()) {
       throw new ValidationException("slug is required");
     }

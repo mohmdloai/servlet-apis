@@ -77,8 +77,6 @@ public class UserAdminService {
       List<UserOrgRole> orgRoles,
       long activeSessionCount) {}
 
-  // ───────────────────────── reads ─────────────────────────
-
   public UserPage list(int page, int size, String emailQuery) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
@@ -101,8 +99,6 @@ public class UserAdminService {
         userRepo.findOrgRoles(userId),
         authService.countSessions(userId));
   }
-
-  // ───────────────────────── mutations ─────────────────────────
 
   /**
    * Create a user. {@code actorType} is restricted to USER/SERVICE (SYSTEM/MIGRATION are internal).
@@ -169,6 +165,7 @@ public class UserAdminService {
               UserRepository repo = userRepoFactory.create(tx);
               if (!active) {
                 assertNotLastActiveAdmin(repo, userId, "disable the last platform ADMIN");
+                assertNotSoleOwnerAnywhere(repo, userId);
               }
               AppUser u = repo.setActive(userId, active);
               audit.recordInTx(
@@ -269,6 +266,16 @@ public class UserAdminService {
             cfg -> {
               DSLContext tx = DSL.using(cfg);
               UserRepository repo = userRepoFactory.create(tx);
+              if (role == OrgRole.OWNER) {
+                // Mirror the OWNER-plane last-owner invariant (MemberService.guardLastOwner): the
+                // platform plane must not be able to strip an org's only OWNER and leave it
+                // ownerless either. Runs inside the txn so ownerIdsForUpdate's row lock makes the
+                // check-then-delete atomic against a concurrent revoke of a different owner.
+                Set<UUID> owners = repo.ownerIdsForUpdate(orgId);
+                if (owners.contains(userId) && owners.size() == 1) {
+                  throw new ConflictException("Org must have at least one owner");
+                }
+              }
               int deleted = repo.deleteOrgRole(userId, orgId, role);
               if (deleted == 0) {
                 return null; // idempotent no-op: user never held the role, so no audit / no logout
@@ -316,8 +323,6 @@ public class UserAdminService {
     authService.propagateLogoutAll(userId, newVersion);
   }
 
-  // ───────────────────────── guards ─────────────────────────
-
   private void ensureUserExists(UUID userId) {
     if (userRepoFactory.create(dsl).findById(userId).isEmpty()) {
       throw new NotFoundException("User", userId);
@@ -343,6 +348,28 @@ public class UserAdminService {
     Set<UUID> activeAdmins = repo.activeAdminIdsForUpdate();
     if (activeAdmins.contains(userId) && activeAdmins.size() == 1) {
       throw new ValidationException("Cannot " + actionDescription);
+    }
+  }
+
+  /**
+   * Block disabling a user who is the <em>sole</em> OWNER of any org - a second vector to the same
+   * ownerless state the {@code revokeOrgRole} guard closes (a disabled owner cannot log in, so the
+   * org is effectively ownerless). For each org the user owns, {@link
+   * UserRepository#ownerIdsForUpdate} takes a row lock so the check is atomic against a concurrent
+   * ownership change. Reassigning ownership first is the operator's path.
+   */
+  private void assertNotSoleOwnerAnywhere(UserRepository repo, UUID userId) {
+    for (UserOrgRole r : repo.findOrgRoles(userId)) {
+      if (r.getRole() != OrgRole.OWNER) {
+        continue;
+      }
+      Set<UUID> owners = repo.ownerIdsForUpdate(r.getOrgId());
+      if (owners.size() == 1 && owners.contains(userId)) {
+        throw new ConflictException(
+            "Cannot disable the sole owner of org "
+                + r.getOrgId()
+                + "; reassign ownership before disabling this user");
+      }
     }
   }
 

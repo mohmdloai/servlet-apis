@@ -255,7 +255,12 @@ public class AppConfig {
     AuthzHelper.configureOrgStatusGate(orgStatusService::isActive);
     this.platformOrgService =
         new PlatformOrgService(
-            dsl, orgRepositoryFactory, orgHealthRepository, platformAuditService, orgStatusService);
+            dsl,
+            orgRepositoryFactory,
+            userRepositoryFactory,
+            orgHealthRepository,
+            platformAuditService,
+            orgStatusService);
     this.userAdminService =
         new UserAdminService(
             dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);
