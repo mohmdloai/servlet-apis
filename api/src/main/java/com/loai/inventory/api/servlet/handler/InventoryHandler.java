@@ -233,7 +233,13 @@ public class InventoryHandler implements OrgResourceHandler {
   private record PathParts(UUID productId, String action) {}
 
   private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {
-    return mapper.readValue(req.getInputStream(), type);
+    try {
+      return mapper.readValue(req.getInputStream(), type);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      // Empty/truncated/malformed body — a 400, not an unhandled 500.
+      throw new com.loai.inventory.common.exception.ValidationException(
+          "request body is required and must be valid JSON");
+    }
   }
 
   private void writeJson(HttpServletResponse resp, int status, Object body) throws IOException {

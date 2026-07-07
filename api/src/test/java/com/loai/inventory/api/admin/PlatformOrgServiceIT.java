@@ -13,16 +13,20 @@ import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
+import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
+import com.loai.inventory.service.auth.AuthMailer;
+import com.loai.inventory.service.auth.CredentialTokenService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
@@ -88,6 +92,14 @@ class PlatformOrgServiceIT {
     PlatformAuditService audit =
         new PlatformAuditService(dsl, new PlatformAuditRepositoryFactoryImpl());
     OrgStatusService orgStatus = new OrgStatusService(jedisPool, dsl, orgRepoFactory);
+    CredentialTokenService credentialTokenService =
+        new CredentialTokenService(
+            dsl,
+            new AppUserMagicTokenRepositoryFactoryImpl(),
+            "http://localhost:8080",
+            Duration.ofMinutes(120),
+            Duration.ofDays(7));
+    AuthMailer authMailer = new AuthMailer(msg -> {}); // no-op sender; the IT asserts the token row
     service =
         new PlatformOrgService(
             dsl,
@@ -95,7 +107,9 @@ class PlatformOrgServiceIT {
             new UserRepositoryFactoryImpl(),
             new OrgHealthRepositoryImpl(dsl),
             audit,
-            orgStatus);
+            orgStatus,
+            credentialTokenService,
+            authMailer);
     userRepo = new com.loai.inventory.repository.UserRepositoryImpl(dsl);
   }
 
@@ -354,6 +368,15 @@ class PlatformOrgServiceIT {
                 r -> r.getOrgId().equals(result.org().getId()) && r.getRole() == OrgRole.OWNER));
     assertEquals(1, auditCount("ORG_CREATE"));
     assertEquals(1, auditCount("USER_CREATE"));
+    // A minted owner gets a first-password INVITE token (the account is otherwise unreachable).
+    assertEquals(
+        1,
+        dsl.fetchCount(
+            DSL.table("app_user_magic_token"),
+            DSL.field("user_id")
+                .eq(ownerId)
+                .and(DSL.field("purpose").eq("INVITE"))
+                .and(DSL.field("consumed_at").isNull())));
   }
 
   @Test

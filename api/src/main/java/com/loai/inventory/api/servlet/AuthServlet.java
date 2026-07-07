@@ -5,14 +5,18 @@ import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.AuthResponse;
+import com.loai.inventory.api.dto.ForgotPasswordRequest;
 import com.loai.inventory.api.dto.ImpersonationResponse;
 import com.loai.inventory.api.dto.LoginRequest;
+import com.loai.inventory.api.dto.RegisterRequest;
 import com.loai.inventory.api.dto.SessionResponse;
+import com.loai.inventory.api.dto.TokenPasswordRequest;
 import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.SecurityContext;
+import com.loai.inventory.service.auth.AccountService;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import jakarta.servlet.http.Cookie;
@@ -20,7 +24,9 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +36,7 @@ public class AuthServlet extends HttpServlet {
   private static final Logger log = LoggerFactory.getLogger(AuthServlet.class);
 
   private AuthService authService;
+  private AccountService accountService;
   private ObjectMapper mapper;
   private boolean secureCookies;
 
@@ -37,6 +44,7 @@ public class AuthServlet extends HttpServlet {
   public void init() {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.authService = config.authService;
+    this.accountService = config.accountService;
     this.mapper = config.objectMapper;
     this.secureCookies = config.secureCookies;
   }
@@ -49,6 +57,10 @@ public class AuthServlet extends HttpServlet {
 
       switch (path) {
         case "/login" -> handleLogin(req, resp);
+        case "/register" -> handleRegister(req, resp);
+        case "/forgot-password" -> handleForgotPassword(req, resp);
+        case "/reset-password" -> handleResetPassword(req, resp);
+        case "/activate" -> handleActivate(req, resp);
         case "/refresh" -> handleRefresh(req, resp);
         case "/logout" -> handleLogout(req, resp);
         case "/logout-all" -> handleLogoutAll(req, resp);
@@ -112,7 +124,7 @@ public class AuthServlet extends HttpServlet {
   }
 
   private void handleLogin(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-    LoginRequest body = mapper.readValue(req.getInputStream(), LoginRequest.class);
+    LoginRequest body = readBody(req, LoginRequest.class);
     if (body.getEmail() == null || body.getPassword() == null) {
       throw new ValidationException("email and password are required");
     }
@@ -130,6 +142,77 @@ public class AuthServlet extends HttpServlet {
     writeJson(
         resp,
         200,
+        new AuthResponse(
+            result.expiresIn(), result.user().getId(), result.user().getActorType().name()));
+  }
+
+  private void handleRegister(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+    RegisterRequest body = readBody(req, RegisterRequest.class);
+    if (body.getEmail() == null || body.getPassword() == null) {
+      throw new ValidationException("email and password are required");
+    }
+    AuthService.LoginResult result =
+        accountService.register(
+            body.getEmail(),
+            body.getPassword(),
+            body.getOrgName(),
+            req.getHeader("User-Agent"),
+            req.getRemoteAddr());
+    writeSession(resp, result, 201);
+  }
+
+  private void handleForgotPassword(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    ForgotPasswordRequest body =
+        readBody(req, ForgotPasswordRequest.class);
+    // Always 200 with an opaque message — never reveal whether the email is registered.
+    accountService.requestPasswordReset(body.getEmail(), OffsetDateTime.now());
+    writeJson(
+        resp,
+        200,
+        Map.of("message", "If an account exists for that email, a reset link has been sent."));
+  }
+
+  private void handleResetPassword(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    TokenPasswordRequest body = readBody(req, TokenPasswordRequest.class);
+    if (body.getToken() == null || body.getNewPassword() == null) {
+      throw new ValidationException("token and new_password are required");
+    }
+    AuthService.LoginResult result =
+        accountService.resetPassword(
+            body.getToken(),
+            body.getNewPassword(),
+            OffsetDateTime.now(),
+            req.getHeader("User-Agent"),
+            req.getRemoteAddr());
+    writeSession(resp, result, 200);
+  }
+
+  private void handleActivate(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+    TokenPasswordRequest body = readBody(req, TokenPasswordRequest.class);
+    if (body.getToken() == null || body.getNewPassword() == null) {
+      throw new ValidationException("token and new_password are required");
+    }
+    AuthService.LoginResult result =
+        accountService.activate(
+            body.getToken(),
+            body.getNewPassword(),
+            OffsetDateTime.now(),
+            req.getHeader("User-Agent"),
+            req.getRemoteAddr());
+    writeSession(resp, result, 200);
+  }
+
+  /** Write auth cookies + the {@link AuthResponse} body for a freshly-issued session. */
+  private void writeSession(HttpServletResponse resp, AuthService.LoginResult result, int status)
+      throws IOException {
+    AuthCookies.writeAccess(resp, result.accessToken(), (int) result.expiresIn(), secureCookies);
+    AuthCookies.writeRefresh(
+        resp, result.refreshToken(), AuthCookies.REFRESH_MAX_AGE, secureCookies);
+    writeJson(
+        resp,
+        status,
         new AuthResponse(
             result.expiresIn(), result.user().getId(), result.user().getActorType().name()));
   }
@@ -225,6 +308,15 @@ public class AuthServlet extends HttpServlet {
     cookie.setMaxAge(0);
     cookie.setAttribute("SameSite", "Strict");
     resp.addCookie(cookie);
+  }
+
+  private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {
+    try {
+      return mapper.readValue(req.getInputStream(), type);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      // Empty/truncated/malformed body — a 400, not an unhandled 500.
+      throw new ValidationException("request body is required and must be valid JSON");
+    }
   }
 
   private void writeJson(HttpServletResponse resp, int status, Object body) throws IOException {

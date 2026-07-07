@@ -6,6 +6,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.security.PasswordHasher;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.AppUser;
+import com.loai.inventory.domain.model.AppUserTokenPurpose;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgHealth;
@@ -18,7 +19,10 @@ import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.service.OrgService;
+import com.loai.inventory.service.auth.AuthMailer;
+import com.loai.inventory.service.auth.CredentialTokenService;
 import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +49,8 @@ public class PlatformOrgService {
   private final OrgHealthRepository orgHealthRepo;
   private final PlatformAuditService audit;
   private final OrgStatusService orgStatus;
+  private final CredentialTokenService credentialTokenService;
+  private final AuthMailer authMailer;
 
   public PlatformOrgService(
       DSLContext dsl,
@@ -52,13 +58,17 @@ public class PlatformOrgService {
       UserRepositoryFactory userRepoFactory,
       OrgHealthRepository orgHealthRepo,
       PlatformAuditService audit,
-      OrgStatusService orgStatus) {
+      OrgStatusService orgStatus,
+      CredentialTokenService credentialTokenService,
+      AuthMailer authMailer) {
     this.dsl = dsl;
     this.orgRepoFactory = orgRepoFactory;
     this.userRepoFactory = userRepoFactory;
     this.orgHealthRepo = orgHealthRepo;
     this.audit = audit;
     this.orgStatus = orgStatus;
+    this.credentialTokenService = credentialTokenService;
+    this.authMailer = authMailer;
   }
 
   /** One org plus its distinct member count, for the list view. */
@@ -123,66 +133,83 @@ public class PlatformOrgService {
       throw new ValidationException("owner_email is required");
     }
     String email = ownerEmail.trim();
+    OffsetDateTime now = OffsetDateTime.now();
+    // A minted owner's INVITE token, captured from the txn so we can email it after commit.
+    String[] inviteToken = new String[1];
 
-    return dsl.transactionResult(
-        cfg -> {
-          DSLContext tx = DSL.using(cfg);
-          OrgRepository orgRepo = orgRepoFactory.create(tx);
-          UserRepository userRepo = userRepoFactory.create(tx);
+    ProvisionResult result =
+        dsl.transactionResult(
+            cfg -> {
+              DSLContext tx = DSL.using(cfg);
+              OrgRepository orgRepo = orgRepoFactory.create(tx);
+              UserRepository userRepo = userRepoFactory.create(tx);
 
-          if (orgRepo.existsBySlug(slug)) {
-            throw new ConflictException("Org slug already exists: " + slug);
-          }
+              if (orgRepo.existsBySlug(slug)) {
+                throw new ConflictException("Org slug already exists: " + slug);
+              }
 
-          Optional<AppUser> existing = userRepo.findByEmail(email);
-          boolean minted = existing.isEmpty();
-          AppUser owner;
-          if (minted) {
-            owner =
-                userRepo.insert(
-                    new AppUser(
-                        null,
-                        email,
-                        PasswordHasher.hash("!" + UUID.randomUUID()), // unusable until reset
-                        ActorType.USER,
-                        true,
-                        0,
-                        null,
-                        null));
-          } else {
-            owner = existing.get();
-            if (owner.getActorType() != ActorType.USER) {
-              throw new ValidationException("owner_email must belong to a USER account");
-            }
-          }
+              Optional<AppUser> existing = userRepo.findByEmail(email);
+              boolean minted = existing.isEmpty();
+              AppUser owner;
+              if (minted) {
+                owner =
+                    userRepo.insert(
+                        new AppUser(
+                            null,
+                            email,
+                            PasswordHasher.hash("!" + UUID.randomUUID()), // unusable until invite
+                            ActorType.USER,
+                            true,
+                            0,
+                            null,
+                            null));
+              } else {
+                owner = existing.get();
+                if (owner.getActorType() != ActorType.USER) {
+                  throw new ValidationException("owner_email must belong to a USER account");
+                }
+              }
 
-          Org org = new Org();
-          org.setName(name);
-          org.setSlug(slug);
-          org.setActive(true);
-          Org saved = orgRepo.insert(org);
-          userRepo.insertOrgRole(owner.getId(), saved.getId(), OrgRole.OWNER);
+              Org org = new Org();
+              org.setName(name);
+              org.setSlug(slug);
+              org.setActive(true);
+              Org saved = orgRepo.insert(org);
+              userRepo.insertOrgRole(owner.getId(), saved.getId(), OrgRole.OWNER);
 
-          if (minted) {
-            audit.recordInTx(
-                tx,
-                actor,
-                env,
-                "USER_CREATE",
-                PlatformAuditEvent.Target.USER,
-                owner.getId(),
-                Map.of("email", email, "via", "org_provision"));
-          }
-          audit.recordInTx(
-              tx,
-              actor,
-              env,
-              "ORG_CREATE",
-              PlatformAuditEvent.Target.ORG,
-              saved.getId(),
-              Map.of("slug", slug, "owner_id", owner.getId().toString(), "owner_minted", minted));
-          return new ProvisionResult(saved, owner, minted);
-        });
+              if (minted) {
+                audit.recordInTx(
+                    tx,
+                    actor,
+                    env,
+                    "USER_CREATE",
+                    PlatformAuditEvent.Target.USER,
+                    owner.getId(),
+                    Map.of("email", email, "via", "org_provision"));
+                // Mint the first-password invite in the same txn — a rolled-back provision leaves
+                // no orphan token.
+                inviteToken[0] =
+                    credentialTokenService.mint(
+                        tx, owner.getId(), AppUserTokenPurpose.INVITE, now);
+              }
+              audit.recordInTx(
+                  tx,
+                  actor,
+                  env,
+                  "ORG_CREATE",
+                  PlatformAuditEvent.Target.ORG,
+                  saved.getId(),
+                  Map.of(
+                      "slug", slug, "owner_id", owner.getId().toString(), "owner_minted", minted));
+              return new ProvisionResult(saved, owner, minted);
+            });
+
+    // Best-effort invite email, after commit (a mint owner has an unusable password until they set
+    // one via this link). Delivery failure never fails the provision.
+    if (result.ownerMinted() && inviteToken[0] != null) {
+      authMailer.sendInvite(email, name, credentialTokenService.activateUrl(inviteToken[0]));
+    }
+    return result;
   }
 
   /**

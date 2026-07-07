@@ -89,7 +89,7 @@ public class UserAdminHandler implements AdminResourceHandler {
     }
   }
 
-  // ───────────────────────── /users ─────────────────────────
+  // /users
 
   private void collection(String method, HttpServletRequest req, HttpServletResponse resp)
       throws IOException {
@@ -118,7 +118,7 @@ public class UserAdminHandler implements AdminResourceHandler {
     }
   }
 
-  // ───────────────────────── /users/{id} ─────────────────────────
+  // /users/{id}
 
   private void singleUser(
       String method, HttpServletRequest req, HttpServletResponse resp, UUID userId)
@@ -141,7 +141,7 @@ public class UserAdminHandler implements AdminResourceHandler {
     }
   }
 
-  // ───────────────────────── /users/{id}/{sub}/… ─────────────────────────
+  // /users/{id}/{sub}/…
 
   private void subResource(
       String method, HttpServletRequest req, HttpServletResponse resp, Path path)
@@ -228,7 +228,7 @@ public class UserAdminHandler implements AdminResourceHandler {
     resp.setStatus(204);
   }
 
-  // ───────────────────────── session ops (slice 4) ─────────────────────────
+  // session ops (slice 4)
 
   private void sessions(
       String method,
@@ -281,7 +281,7 @@ public class UserAdminHandler implements AdminResourceHandler {
     resp.setStatus(204);
   }
 
-  // ───────────────────────── parsing ─────────────────────────
+  // parsing
 
   /**
    * {@code userId} null at the collection; {@code sub} the segment after the id; {@code rest} the
@@ -357,7 +357,12 @@ public class UserAdminHandler implements AdminResourceHandler {
   }
 
   private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {
-    return mapper.readValue(req.getInputStream(), type);
+    try {
+      return mapper.readValue(req.getInputStream(), type);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      // Empty/truncated/malformed body — a 400, not an unhandled 500.
+      throw new ValidationException("request body is required and must be valid JSON");
+    }
   }
 
   private void writeJson(HttpServletResponse resp, int status, Object body) throws IOException {
