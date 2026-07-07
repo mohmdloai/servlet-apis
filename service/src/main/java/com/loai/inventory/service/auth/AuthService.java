@@ -76,6 +76,18 @@ public class AuthService {
       throw new AuthenticationException("Invalid email or password");
     }
 
+    log.info("User logged in: id={} email={}", user.getId(), user.getEmail());
+    return issueSession(user, deviceInfo, sourceIp);
+  }
+
+  /**
+   * Mint a fresh device session (access + refresh) for an already-authenticated user, reflecting
+   * their current roles and {@code token_version}, and cache that version. The shared tail of {@code
+   * login} — also the "log them in" step for self-service registration and post-reset/activate
+   * ({@link com.loai.inventory.service.auth.AccountService}). The caller must have already
+   * established identity (verified password, or redeemed a single-use token).
+   */
+  public LoginResult issueSession(AppUser user, String deviceInfo, String sourceIp) {
     List<UserOrgRole> orgRoleList = userRepo.findOrgRoles(user.getId());
     Map<UUID, Set<String>> orgRoles = buildOrgRolesMap(orgRoleList);
     Set<String> systemRoles = buildSystemRolesSet(userRepo.findSystemRoles(user.getId()));
@@ -102,7 +114,6 @@ public class AuthService {
 
     refreshTokenStore.cacheTokenVersion(user.getId(), tokenVersion);
 
-    log.info("User logged in: id={} email={}", user.getId(), user.getEmail());
     return new LoginResult(accessToken, rawRefreshToken, jwtUtil.getAccessTtlMillis() / 1000, user);
   }
 

@@ -1,16 +1,32 @@
 package com.loai.inventory.service.platform;
 
+import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.security.PasswordHasher;
+import com.loai.inventory.domain.model.ActorType;
+import com.loai.inventory.domain.model.AppUser;
+import com.loai.inventory.domain.model.AppUserTokenPurpose;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgHealth;
+import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.PlatformAuditEvent;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.domain.repository.OrgRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
+import com.loai.inventory.domain.repository.UserRepository;
+import com.loai.inventory.domain.repository.UserRepositoryFactory;
+import com.loai.inventory.service.OrgService;
+import com.loai.inventory.service.auth.AuthMailer;
+import com.loai.inventory.service.auth.CredentialTokenService;
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -29,21 +45,30 @@ public class PlatformOrgService {
 
   private final DSLContext dsl;
   private final OrgRepositoryFactory orgRepoFactory;
+  private final UserRepositoryFactory userRepoFactory;
   private final OrgHealthRepository orgHealthRepo;
   private final PlatformAuditService audit;
   private final OrgStatusService orgStatus;
+  private final CredentialTokenService credentialTokenService;
+  private final AuthMailer authMailer;
 
   public PlatformOrgService(
       DSLContext dsl,
       OrgRepositoryFactory orgRepoFactory,
+      UserRepositoryFactory userRepoFactory,
       OrgHealthRepository orgHealthRepo,
       PlatformAuditService audit,
-      OrgStatusService orgStatus) {
+      OrgStatusService orgStatus,
+      CredentialTokenService credentialTokenService,
+      AuthMailer authMailer) {
     this.dsl = dsl;
     this.orgRepoFactory = orgRepoFactory;
+    this.userRepoFactory = userRepoFactory;
     this.orgHealthRepo = orgHealthRepo;
     this.audit = audit;
     this.orgStatus = orgStatus;
+    this.credentialTokenService = credentialTokenService;
+    this.authMailer = authMailer;
   }
 
   /** One org plus its distinct member count, for the list view. */
@@ -54,6 +79,13 @@ public class PlatformOrgService {
 
   /** One org plus its full operational rollup, for the drill-down view. */
   public record OrgWithHealth(Org org, OrgHealth health) {}
+
+  /**
+   * The outcome of provisioning a client org: the org, its OWNER, and whether that owner account
+   * was minted fresh (an unusable password awaiting a reset/invite) or attached from an existing
+   * user by email.
+   */
+  public record ProvisionResult(Org org, AppUser owner, boolean ownerMinted) {}
 
   /**
    * Paged org list. {@code active} filters by status ({@code null} = all). {@code page} is 0-based;
@@ -84,7 +116,147 @@ public class PlatformOrgService {
     return new OrgWithHealth(org, orgHealthRepo.health(orgId));
   }
 
-  // ───────────────────────── lifecycle (slice 5) ─────────────────────────
+  /**
+   * Provision a client org with a first OWNER, atomically (see {@code
+   * stories/11_st_platform_admin_console.md}, PG1). Closes the gap that org creation existed only
+   * on the self-serve {@code POST /api/orgs} path (caller-becomes-OWNER), which an operator
+   * onboarding a client cannot use. In one transaction: resolve {@code ownerEmail} to a user -
+   * minting a fresh USER account with an unusable password (awaiting a reset/invite) when the email
+   * is new - create the org, grant that user OWNER, and audit. A minted owner is also audited as
+   * {@code USER_CREATE}.
+   */
+  public ProvisionResult provision(
+      SecurityContext actor, Environment env, String name, String slug, String ownerEmail) {
+    OrgService.validateName(name);
+    OrgService.validateSlug(slug);
+    if (ownerEmail == null || ownerEmail.isBlank()) {
+      throw new ValidationException("owner_email is required");
+    }
+    String email = ownerEmail.trim();
+    OffsetDateTime now = OffsetDateTime.now();
+    // A minted owner's INVITE token, captured from the txn so we can email it after commit.
+    String[] inviteToken = new String[1];
+
+    ProvisionResult result =
+        dsl.transactionResult(
+            cfg -> {
+              DSLContext tx = DSL.using(cfg);
+              OrgRepository orgRepo = orgRepoFactory.create(tx);
+              UserRepository userRepo = userRepoFactory.create(tx);
+
+              if (orgRepo.existsBySlug(slug)) {
+                throw new ConflictException("Org slug already exists: " + slug);
+              }
+
+              Optional<AppUser> existing = userRepo.findByEmail(email);
+              boolean minted = existing.isEmpty();
+              AppUser owner;
+              if (minted) {
+                owner =
+                    userRepo.insert(
+                        new AppUser(
+                            null,
+                            email,
+                            PasswordHasher.hash("!" + UUID.randomUUID()), // unusable until invite
+                            ActorType.USER,
+                            true,
+                            0,
+                            null,
+                            null));
+              } else {
+                owner = existing.get();
+                if (owner.getActorType() != ActorType.USER) {
+                  throw new ValidationException("owner_email must belong to a USER account");
+                }
+              }
+
+              Org org = new Org();
+              org.setName(name);
+              org.setSlug(slug);
+              org.setActive(true);
+              Org saved = orgRepo.insert(org);
+              userRepo.insertOrgRole(owner.getId(), saved.getId(), OrgRole.OWNER);
+
+              if (minted) {
+                audit.recordInTx(
+                    tx,
+                    actor,
+                    env,
+                    "USER_CREATE",
+                    PlatformAuditEvent.Target.USER,
+                    owner.getId(),
+                    Map.of("email", email, "via", "org_provision"));
+                // Mint the first-password invite in the same txn — a rolled-back provision leaves
+                // no orphan token.
+                inviteToken[0] =
+                    credentialTokenService.mint(
+                        tx, owner.getId(), AppUserTokenPurpose.INVITE, now);
+              }
+              audit.recordInTx(
+                  tx,
+                  actor,
+                  env,
+                  "ORG_CREATE",
+                  PlatformAuditEvent.Target.ORG,
+                  saved.getId(),
+                  Map.of(
+                      "slug", slug, "owner_id", owner.getId().toString(), "owner_minted", minted));
+              return new ProvisionResult(saved, owner, minted);
+            });
+
+    // Best-effort invite email, after commit (a mint owner has an unusable password until they set
+    // one via this link). Delivery failure never fails the provision.
+    if (result.ownerMinted() && inviteToken[0] != null) {
+      authMailer.sendInvite(email, name, credentialTokenService.activateUrl(inviteToken[0]));
+    }
+    return result;
+  }
+
+  /**
+   * Edit an org's name and business-policy knobs on the admin plane, audited (divergence #3: this
+   * used to be reachable only by tunnelling through the OWNER route {@code PUT /api/orgs/{orgId}}
+   * via the {@code isSystemAdmin()} bypass, which SUPPORT can't use and which left no platform
+   * trail). A {@code null} policy value leaves that knob unchanged. Validation mirrors {@link
+   * OrgService}.
+   */
+  public Org updateOrg(
+      SecurityContext actor,
+      Environment env,
+      UUID orgId,
+      String name,
+      BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes) {
+    OrgService.validateName(name);
+    OrgService.validatePolicy(refundApprovalThreshold, orderTtlMinutes);
+
+    return dsl.transactionResult(
+        cfg -> {
+          DSLContext tx = DSL.using(cfg);
+          OrgRepository orgRepo = orgRepoFactory.create(tx);
+          Org existing =
+              orgRepo.findById(orgId).orElseThrow(() -> new NotFoundException("Org", orgId));
+          existing.setName(name);
+          if (refundApprovalThreshold != null) {
+            existing.setRefundApprovalThreshold(refundApprovalThreshold);
+          }
+          if (orderTtlMinutes != null) {
+            existing.setOrderTtlMinutes(orderTtlMinutes);
+          }
+          Org updated = orgRepo.update(existing);
+
+          Map<String, Object> detail = new LinkedHashMap<>();
+          detail.put("name", name);
+          if (refundApprovalThreshold != null) {
+            detail.put("refund_approval_threshold", refundApprovalThreshold);
+          }
+          if (orderTtlMinutes != null) {
+            detail.put("order_ttl_minutes", orderTtlMinutes);
+          }
+          audit.recordInTx(
+              tx, actor, env, "ORG_UPDATE", PlatformAuditEvent.Target.ORG, orgId, detail);
+          return updated;
+        });
+  }
 
   /**
    * Suspend an org: members lose access on their next request; the platform bypass is preserved.

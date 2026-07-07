@@ -5,21 +5,28 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
+import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
+import com.loai.inventory.repository.UserRepositoryFactoryImpl;
+import com.loai.inventory.service.auth.AuthMailer;
+import com.loai.inventory.service.auth.CredentialTokenService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
@@ -60,6 +67,7 @@ class PlatformOrgServiceIT {
   static HikariDataSource dataSource;
   static DSLContext dsl;
   static PlatformOrgService service;
+  static com.loai.inventory.repository.UserRepositoryImpl userRepo;
 
   @BeforeAll
   static void startInfra() {
@@ -84,9 +92,25 @@ class PlatformOrgServiceIT {
     PlatformAuditService audit =
         new PlatformAuditService(dsl, new PlatformAuditRepositoryFactoryImpl());
     OrgStatusService orgStatus = new OrgStatusService(jedisPool, dsl, orgRepoFactory);
+    CredentialTokenService credentialTokenService =
+        new CredentialTokenService(
+            dsl,
+            new AppUserMagicTokenRepositoryFactoryImpl(),
+            "http://localhost:8080",
+            Duration.ofMinutes(120),
+            Duration.ofDays(7));
+    AuthMailer authMailer = new AuthMailer(msg -> {}); // no-op sender; the IT asserts the token row
     service =
         new PlatformOrgService(
-            dsl, orgRepoFactory, new OrgHealthRepositoryImpl(dsl), audit, orgStatus);
+            dsl,
+            orgRepoFactory,
+            new UserRepositoryFactoryImpl(),
+            new OrgHealthRepositoryImpl(dsl),
+            audit,
+            orgStatus,
+            credentialTokenService,
+            authMailer);
+    userRepo = new com.loai.inventory.repository.UserRepositoryImpl(dsl);
   }
 
   @AfterAll
@@ -100,8 +124,6 @@ class PlatformOrgServiceIT {
         "TRUNCATE platform_audit, payment, payment_transaction, sales_order, user_system_role,"
             + " user_org_role, app_user, org RESTART IDENTITY CASCADE");
   }
-
-  // ───────────────────────── seeding helpers ─────────────────────────
 
   private UUID org(String slug, boolean active) {
     UUID id = UUID.randomUUID();
@@ -177,8 +199,6 @@ class PlatformOrgServiceIT {
         new BigDecimal("0.00"));
   }
 
-  // ───────────────────────── list ─────────────────────────
-
   @Test
   void list_returnsEveryOrg_evenWithNoCallerRole() {
     org("acme", true);
@@ -235,8 +255,6 @@ class PlatformOrgServiceIT {
     assertEquals(2, item.memberCount());
   }
 
-  // ───────────────────────── detail + health ─────────────────────────
-
   @Test
   void getWithHealth_rollsUpOrgScopedAggregates() {
     UUID orgId = org("acme", true);
@@ -282,8 +300,6 @@ class PlatformOrgServiceIT {
     PlatformOrgService.OrgPage page = service.list(0, 10_000, null);
     assertTrue(page.size() <= PlatformOrgService.MAX_PAGE_SIZE);
   }
-
-  // ───────────────────────── lifecycle ─────────────────────────
 
   @Test
   void suspend_deactivates_stampsReason_audits() {
@@ -331,6 +347,117 @@ class PlatformOrgServiceIT {
   void suspend_unknownOrg_throwsNotFound() {
     assertThrows(
         NotFoundException.class, () -> service.suspend(admin(), env(), UUID.randomUUID(), null));
+  }
+
+  @Test
+  void provision_newOwnerEmail_mintsUser_createsOrg_grantsOwner_audits() {
+    PlatformOrgService.ProvisionResult result =
+        service.provision(admin(), env(), "Acme Inc", "acme", "client@x.io");
+
+    assertTrue(result.ownerMinted());
+    assertEquals("acme", result.org().getSlug());
+    assertTrue(result.org().isActive());
+    // org persisted
+    assertEquals(1, dsl.fetchCount(DSL.table("org"), DSL.field("slug").eq("acme")));
+    // owner minted and granted OWNER in the org
+    UUID ownerId = result.owner().getId();
+    assertTrue(userRepo.findByEmail("client@x.io").isPresent());
+    assertTrue(
+        userRepo.findOrgRoles(ownerId).stream()
+            .anyMatch(
+                r -> r.getOrgId().equals(result.org().getId()) && r.getRole() == OrgRole.OWNER));
+    assertEquals(1, auditCount("ORG_CREATE"));
+    assertEquals(1, auditCount("USER_CREATE"));
+    // A minted owner gets a first-password INVITE token (the account is otherwise unreachable).
+    assertEquals(
+        1,
+        dsl.fetchCount(
+            DSL.table("app_user_magic_token"),
+            DSL.field("user_id")
+                .eq(ownerId)
+                .and(DSL.field("purpose").eq("INVITE"))
+                .and(DSL.field("consumed_at").isNull())));
+  }
+
+  @Test
+  void provision_existingOwnerEmail_attaches_notMinted() {
+    UUID existing = user("client@x.io");
+
+    PlatformOrgService.ProvisionResult result =
+        service.provision(admin(), env(), "Acme", "acme", "client@x.io");
+
+    assertFalse(result.ownerMinted());
+    assertEquals(existing, result.owner().getId());
+    assertEquals(0, auditCount("USER_CREATE"));
+    assertEquals(1, auditCount("ORG_CREATE"));
+    assertTrue(
+        userRepo.findOrgRoles(existing).stream()
+            .anyMatch(
+                r -> r.getOrgId().equals(result.org().getId()) && r.getRole() == OrgRole.OWNER));
+  }
+
+  @Test
+  void provision_duplicateSlug_conflict_rollsBackMint() {
+    org("acme", true);
+
+    assertThrows(
+        ConflictException.class,
+        () -> service.provision(admin(), env(), "Acme", "acme", "client@x.io"));
+
+    // the mint + org-create + grant are one transaction, so the conflict leaves no orphan user
+    assertEquals(0, dsl.fetchCount(DSL.table("app_user"), DSL.field("email").eq("client@x.io")));
+  }
+
+  @Test
+  void provision_invalidSlug_validation() {
+    assertThrows(
+        ValidationException.class,
+        () -> service.provision(admin(), env(), "Acme", "A", "client@x.io"));
+  }
+
+  @Test
+  void provision_blankOwnerEmail_validation() {
+    assertThrows(
+        ValidationException.class, () -> service.provision(admin(), env(), "Acme", "acme", "  "));
+  }
+
+  @Test
+  void updateOrg_editsNameAndPolicy_audits() {
+    UUID orgId = org("acme", true);
+
+    var updated =
+        service.updateOrg(admin(), env(), orgId, "Acme Renamed", new BigDecimal("500.00"), 60);
+
+    assertEquals("Acme Renamed", updated.getName());
+    assertEquals(0, new BigDecimal("500.00").compareTo(updated.getRefundApprovalThreshold()));
+    assertEquals(60, updated.getOrderTtlMinutes());
+    assertEquals(1, auditCount("ORG_UPDATE"));
+  }
+
+  @Test
+  void updateOrg_nullPolicy_leavesKnobsUnchanged() {
+    UUID orgId = org("acme", true);
+    service.updateOrg(admin(), env(), orgId, "Acme", new BigDecimal("300"), 90);
+
+    var again = service.updateOrg(admin(), env(), orgId, "Acme2", null, null);
+
+    assertEquals("Acme2", again.getName());
+    assertEquals(0, new BigDecimal("300").compareTo(again.getRefundApprovalThreshold()));
+    assertEquals(90, again.getOrderTtlMinutes());
+  }
+
+  @Test
+  void updateOrg_unknownOrg_notFound() {
+    assertThrows(
+        NotFoundException.class,
+        () -> service.updateOrg(admin(), env(), UUID.randomUUID(), "X", null, null));
+  }
+
+  @Test
+  void updateOrg_ttlOutOfRange_validation() {
+    UUID orgId = org("acme", true);
+    assertThrows(
+        ValidationException.class, () -> service.updateOrg(admin(), env(), orgId, "Acme", null, 5));
   }
 
   private SecurityContext admin() {

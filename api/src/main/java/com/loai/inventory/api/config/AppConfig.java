@@ -9,6 +9,7 @@ import com.loai.inventory.common.RedisFactory;
 import com.loai.inventory.common.security.JwtUtil;
 import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.storage.ObjectStorageFactory;
+import com.loai.inventory.domain.repository.AppUserMagicTokenRepositoryFactory;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerMagicTokenRepositoryFactory;
@@ -34,6 +35,7 @@ import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
+import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
@@ -81,7 +83,10 @@ import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReservationService;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.StorefrontService;
+import com.loai.inventory.service.auth.AccountService;
+import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.AuthService;
+import com.loai.inventory.service.auth.CredentialTokenService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.loai.inventory.service.email.EmailSender;
 import com.loai.inventory.service.email.EmailSenderFactory;
@@ -135,6 +140,7 @@ public class AppConfig {
   public final NotificationRepositoryFactory notificationRepositoryFactory;
   public final NotificationPreferenceRepositoryFactory notificationPreferenceRepositoryFactory;
   public final CustomerMagicTokenRepositoryFactory customerMagicTokenRepositoryFactory;
+  public final AppUserMagicTokenRepositoryFactory appUserMagicTokenRepositoryFactory;
   public final ProductListingRepositoryFactory productListingRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
@@ -157,6 +163,9 @@ public class AppConfig {
   // Services
   public final RefreshTokenStore refreshTokenStore;
   public final AuthService authService;
+  public final CredentialTokenService credentialTokenService;
+  public final AuthMailer authMailer;
+  public final AccountService accountService;
   public final OrgService orgService;
   public final MemberService memberService;
   public final PlatformAuditService platformAuditService;
@@ -218,6 +227,7 @@ public class AppConfig {
     this.notificationPreferenceRepositoryFactory =
         new NotificationPreferenceRepositoryFactoryImpl();
     this.customerMagicTokenRepositoryFactory = new CustomerMagicTokenRepositoryFactoryImpl();
+    this.appUserMagicTokenRepositoryFactory = new AppUserMagicTokenRepositoryFactoryImpl();
     this.productListingRepositoryFactory = new ProductListingRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
@@ -247,6 +257,26 @@ public class AppConfig {
             jwtUtil,
             impersonationEventRepository,
             impersonationTtl);
+    // Base URL for emailed auth links (shared with MagicLinkService below).
+    String publicBaseUrl = getenvOrDefault("PUBLIC_BASE_URL", "http://localhost:8080");
+    long resetTtlMinutes = parseLong(System.getenv("PASSWORD_RESET_TTL_MINUTES"), 120L);
+    long inviteTtlDays = parseLong(System.getenv("INVITE_TTL_DAYS"), 7L);
+    this.credentialTokenService =
+        new CredentialTokenService(
+            dsl,
+            appUserMagicTokenRepositoryFactory,
+            publicBaseUrl,
+            Duration.ofMinutes(resetTtlMinutes),
+            Duration.ofDays(inviteTtlDays));
+    this.authMailer = new AuthMailer(emailSender);
+    this.accountService =
+        new AccountService(
+            dsl,
+            userRepositoryFactory,
+            orgRepositoryFactory,
+            credentialTokenService,
+            authMailer,
+            authService);
     this.orgService = new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory);
     this.memberService = new MemberService(dsl, userRepositoryFactory, authService);
     this.platformAuditService = new PlatformAuditService(dsl, platformAuditRepositoryFactory);
@@ -255,15 +285,21 @@ public class AppConfig {
     AuthzHelper.configureOrgStatusGate(orgStatusService::isActive);
     this.platformOrgService =
         new PlatformOrgService(
-            dsl, orgRepositoryFactory, orgHealthRepository, platformAuditService, orgStatusService);
+            dsl,
+            orgRepositoryFactory,
+            userRepositoryFactory,
+            orgHealthRepository,
+            platformAuditService,
+            orgStatusService,
+            credentialTokenService,
+            authMailer);
     this.userAdminService =
         new UserAdminService(
             dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);
     this.productService = new ProductService(productRepository, dsl);
     this.categoryService = new CategoryService(dsl, categoryRepositoryFactory);
     // MagicLinkService is built before NotificationService — the producer mints an unsubscribe
-    // link for every customer email through it.
-    String publicBaseUrl = getenvOrDefault("PUBLIC_BASE_URL", "http://localhost:8080");
+    // link for every customer email through it. (publicBaseUrl was resolved above for auth links.)
     long magicTtlDays = parseLong(System.getenv("MAGIC_LINK_TTL_DAYS"), 30L);
     this.magicLinkService =
         new MagicLinkService(

@@ -59,9 +59,15 @@ public class JwtAuthFilter implements Filter {
 
     String path = req.getServletPath() + (req.getPathInfo() != null ? req.getPathInfo() : "");
 
-    // Anonymous surfaces: auth bootstrap + the public storefront read API.
+    // Anonymous surfaces: auth bootstrap (login/refresh + self-service registration and
+    // credential recovery) + the public storefront read API. These still pass through the
+    // rate-limit filter (mapped on /api/auth/*), which throttles the unauthenticated ones.
     if (path.equals("/api/auth/login")
         || path.equals("/api/auth/refresh")
+        || path.equals("/api/auth/register")
+        || path.equals("/api/auth/forgot-password")
+        || path.equals("/api/auth/reset-password")
+        || path.equals("/api/auth/activate")
         || path.startsWith("/api/public/")) {
       chain.doFilter(request, response);
       return;

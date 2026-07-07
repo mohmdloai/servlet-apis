@@ -10,18 +10,23 @@ import static org.mockito.Mockito.when;
 
 import com.loai.inventory.api.servlet.handler.OrgAdminHandler;
 import com.loai.inventory.domain.model.ActorType;
+import com.loai.inventory.domain.model.AppUser;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgHealth;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.service.platform.PlatformOrgService;
+import jakarta.servlet.ReadListener;
+import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.WriteListener;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -154,7 +159,72 @@ class OrgAdminHandlerAuthTest {
     verify(service).suspend(any(), any(), eq(ORG), any());
   }
 
-  // ─────────────── harness ───────────────
+  @Test
+  void provision_forbiddenForSupport() throws IOException {
+    // POST /api/admin/orgs provisions a client org - ADMIN-only, SUPPORT is read tier.
+    PlatformOrgService service = Mockito.mock(PlatformOrgService.class);
+    Resp resp = new Resp();
+    handler(service).handle("POST", reqWith(platform(SystemRole.SUPPORT)), resp.mock, "");
+    assertEquals(403, resp.status);
+    verify(service, never()).provision(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void provision_allowedForAdmin() throws IOException {
+    PlatformOrgService service = Mockito.mock(PlatformOrgService.class);
+    Org org =
+        new Org(ORG, "Acme", "acme", true, null, 1440, OffsetDateTime.now(), OffsetDateTime.now());
+    AppUser owner =
+        new AppUser(
+            UUID.randomUUID(),
+            "client@x.io",
+            "h",
+            ActorType.USER,
+            true,
+            0,
+            OffsetDateTime.now(),
+            OffsetDateTime.now());
+    when(service.provision(any(), any(), any(), any(), any()))
+        .thenReturn(new PlatformOrgService.ProvisionResult(org, owner, true));
+    Resp resp = new Resp();
+    handler(service)
+        .handle(
+            "POST",
+            reqWith(
+                platform(SystemRole.ADMIN),
+                "{\"name\":\"Acme\",\"slug\":\"acme\",\"owner_email\":\"client@x.io\"}"),
+            resp.mock,
+            "");
+    assertEquals(201, resp.status);
+    verify(service).provision(any(), any(), eq("Acme"), eq("acme"), eq("client@x.io"));
+  }
+
+  @Test
+  void update_forbiddenForSupport() throws IOException {
+    PlatformOrgService service = Mockito.mock(PlatformOrgService.class);
+    Resp resp = new Resp();
+    handler(service).handle("PATCH", reqWith(platform(SystemRole.SUPPORT)), resp.mock, "/" + ORG);
+    assertEquals(403, resp.status);
+    verify(service, never()).updateOrg(any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void update_allowedForAdmin() throws IOException {
+    PlatformOrgService service = Mockito.mock(PlatformOrgService.class);
+    Org org =
+        new Org(
+            ORG, "Renamed", "acme", true, null, 1440, OffsetDateTime.now(), OffsetDateTime.now());
+    when(service.updateOrg(any(), any(), eq(ORG), any(), any(), any())).thenReturn(org);
+    Resp resp = new Resp();
+    handler(service)
+        .handle(
+            "PATCH",
+            reqWith(platform(SystemRole.ADMIN), "{\"name\":\"Renamed\"}"),
+            resp.mock,
+            "/" + ORG);
+    assertEquals(200, resp.status);
+    verify(service).updateOrg(any(), any(), eq(ORG), eq("Renamed"), any(), any());
+  }
 
   private static final class Resp {
     final HttpServletResponse mock;
@@ -192,6 +262,35 @@ class OrgAdminHandlerAuthTest {
   private HttpServletRequest reqWith(SecurityContext ctx) {
     HttpServletRequest req = Mockito.mock(HttpServletRequest.class);
     when(req.getAttribute(SECURITY_CONTEXT_ATTR)).thenReturn(ctx);
+    return req;
+  }
+
+  private HttpServletRequest reqWith(SecurityContext ctx, String jsonBody) throws IOException {
+    HttpServletRequest req = reqWith(ctx);
+    byte[] bytes = jsonBody.getBytes(StandardCharsets.UTF_8);
+    when(req.getContentLength()).thenReturn(bytes.length);
+    ByteArrayInputStream backing = new ByteArrayInputStream(bytes);
+    when(req.getInputStream())
+        .thenReturn(
+            new ServletInputStream() {
+              @Override
+              public int read() {
+                return backing.read();
+              }
+
+              @Override
+              public boolean isFinished() {
+                return backing.available() == 0;
+              }
+
+              @Override
+              public boolean isReady() {
+                return true;
+              }
+
+              @Override
+              public void setReadListener(ReadListener readListener) {}
+            });
     return req;
   }
 }

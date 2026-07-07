@@ -122,8 +122,6 @@ class UserAdminServiceIT {
             + " org RESTART IDENTITY CASCADE");
   }
 
-  // ───────────────────────── seeding helpers ─────────────────────────
-
   private UUID user(String email) {
     UUID id = UUID.randomUUID();
     dsl.execute(
@@ -181,8 +179,6 @@ class UserAdminServiceIT {
     return userRepo.findSystemRoles(userId).contains(role);
   }
 
-  // ───────────────────────── create ─────────────────────────
-
   @Test
   void createUser_persistsAndAudits() {
     UUID actor = user("admin@x.io");
@@ -220,8 +216,6 @@ class UserAdminServiceIT {
     assertFalse(PasswordHasher.verify("", created.getPasswordHash()));
     assertFalse(PasswordHasher.verify("password", created.getPasswordHash()));
   }
-
-  // ───────────────────────── enable/disable ─────────────────────────
 
   @Test
   void disable_bumpsTokenVersion_andAudits() {
@@ -272,8 +266,6 @@ class UserAdminServiceIT {
         () -> service.setActive(admin(actor), env(), soleActiveAdmin, false));
     assertTrue(userRepo.findById(soleActiveAdmin).orElseThrow().isActive());
   }
-
-  // ───────────────────────── system roles ─────────────────────────
 
   @Test
   void grantSystemRole_addsRole_noTokenBump_audits() {
@@ -340,8 +332,6 @@ class UserAdminServiceIT {
     assertTrue(hasSystemRole(soleAdmin, SystemRole.ADMIN));
   }
 
-  // ───────────────────────── org roles ─────────────────────────
-
   @Test
   void grantOrgRole_addsRole_noTokenBump() {
     UUID actor = user("admin@x.io");
@@ -392,8 +382,6 @@ class UserAdminServiceIT {
     assertEquals(0, auditCount("ORG_ROLE_REVOKE"));
   }
 
-  // ───────────────────────── password reset ─────────────────────────
-
   @Test
   void resetPassword_updatesHash_bumpsToken_audits() {
     UUID actor = user("admin@x.io");
@@ -414,8 +402,6 @@ class UserAdminServiceIT {
     assertThrows(
         ValidationException.class, () -> service.resetPassword(admin(actor), env(), target, "  "));
   }
-
-  // ───────────────────────── reads ─────────────────────────
 
   @Test
   void get_returnsRolesAndSessionCount() {
@@ -440,5 +426,71 @@ class UserAdminServiceIT {
     UserAdminService.UserPage first = service.list(0, 2, null);
     assertEquals(5, first.total());
     assertEquals(2, first.users().size());
+  }
+
+  @Test
+  void revokeOrgRole_lastOwner_blocked() {
+    // The platform plane must honour the same "org keeps ≥1 OWNER" invariant as the OWNER plane -
+    // else a platform ADMIN could strip an org's only OWNER and leave it ownerless.
+    UUID actor = user("admin@x.io");
+    UUID owner = user("owner@x.io");
+    UUID orgId = org("acme");
+    service.grantOrgRole(admin(actor), env(), owner, orgId, OrgRole.OWNER);
+
+    assertThrows(
+        ConflictException.class,
+        () -> service.revokeOrgRole(admin(actor), env(), owner, orgId, OrgRole.OWNER));
+
+    assertTrue(
+        userRepo.findOrgRoles(owner).stream()
+            .anyMatch(r -> r.getOrgId().equals(orgId) && r.getRole() == OrgRole.OWNER),
+        "the blocked revoke must leave the OWNER role intact");
+    assertEquals(0, userRepo.getTokenVersion(owner), "a blocked revoke forces no logout");
+  }
+
+  @Test
+  void revokeOrgRole_ownerNotLast_ok() {
+    UUID actor = user("admin@x.io");
+    UUID owner1 = user("o1@x.io");
+    UUID owner2 = user("o2@x.io");
+    UUID orgId = org("acme");
+    service.grantOrgRole(admin(actor), env(), owner1, orgId, OrgRole.OWNER);
+    service.grantOrgRole(admin(actor), env(), owner2, orgId, OrgRole.OWNER);
+
+    service.revokeOrgRole(admin(actor), env(), owner1, orgId, OrgRole.OWNER);
+
+    assertTrue(userRepo.findOrgRoles(owner1).isEmpty());
+    assertEquals(1, userRepo.getTokenVersion(owner1), "de-privilege forces logout-all");
+    assertEquals(1, auditCount("ORG_ROLE_REVOKE"));
+  }
+
+  @Test
+  void disable_soleOwner_blocked() {
+    // Disabling the sole OWNER is a second vector to the same ownerless state - a disabled owner
+    // cannot log in, so the org is effectively ownerless.
+    UUID actor = user("admin@x.io");
+    UUID owner = user("owner@x.io");
+    UUID orgId = org("acme");
+    service.grantOrgRole(admin(actor), env(), owner, orgId, OrgRole.OWNER);
+
+    assertThrows(
+        ConflictException.class, () -> service.setActive(admin(actor), env(), owner, false));
+
+    assertTrue(userRepo.findById(owner).orElseThrow().isActive());
+    assertEquals(0, userRepo.getTokenVersion(owner));
+  }
+
+  @Test
+  void disable_ownerNotSole_ok() {
+    UUID actor = user("admin@x.io");
+    UUID owner1 = user("o1@x.io");
+    UUID owner2 = user("o2@x.io");
+    UUID orgId = org("acme");
+    service.grantOrgRole(admin(actor), env(), owner1, orgId, OrgRole.OWNER);
+    service.grantOrgRole(admin(actor), env(), owner2, orgId, OrgRole.OWNER);
+
+    service.setActive(admin(actor), env(), owner1, false);
+
+    assertFalse(userRepo.findById(owner1).orElseThrow().isActive());
   }
 }

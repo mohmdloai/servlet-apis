@@ -2,9 +2,12 @@ package com.loai.inventory.service.platform;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.domain.model.Environment;
+import com.loai.inventory.domain.model.PlatformAuditEntry;
 import com.loai.inventory.domain.model.PlatformAuditEvent;
 import com.loai.inventory.domain.model.SecurityContext;
+import com.loai.inventory.domain.repository.PlatformAuditRepository;
 import com.loai.inventory.domain.repository.PlatformAuditRepositoryFactory;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -19,6 +22,9 @@ import org.jooq.DSLContext;
  */
 public class PlatformAuditService {
 
+  public static final int DEFAULT_PAGE_SIZE = 20;
+  public static final int MAX_PAGE_SIZE = 100;
+
   private final DSLContext rootDsl;
   private final PlatformAuditRepositoryFactory auditRepoFactory;
   private final ObjectMapper objectMapper = new ObjectMapper();
@@ -26,6 +32,24 @@ public class PlatformAuditService {
   public PlatformAuditService(DSLContext rootDsl, PlatformAuditRepositoryFactory auditRepoFactory) {
     this.rootDsl = rootDsl;
     this.auditRepoFactory = auditRepoFactory;
+  }
+
+  /** A page of audit entries with the total count for pagination. */
+  public record AuditPage(List<PlatformAuditEntry> entries, long total, int page, int size) {}
+
+  /**
+   * Read the audit ledger newest-first (PG2), optionally filtered by {@code targetType} (e.g.
+   * {@code ORG}/{@code USER}/{@code SESSION}) and/or {@code actorId}. {@code page} is 0-based;
+   * {@code size} is clamped to {@code [1, MAX_PAGE_SIZE]}.
+   */
+  public AuditPage list(int page, int size, String targetType, UUID actorId) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    long rawOffset = (long) p * s;
+    int offset = rawOffset > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) rawOffset;
+    PlatformAuditRepository repo = auditRepoFactory.create(rootDsl);
+    return new AuditPage(
+        repo.find(offset, s, targetType, actorId), repo.count(targetType, actorId), p, s);
   }
 
   /** Audit outside any transaction, on the root context. */

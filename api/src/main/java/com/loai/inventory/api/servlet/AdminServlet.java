@@ -5,6 +5,7 @@ import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.servlet.handler.AdminResourceHandler;
+import com.loai.inventory.api.servlet.handler.AuditAdminHandler;
 import com.loai.inventory.api.servlet.handler.OrgAdminHandler;
 import com.loai.inventory.api.servlet.handler.UserAdminHandler;
 import com.loai.inventory.common.exception.AppException;
@@ -54,7 +55,9 @@ public class AdminServlet extends HttpServlet {
             new OrgAdminHandler(config.platformOrgService, mapper),
             "users",
             new UserAdminHandler(
-                config.userAdminService, config.authService, config.platformAuditService, mapper));
+                config.userAdminService, config.authService, config.platformAuditService, mapper),
+            "audit",
+            new AuditAdminHandler(config.platformAuditService, mapper));
   }
 
   @Override

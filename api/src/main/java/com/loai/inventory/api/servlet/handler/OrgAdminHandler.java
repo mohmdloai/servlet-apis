@@ -1,8 +1,11 @@
 package com.loai.inventory.api.servlet.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.loai.inventory.api.dto.AdminCreateOrgRequest;
 import com.loai.inventory.api.dto.AdminOrgDetailResponse;
 import com.loai.inventory.api.dto.AdminOrgSummaryResponse;
+import com.loai.inventory.api.dto.AdminProvisionOrgResponse;
+import com.loai.inventory.api.dto.AdminUpdateOrgRequest;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.OrgResponse;
 import com.loai.inventory.api.dto.PageResponse;
@@ -55,6 +58,7 @@ public class OrgAdminHandler implements AdminResourceHandler {
       switch (method) {
         case "GET" -> doGet(req, resp, path);
         case "POST" -> doPost(req, resp, path);
+        case "PATCH" -> doPatch(req, resp, path);
         default -> writeError(resp, 405, "Method not allowed");
       }
     } catch (AppException e) {
@@ -84,11 +88,24 @@ public class OrgAdminHandler implements AdminResourceHandler {
     }
   }
 
-  /** {@code POST /api/admin/orgs/{orgId}/suspend|reactivate} - ADMIN only (lifecycle, slice 5). */
+  /**
+   * {@code POST /api/admin/orgs} provisions a client org with a first OWNER (PG1); {@code POST
+   * /api/admin/orgs/{orgId}/suspend|reactivate} runs org lifecycle (slice 5). Both ADMIN only.
+   */
   private void doPost(HttpServletRequest req, HttpServletResponse resp, Path path)
       throws IOException {
-    if (path.orgId() == null || path.action() == null) {
-      throw new ValidationException("POST requires an org id and an action (suspend|reactivate)");
+    if (path.orgId() == null) {
+      SecurityContext ctx = AuthzHelper.requireAdmin(req);
+      Environment env = (Environment) req.getAttribute(JwtAuthFilter.ENVIRONMENT_ATTR);
+      AdminCreateOrgRequest body = readBody(req, AdminCreateOrgRequest.class);
+      PlatformOrgService.ProvisionResult result =
+          platformOrgService.provision(
+              ctx, env, body.getName(), body.getSlug(), body.getOwnerEmail());
+      writeJson(resp, 201, AdminProvisionOrgResponse.from(result));
+      return;
+    }
+    if (path.action() == null) {
+      throw new ValidationException("POST requires an action (suspend|reactivate)");
     }
     SecurityContext ctx = AuthzHelper.requireAdmin(req);
     Environment env = (Environment) req.getAttribute(JwtAuthFilter.ENVIRONMENT_ATTR);
@@ -107,6 +124,34 @@ public class OrgAdminHandler implements AdminResourceHandler {
       }
     }
     writeJson(resp, 200, OrgResponse.from(updated));
+  }
+
+  /** {@code PATCH /api/admin/orgs/{orgId}} - edit name/policy on the admin plane (ADMIN, #3). */
+  private void doPatch(HttpServletRequest req, HttpServletResponse resp, Path path)
+      throws IOException {
+    if (path.orgId() == null || path.action() != null) {
+      throw new ValidationException("PATCH requires an org id and no trailing action");
+    }
+    SecurityContext ctx = AuthzHelper.requireAdmin(req);
+    Environment env = (Environment) req.getAttribute(JwtAuthFilter.ENVIRONMENT_ATTR);
+    AdminUpdateOrgRequest body = readBody(req, AdminUpdateOrgRequest.class);
+    Org updated =
+        platformOrgService.updateOrg(
+            ctx,
+            env,
+            path.orgId(),
+            body.getName(),
+            body.getRefundApprovalThreshold(),
+            body.getOrderTtlMinutes());
+    writeJson(resp, 200, OrgResponse.from(updated));
+  }
+
+  private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {
+    try {
+      return mapper.readValue(req.getInputStream(), type);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new ValidationException("malformed JSON body");
+    }
   }
 
   private SuspendOrgRequest readBodyOrNull(HttpServletRequest req) throws IOException {
