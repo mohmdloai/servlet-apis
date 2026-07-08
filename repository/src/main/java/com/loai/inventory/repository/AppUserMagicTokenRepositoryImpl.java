@@ -11,7 +11,9 @@ import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
 
-/** jOOQ persistence for app_user credential tokens. {@code purpose} is TEXT (enum {@code name()}). */
+/**
+ * jOOQ persistence for app_user credential tokens. {@code purpose} is TEXT (enum {@code name()}).
+ */
 public final class AppUserMagicTokenRepositoryImpl implements AppUserMagicTokenRepository {
 
   private final DSLContext dsl;

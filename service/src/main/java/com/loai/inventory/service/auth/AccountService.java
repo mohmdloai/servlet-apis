@@ -30,11 +30,11 @@ import org.slf4j.LoggerFactory;
  * Self-service account flows that live outside the admin plane (stories/11): public registration,
  * "forgot password" (request + reset), and invite activation. Registration and token redemption own
  * their own transactions here (the account/org rows and the token consume must be atomic); once
- * committed, session issuance is delegated to {@link AuthService#issueSession} so the user is logged
- * in with fresh cookies exactly as {@code login} would.
+ * committed, session issuance is delegated to {@link AuthService#issueSession} so the user is
+ * logged in with fresh cookies exactly as {@code login} would.
  *
- * <p>Token redemption bumps {@code token_version} and propagates a logout-all before minting the new
- * session — a password change (self-serve reset or first-set) invalidates every prior session,
+ * <p>Token redemption bumps {@code token_version} and propagates a logout-all before minting the
+ * new session — a password change (self-serve reset or first-set) invalidates every prior session,
  * matching {@code AuthService.changePassword} and {@code UserAdminService.resetPassword}.
  */
 public class AccountService {
@@ -67,8 +67,8 @@ public class AccountService {
 
   /**
    * Register a new USER self-service. Creates the account (and, when {@code orgName} is given, an
-   * org with the registrant as its OWNER) in one transaction, then logs them in. 409 if the email is
-   * already registered.
+   * org with the registrant as its OWNER) in one transaction, then logs them in. 409 if the email
+   * is already registered.
    */
   public LoginResult register(
       String email, String rawPassword, String orgName, String deviceInfo, String sourceIp) {
@@ -145,10 +145,19 @@ public class AccountService {
   public LoginResult resetPassword(
       String rawToken, String newPassword, OffsetDateTime now, String deviceInfo, String sourceIp) {
     return redeem(
-        AppUserTokenPurpose.PASSWORD_RESET, rawToken, newPassword, now, deviceInfo, sourceIp, false);
+        AppUserTokenPurpose.PASSWORD_RESET,
+        rawToken,
+        newPassword,
+        now,
+        deviceInfo,
+        sourceIp,
+        false);
   }
 
-  /** Activate an invited account with an INVITE token (sets first password + activates), then log in. */
+  /**
+   * Activate an invited account with an INVITE token (sets first password + activates), then log
+   * in.
+   */
   public LoginResult activate(
       String rawToken, String newPassword, OffsetDateTime now, String deviceInfo, String sourceIp) {
     return redeem(
@@ -175,7 +184,9 @@ public class AccountService {
                       .orElseThrow(() -> new ValidationException("invalid or expired token"));
               UserRepository userRepo = userRepoFactory.create(tx);
               AppUser user =
-                  userRepo.findById(userId).orElseThrow(() -> new NotFoundException("User", userId));
+                  userRepo
+                      .findById(userId)
+                      .orElseThrow(() -> new NotFoundException("User", userId));
               // A reset must not revive a disabled account; an invite legitimately activates one.
               if (!activating && !user.isActive()) {
                 throw new AuthenticationException("Account is disabled");
@@ -210,8 +221,8 @@ public class AccountService {
 
   /**
    * Derive a slug from the org name that satisfies {@link OrgService#validateSlug} and is unique.
-   * Retries with a short random suffix on collision so a self-serve registrant is never blocked by a
-   * name someone else already took.
+   * Retries with a short random suffix on collision so a self-serve registrant is never blocked by
+   * a name someone else already took.
    */
   private static String uniqueSlug(OrgRepository orgRepo, String name) {
     String base = slugify(name);

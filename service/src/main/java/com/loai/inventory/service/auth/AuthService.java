@@ -82,10 +82,10 @@ public class AuthService {
 
   /**
    * Mint a fresh device session (access + refresh) for an already-authenticated user, reflecting
-   * their current roles and {@code token_version}, and cache that version. The shared tail of {@code
-   * login} — also the "log them in" step for self-service registration and post-reset/activate
-   * ({@link com.loai.inventory.service.auth.AccountService}). The caller must have already
-   * established identity (verified password, or redeemed a single-use token).
+   * their current roles and {@code token_version}, and cache that version. The shared tail of
+   * {@code login} — also the "log them in" step for self-service registration and
+   * post-reset/activate ({@link com.loai.inventory.service.auth.AccountService}). The caller must
+   * have already established identity (verified password, or redeemed a single-use token).
    */
   public LoginResult issueSession(AppUser user, String deviceInfo, String sourceIp) {
     List<UserOrgRole> orgRoleList = userRepo.findOrgRoles(user.getId());

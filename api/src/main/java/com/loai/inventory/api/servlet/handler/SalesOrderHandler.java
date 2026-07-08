@@ -44,8 +44,9 @@ import org.slf4j.LoggerFactory;
  *       stories/place_online_order.md}). Both require STAFF (system ADMIN bypasses).
  *   <li>{@code POST /{id}/cancel} — cancel an order (MANAGER).
  *   <li>{@code GET /?order_number=} — exact-match lookup by human-readable number, the pre-flight
- *       for the manual money path ({@code stories/lookup_order_by_number.md}). VIEWER. A bare {@code
- *       GET} without the param returns the order worklist page ({@code ?status=&page=&size=}).
+ *       for the manual money path ({@code stories/lookup_order_by_number.md}). VIEWER. A bare
+ *       {@code GET} without the param returns the order worklist page ({@code
+ *       ?status=&page=&size=}).
  *   <li>{@code GET /{id}} — one order + its lines by stable id ({@code
  *       stories/fulfillment_reads.md}). VIEWER.
  *   <li>{@code GET /{id}/payments} — the order's money story: every payment FIFO with its refunds

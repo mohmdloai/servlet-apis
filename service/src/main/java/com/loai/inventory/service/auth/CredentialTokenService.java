@@ -15,10 +15,10 @@ import org.jooq.DSLContext;
  * Mints and redeems app_user credential tokens (the registration/forgot-password flows,
  * stories/11_st_platform_admin_console.md), mirroring {@link
  * com.loai.inventory.service.MagicLinkService} but for {@code app_user}. The raw token is a 256-bit
- * {@link SecureRandom} value returned only in the emailed URL; only its SHA-256 hash (reusing {@link
- * RefreshTokenStore#hashToken}) is stored. Tokens are one-shot: {@link #consume} stamps {@code
- * consumed_at} atomically, so a used link cannot be replayed. TTL is shorter for a password reset
- * than for an invite.
+ * {@link SecureRandom} value returned only in the emailed URL; only its SHA-256 hash (reusing
+ * {@link RefreshTokenStore#hashToken}) is stored. Tokens are one-shot: {@link #consume} stamps
+ * {@code consumed_at} atomically, so a used link cannot be replayed. TTL is shorter for a password
+ * reset than for an invite.
  */
 public class CredentialTokenService {
 

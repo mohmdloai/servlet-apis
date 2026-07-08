@@ -189,8 +189,7 @@ public class PlatformOrgService {
                 // Mint the first-password invite in the same txn — a rolled-back provision leaves
                 // no orphan token.
                 inviteToken[0] =
-                    credentialTokenService.mint(
-                        tx, owner.getId(), AppUserTokenPurpose.INVITE, now);
+                    credentialTokenService.mint(tx, owner.getId(), AppUserTokenPurpose.INVITE, now);
               }
               audit.recordInTx(
                   tx,

@@ -163,8 +163,7 @@ public class AuthServlet extends HttpServlet {
 
   private void handleForgotPassword(HttpServletRequest req, HttpServletResponse resp)
       throws IOException {
-    ForgotPasswordRequest body =
-        readBody(req, ForgotPasswordRequest.class);
+    ForgotPasswordRequest body = readBody(req, ForgotPasswordRequest.class);
     // Always 200 with an opaque message — never reveal whether the email is registered.
     accountService.requestPasswordReset(body.getEmail(), OffsetDateTime.now());
     writeJson(

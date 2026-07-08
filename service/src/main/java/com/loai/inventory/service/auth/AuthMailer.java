@@ -7,9 +7,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Sends the transactional auth emails (password-reset link, invite/activation link) directly through
- * the {@link EmailSender}, bypassing the customer-scoped, opt-out notification pipeline — an auth
- * mail targets an {@code app_user}, must never carry an unsubscribe link, and must not be
+ * Sends the transactional auth emails (password-reset link, invite/activation link) directly
+ * through the {@link EmailSender}, bypassing the customer-scoped, opt-out notification pipeline —
+ * an auth mail targets an {@code app_user}, must never carry an unsubscribe link, and must not be
  * suppressible by preferences. Sending is best-effort and never throws: a forgot-password caller
  * must get the same opaque response whether or not delivery succeeded (no account enumeration).
  */
