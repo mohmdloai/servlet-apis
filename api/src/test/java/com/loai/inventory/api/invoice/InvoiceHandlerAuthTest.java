@@ -287,6 +287,51 @@ class InvoiceHandlerAuthTest {
     verify(service).get(eq(ORG), eq(INVOICE));
   }
 
+  // list
+
+  @Test
+  void list_allowedForViewer_serviceCalled() throws IOException {
+    InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
+    when(service.list(eq(ORG), any(), Mockito.anyInt(), Mockito.anyInt()))
+        .thenReturn(new InvoiceAdminService.InvoicePage(List.of(), 0));
+    InvoiceHandler handler =
+        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle("GET", reqWith(ctxWith(OrgRole.VIEWER), null), resp.mock, ORG, "/");
+
+    assertEquals(200, resp.status, "VIEWER must be allowed to list invoices");
+    verify(service).list(eq(ORG), any(), Mockito.anyInt(), Mockito.anyInt());
+  }
+
+  @Test
+  void list_unknownStatus_is400_serviceNeverCalled() throws IOException {
+    InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
+    HttpServletRequest req = reqWith(ctxWith(OrgRole.VIEWER), null);
+    when(req.getParameter("status")).thenReturn("BOGUS");
+    InvoiceHandler handler =
+        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle("GET", req, resp.mock, ORG, "/");
+
+    assertEquals(400, resp.status, "an unknown status filter must be a 400");
+    verify(service, never()).list(any(), any(), Mockito.anyInt(), Mockito.anyInt());
+  }
+
+  @Test
+  void postAtRoot_is405() throws IOException {
+    InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
+    InvoiceHandler handler =
+        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle("POST", reqWith(ctxWith(OrgRole.MANAGER), "{}"), resp.mock, ORG, "/");
+
+    assertEquals(
+        405, resp.status, "there is no POST /invoices — invoices are issued as a side effect");
+  }
+
   @Test
   void void_unauthenticated_is401_serviceNeverCalled() throws IOException {
     InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);

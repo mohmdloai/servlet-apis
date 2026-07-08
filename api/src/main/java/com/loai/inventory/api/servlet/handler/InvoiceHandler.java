@@ -2,6 +2,8 @@ package com.loai.inventory.api.servlet.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.InvoiceSummaryResponse;
+import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.ReissueInvoiceRequest;
 import com.loai.inventory.api.dto.VoidInvoiceRequest;
 import com.loai.inventory.api.mapper.InvoiceMapper;
@@ -10,9 +12,11 @@ import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.service.InvoiceAdminService;
+import com.loai.inventory.service.InvoiceAdminService.InvoicePage;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +25,10 @@ import org.slf4j.LoggerFactory;
  * Handles {@code /api/orgs/{orgId}/invoices}:
  *
  * <ul>
+ *   <li>{@code GET /invoices?status=&page=&size=} — the awaiting-payment worklist / invoice ledger
+ *       ({@code stories/invoice_reads.md}): filtered = queue oldest-first ({@code ?status=ISSUED}
+ *       is the awaiting-payment queue), unfiltered = ledger newest-first (VOID included); lean rows
+ *       carry their batch-loaded {@code sales_order_number}. VIEWER+.
  *   <li>{@code GET /invoices/{id}} — read an invoice + lines (VIEWER+)
  *   <li>{@code POST /invoices/{id}/void} — cancel an ISSUED, unpaid, uncredited invoice (MANAGER+)
  *   <li>{@code POST /invoices/{id}/reissue} — void + issue a corrected replacement (MANAGER+)
@@ -52,7 +60,11 @@ public class InvoiceHandler implements OrgResourceHandler {
     try {
       String[] parts = splitPath(remainingPath);
       if (parts.length == 0) {
-        writeError(resp, 405, "Method not allowed");
+        if ("GET".equals(method)) {
+          doList(req, resp, orgId);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
         return;
       }
 
@@ -81,6 +93,23 @@ public class InvoiceHandler implements OrgResourceHandler {
       log.error("Unexpected error in /api/orgs/{}/invoices{}", orgId, remainingPath, e);
       writeError(resp, 500, "Internal server error");
     }
+  }
+
+  /** {@code GET /} — the awaiting-payment worklist (filtered) / invoice ledger (unfiltered). */
+  private void doList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    // Clamp here too so the envelope echoes the page/size actually served.
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", InvoiceAdminService.DEFAULT_PAGE_SIZE), 1),
+            InvoiceAdminService.MAX_PAGE_SIZE);
+    InvoicePage result =
+        service.list(orgId, InvoiceMapper.toStatusFilter(req.getParameter("status")), page, size);
+    List<InvoiceSummaryResponse> data =
+        result.items().stream().map(InvoiceMapper::toSummaryResponse).toList();
+    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
   }
 
   private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
@@ -122,6 +151,18 @@ public class InvoiceHandler implements OrgResourceHandler {
       return UUID.fromString(s);
     } catch (IllegalArgumentException e) {
       throw new ValidationException("Invalid invoice id: " + s);
+    }
+  }
+
+  private static int intParam(HttpServletRequest req, String name, int defaultValue) {
+    String value = req.getParameter(name);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new ValidationException("Parameter '" + name + "' must be an integer");
     }
   }
 

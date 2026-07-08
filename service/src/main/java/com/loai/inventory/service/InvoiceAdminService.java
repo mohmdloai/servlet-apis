@@ -93,6 +93,52 @@ public final class InvoiceAdminService {
     return new InvoiceView(invoice, invoiceRepo.findLinesByInvoiceId(id));
   }
 
+  /**
+   * A worklist row: the invoice header plus its batch-loaded {@code salesOrderNumber}, so a card
+   * can name its order without a per-row fetch. Lean — no lines (the {@code GET /invoices/{id}}
+   * detail carries those). The customer snapshot (name/email/…) and the money meter ({@code
+   * grand_total} / {@code paid_amount}) already ride on {@link SalesInvoice}.
+   */
+  public record InvoiceSummary(SalesInvoice invoice, String salesOrderNumber) {}
+
+  /** One page of the invoice queue/ledger plus the filtered total (for tab badges). */
+  public record InvoicePage(List<InvoiceSummary> items, long total) {}
+
+  public static final int DEFAULT_PAGE_SIZE = 20;
+  public static final int MAX_PAGE_SIZE = 100;
+
+  /**
+   * Read one page of the org's invoices — filtered by {@code status} it is a worklist ({@code
+   * ?status=ISSUED} is the awaiting-payment queue, oldest first); unfiltered it is the ledger
+   * (every status including VOID, newest first). Mirrors {@link RefundService#list}: {@code page}
+   * floors at 0, {@code size} is clamped to {@code [1, MAX_PAGE_SIZE]}. The per-row {@code
+   * salesOrderNumber} is batch-loaded — one projection per page, never per row.
+   */
+  public InvoicePage list(UUID orgId, InvoiceStatus status, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    SalesInvoiceRepository invoiceRepo = invoiceRepoFactory.create(rootDsl);
+    List<SalesInvoice> items = invoiceRepo.list(orgId, status, p * s, s);
+    long total = invoiceRepo.count(orgId, status);
+
+    java.util.Map<UUID, String> orderNumbers =
+        orderRepoFactory
+            .create(rootDsl)
+            .findOrderNumbersByIds(
+                orgId,
+                items.stream()
+                    .map(SalesInvoice::getSalesOrderId)
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .toList());
+
+    List<InvoiceSummary> views =
+        items.stream()
+            .map(inv -> new InvoiceSummary(inv, orderNumbers.get(inv.getSalesOrderId())))
+            .toList();
+    return new InvoicePage(views, total);
+  }
+
   /** An order's billing story: the header + every invoice oldest-first, each with lines. */
   public record OrderInvoices(SalesOrder order, List<InvoiceView> invoices) {}
 
@@ -163,6 +209,7 @@ public final class InvoiceAdminService {
     if (lines == null || lines.isEmpty()) {
       throw new ValidationException("at least one line is required");
     }
+    validateReissueLines(lines);
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
@@ -217,6 +264,39 @@ public final class InvoiceAdminService {
               reason);
           return issued;
         });
+  }
+
+  /**
+   * Validate each corrected line here so bad input is a 400, not a 500 from {@link
+   * SalesInvoiceLine#create}'s {@code IllegalArgumentException} / a DB CHECK violation (both of
+   * which the servlet's generic catch maps to "Internal server error"). Same shape as {@code
+   * CreditNoteService}'s per-line validation.
+   */
+  private void validateReissueLines(List<ReissueLine> lines) {
+    for (int i = 0; i < lines.size(); i++) {
+      ReissueLine line = lines.get(i);
+      if (line == null) {
+        throw new ValidationException("lines[" + i + "] is required");
+      }
+      if (line.description() == null) {
+        throw new ValidationException("lines[" + i + "].description is required");
+      }
+      if (line.unitPrice() == null) {
+        throw new ValidationException("lines[" + i + "].unit_price is required");
+      }
+      if (line.taxRate() == null) {
+        throw new ValidationException("lines[" + i + "].tax_rate is required");
+      }
+      if (line.quantity() <= 0) {
+        throw new ValidationException("lines[" + i + "].quantity must be > 0");
+      }
+      if (line.unitPrice().signum() < 0) {
+        throw new ValidationException("lines[" + i + "].unit_price must be >= 0");
+      }
+      if (line.taxRate().signum() < 0) {
+        throw new ValidationException("lines[" + i + "].tax_rate must be >= 0");
+      }
+    }
   }
 
   /**
