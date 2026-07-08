@@ -128,6 +128,35 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
   }
 
   @Override
+  public List<SalesInvoice> list(UUID orgId, InvoiceStatus status, int offset, int limit) {
+    var query = dsl.selectFrom(SALES_INVOICE).where(conditions(orgId, status));
+    // Queue vs ledger: a status filter is a worklist — oldest first (ISSUED = collect the money
+    // first); no filter is the audit ledger — newest first. Mirrors RefundRepositoryImpl#list.
+    var ordered =
+        status != null
+            ? query.orderBy(SALES_INVOICE.CREATED_AT.asc(), SALES_INVOICE.ID.asc())
+            : query.orderBy(SALES_INVOICE.CREATED_AT.desc(), SALES_INVOICE.ID.desc());
+    return ordered.offset(offset).limit(limit).fetch().map(this::toInvoice);
+  }
+
+  @Override
+  public long count(UUID orgId, InvoiceStatus status) {
+    return dsl.fetchCount(dsl.selectFrom(SALES_INVOICE).where(conditions(orgId, status)));
+  }
+
+  private static org.jooq.Condition conditions(UUID orgId, InvoiceStatus status) {
+    org.jooq.Condition c = SALES_INVOICE.ORG_ID.eq(orgId);
+    if (status != null) {
+      c =
+          c.and(
+              SALES_INVOICE.STATUS.eq(
+                  com.loai.inventory.repository.generated.enums.InvoiceStatus.valueOf(
+                      status.name())));
+    }
+    return c;
+  }
+
+  @Override
   public void updatePaymentState(SalesInvoice invoice) {
     dsl.update(SALES_INVOICE)
         .set(

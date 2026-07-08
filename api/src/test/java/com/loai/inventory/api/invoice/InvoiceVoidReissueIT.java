@@ -318,6 +318,59 @@ class InvoiceVoidReissueIT {
     assertEquals("ISSUED", invoiceStatus(f.invoiceId)); // untouched — guard ran before the void
   }
 
+  /**
+   * A bad corrected line is a 400 ValidationException, not a 500 — the per-line guard runs before
+   * the void, so a non-positive quantity / missing or negative price / negative tax never reaches
+   * {@code SalesInvoiceLine.create}'s IllegalArgumentException or the DB CHECK (G2).
+   */
+  @Test
+  void reissue_rejectsBadLines_beforeVoiding() {
+    Fixture f = deliverUnpaidInvoice("100.00");
+
+    assertThrows(
+        ValidationException.class,
+        () ->
+            invoiceAdminService.reissue(
+                f.org,
+                f.invoiceId,
+                "bad qty",
+                List.of(
+                    new ReissueLine(
+                        f.productId, "x", 0, new BigDecimal("1.00"), BigDecimal.ZERO))));
+    assertThrows(
+        ValidationException.class,
+        () ->
+            invoiceAdminService.reissue(
+                f.org,
+                f.invoiceId,
+                "missing price",
+                List.of(new ReissueLine(f.productId, "x", 1, null, BigDecimal.ZERO))));
+    assertThrows(
+        ValidationException.class,
+        () ->
+            invoiceAdminService.reissue(
+                f.org,
+                f.invoiceId,
+                "negative price",
+                List.of(
+                    new ReissueLine(
+                        f.productId, "x", 1, new BigDecimal("-1.00"), BigDecimal.ZERO))));
+    assertThrows(
+        ValidationException.class,
+        () ->
+            invoiceAdminService.reissue(
+                f.org,
+                f.invoiceId,
+                "negative tax",
+                List.of(
+                    new ReissueLine(
+                        f.productId, "x", 1, new BigDecimal("1.00"), new BigDecimal("-0.1")))));
+
+    // Every rejection ran before the void — the original invoice is untouched.
+    assertEquals("ISSUED", invoiceStatus(f.invoiceId));
+    assertEquals(1, invoiceCountForFulfillment(f.fulfillmentId));
+  }
+
   /** Reissue is rejected on a paid invoice, same as void. */
   @Test
   void reissue_rejectedWhenInvoiceHasAllocations() {
