@@ -9,6 +9,7 @@ import com.loai.inventory.domain.model.StockReason;
 import com.loai.inventory.domain.repository.InventoryLogRepository;
 import com.loai.inventory.repository.generated.tables.records.InventoryLogRecord;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.slf4j.Logger;
@@ -35,26 +36,17 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
       ActorContext actor) {
 
     InventoryLogRecord record =
-        dsl.insertInto(INVENTORY_LOG)
-            .set(INVENTORY_LOG.ORG_ID, orgId)
-            .set(INVENTORY_LOG.PRODUCT_ID, productId)
-            .set(INVENTORY_LOG.STOCK_DELTA, stockDelta)
-            .set(INVENTORY_LOG.RESERVED_DELTA, reservedDelta)
-            .set(INVENTORY_LOG.STOCK_AFTER, stockAfter)
-            .set(INVENTORY_LOG.RESERVED_AFTER, reservedAfter)
-            .set(
-                INVENTORY_LOG.REASON,
-                com.loai.inventory.repository.generated.enums.StockReason.lookupLiteral(
-                    reason.name()))
-            .set(INVENTORY_LOG.ORDER_ID, orderId)
-            .set(INVENTORY_LOG.ACTOR_ID, actor != null ? actor.actorId() : null)
-            .set(
-                INVENTORY_LOG.ACTOR_TYPE,
-                actor != null
-                    ? com.loai.inventory.repository.generated.enums.ActorType.lookupLiteral(
-                        actor.actorType().name())
-                    : null)
-            .set(INVENTORY_LOG.IMPERSONATOR_ID, actor != null ? actor.impersonatorId() : null)
+        baseInsert(
+                orgId,
+                productId,
+                stockDelta,
+                reservedDelta,
+                stockAfter,
+                reservedAfter,
+                reason,
+                orderId,
+                actor,
+                null)
             .returning()
             .fetchOne();
 
@@ -70,6 +62,82 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
         stockDelta,
         reservedDelta);
     return toInventoryLog(record);
+  }
+
+  @Override
+  public Optional<InventoryLog> insertIdempotent(
+      UUID orgId,
+      UUID productId,
+      int stockDelta,
+      int reservedDelta,
+      int stockAfter,
+      int reservedAfter,
+      StockReason reason,
+      UUID orderId,
+      ActorContext actor,
+      String idempotencyKey) {
+    // The ledger insert IS the idempotency claim: ON CONFLICT (org_id, idempotency_key) DO NOTHING.
+    // A returned record means we won the claim (first use); empty means the key was already
+    // recorded
+    // (a replay) — the caller then fingerprint-checks and skips the stock move.
+    InventoryLogRecord record =
+        baseInsert(
+                orgId,
+                productId,
+                stockDelta,
+                reservedDelta,
+                stockAfter,
+                reservedAfter,
+                reason,
+                orderId,
+                actor,
+                idempotencyKey)
+            .onConflictDoNothing()
+            .returning()
+            .fetchOne();
+    return Optional.ofNullable(record).map(this::toInventoryLog);
+  }
+
+  @Override
+  public Optional<InventoryLog> findByIdempotencyKey(UUID orgId, String idempotencyKey) {
+    return dsl.selectFrom(INVENTORY_LOG)
+        .where(INVENTORY_LOG.ORG_ID.eq(orgId).and(INVENTORY_LOG.IDEMPOTENCY_KEY.eq(idempotencyKey)))
+        .fetchOptional()
+        .map(this::toInventoryLog);
+  }
+
+  /** Shared column binding for both the plain and idempotent inserts. */
+  private org.jooq.InsertSetMoreStep<InventoryLogRecord> baseInsert(
+      UUID orgId,
+      UUID productId,
+      int stockDelta,
+      int reservedDelta,
+      int stockAfter,
+      int reservedAfter,
+      StockReason reason,
+      UUID orderId,
+      ActorContext actor,
+      String idempotencyKey) {
+    return dsl.insertInto(INVENTORY_LOG)
+        .set(INVENTORY_LOG.ORG_ID, orgId)
+        .set(INVENTORY_LOG.PRODUCT_ID, productId)
+        .set(INVENTORY_LOG.STOCK_DELTA, stockDelta)
+        .set(INVENTORY_LOG.RESERVED_DELTA, reservedDelta)
+        .set(INVENTORY_LOG.STOCK_AFTER, stockAfter)
+        .set(INVENTORY_LOG.RESERVED_AFTER, reservedAfter)
+        .set(
+            INVENTORY_LOG.REASON,
+            com.loai.inventory.repository.generated.enums.StockReason.lookupLiteral(reason.name()))
+        .set(INVENTORY_LOG.ORDER_ID, orderId)
+        .set(INVENTORY_LOG.ACTOR_ID, actor != null ? actor.actorId() : null)
+        .set(
+            INVENTORY_LOG.ACTOR_TYPE,
+            actor != null
+                ? com.loai.inventory.repository.generated.enums.ActorType.lookupLiteral(
+                    actor.actorType().name())
+                : null)
+        .set(INVENTORY_LOG.IMPERSONATOR_ID, actor != null ? actor.impersonatorId() : null)
+        .set(INVENTORY_LOG.IDEMPOTENCY_KEY, idempotencyKey);
   }
 
   @Override

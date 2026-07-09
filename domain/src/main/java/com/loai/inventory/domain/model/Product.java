@@ -11,6 +11,7 @@ public class Product {
   private String description;
   private BigDecimal basePrice;
   private String sku;
+  private String barcode;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -23,6 +24,7 @@ public class Product {
       String description,
       BigDecimal basePrice,
       String sku,
+      String barcode,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {
     this.id = id;
@@ -31,6 +33,7 @@ public class Product {
     this.description = description;
     this.basePrice = basePrice;
     this.sku = sku;
+    this.barcode = barcode;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;
   }
@@ -81,6 +84,14 @@ public class Product {
 
   public void setSku(String sku) {
     this.sku = sku;
+  }
+
+  public String getBarcode() {
+    return barcode;
+  }
+
+  public void setBarcode(String barcode) {
+    this.barcode = barcode;
   }
 
   public OffsetDateTime getCreatedAt() {

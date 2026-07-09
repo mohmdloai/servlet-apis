@@ -69,6 +69,15 @@ public class ProductHandler implements OrgResourceHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
 
     if (productId == null) {
+      // ?barcode= — the scanner's exact-lookup seam (FLOW.md §3 step 1). Mirrors the
+      // ?order_number= single-object convention on SalesOrderHandler: a non-blank param resolves to
+      // one product (or 404); a bare GET returns the paged list.
+      String barcode = req.getParameter("barcode");
+      if (barcode != null && !barcode.isBlank()) {
+        Product product = productService.getByBarcode(orgId, barcode);
+        writeJson(resp, 200, ProductResponse.from(product));
+        return;
+      }
       int page = intParam(req, "page", 0);
       int size = intParam(req, "size", 10);
       List<Product> products = productService.getAll(orgId, page, size);
@@ -91,7 +100,12 @@ public class ProductHandler implements OrgResourceHandler {
     CreateProductRequest body = readBody(req, CreateProductRequest.class);
     Product created =
         productService.create(
-            orgId, body.getName(), body.getDescription(), body.getBasePrice(), body.getSku());
+            orgId,
+            body.getName(),
+            body.getDescription(),
+            body.getBasePrice(),
+            body.getSku(),
+            body.getBarcode());
     writeJson(resp, 201, ProductResponse.from(created));
   }
 
@@ -110,7 +124,8 @@ public class ProductHandler implements OrgResourceHandler {
             body.getName(),
             body.getDescription(),
             body.getBasePrice(),
-            body.getSku());
+            body.getSku(),
+            body.getBarcode());
     writeJson(resp, 200, ProductResponse.from(updated));
   }
 
