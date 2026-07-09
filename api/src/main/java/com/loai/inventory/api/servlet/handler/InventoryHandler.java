@@ -195,7 +195,9 @@ public class InventoryHandler implements OrgResourceHandler {
           case "release" -> inventoryService.release(orgId, path.productId, body.getQty(), actor);
           case "confirm-sale" ->
               inventoryService.confirmSale(orgId, path.productId, body.getQty(), actor);
-          case "restock" -> inventoryService.restock(orgId, path.productId, body.getQty(), actor);
+          case "restock" ->
+              inventoryService.restock(
+                  orgId, path.productId, body.getQty(), actor, req.getHeader("Idempotency-Key"));
           case "adjust" -> inventoryService.adjust(orgId, path.productId, body.getQty(), actor);
           default -> throw new ValidationException("Unknown action: " + path.action);
         };

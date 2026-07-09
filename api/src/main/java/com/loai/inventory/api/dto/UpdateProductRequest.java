@@ -9,6 +9,7 @@ public class UpdateProductRequest {
   private String description;
   private BigDecimal basePrice;
   private String sku;
+  private String barcode;
 
   public UpdateProductRequest() {}
 
@@ -28,6 +29,10 @@ public class UpdateProductRequest {
     return sku;
   }
 
+  public String getBarcode() {
+    return barcode;
+  }
+
   public void setName(String name) {
     this.name = name;
   }
@@ -42,5 +47,9 @@ public class UpdateProductRequest {
 
   public void setSku(String sku) {
     this.sku = sku;
+  }
+
+  public void setBarcode(String barcode) {
+    this.barcode = barcode;
   }
 }

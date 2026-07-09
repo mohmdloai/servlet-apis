@@ -22,6 +22,7 @@ import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -324,7 +325,22 @@ public class InventoryService {
   }
 
   public Inventory restock(UUID orgId, UUID productId, int qty, ActorContext actor) {
+    return restock(orgId, productId, qty, actor, null);
+  }
+
+  /**
+   * Restock, optionally idempotent. When {@code idempotencyKey} is non-blank, the {@code +stock} is
+   * applied at most once per {@code (org, key)}: the first call records the key and increments; a
+   * replay (same key) finds the key already recorded, skips the increment, and returns the
+   * already-applied state. This is the seam the deferred offline stock-take queue replays against
+   * (backend story {@code product_barcode_lookup.md} §Idempotent restock). A {@code null}/blank key
+   * is today's every-call-applies behaviour.
+   */
+  public Inventory restock(
+      UUID orgId, UUID productId, int qty, ActorContext actor, String idempotencyKey) {
     validateQty(qty, "restock");
+    String key =
+        (idempotencyKey == null || idempotencyKey.isBlank()) ? null : idempotencyKey.trim();
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -332,21 +348,72 @@ public class InventoryService {
           InventoryRepository repo = repoFactory.create(txDsl);
           InventoryLogRepository logRepo = logRepoFactory.create(txDsl);
 
-          Inventory current = findOrThrow(repo, orgId, productId);
-          Inventory updated = repo.adjustQuantities(orgId, productId, qty, 0, current.getVersion());
+          // Lock the inventory row FOR UPDATE first (single-row, deadlock-safe): serialises
+          // concurrent restocks of this product and yields current qty/version. 404 if untracked.
+          Inventory current = repo.lockForUpdate(orgId, List.of(productId)).get(productId);
+          if (current == null) {
+            throw new NotFoundException("Inventory", productId);
+          }
 
-          logRepo.insert(
-              orgId,
-              productId,
-              qty,
-              0,
-              updated.getStockQty(),
-              updated.getReservedQty(),
-              StockReason.RESTOCK,
-              null,
-              actor);
+          // Non-idempotent (no key): today's behaviour — apply, then append the ledger row.
+          if (key == null) {
+            Inventory updated =
+                repo.adjustQuantities(orgId, productId, qty, 0, current.getVersion());
+            logRepo.insert(
+                orgId,
+                productId,
+                qty,
+                0,
+                updated.getStockQty(),
+                updated.getReservedQty(),
+                StockReason.RESTOCK,
+                null,
+                actor);
+            return updated;
+          }
 
-          return updated;
+          // Idempotent: the ledger insert IS the claim (ON CONFLICT DO NOTHING). stock_after is
+          // known
+          // from the locked read, so the log is written before the mutation — still one atomic txn.
+          int stockAfter = current.getStockQty() + qty;
+          Optional<InventoryLog> claimed =
+              logRepo.insertIdempotent(
+                  orgId,
+                  productId,
+                  qty,
+                  0,
+                  stockAfter,
+                  current.getReservedQty(),
+                  StockReason.RESTOCK,
+                  null,
+                  actor,
+                  key);
+
+          if (claimed.isEmpty()) {
+            // Replay: the key was already recorded. Fingerprint the original request — a key reused
+            // with a different qty/product is a client bug, surfaced as 409, not silently
+            // swallowed.
+            InventoryLog prior =
+                logRepo
+                    .findByIdempotencyKey(orgId, key)
+                    .orElseThrow(
+                        () -> new IllegalStateException("idempotency key vanished: " + key));
+            if (prior.getStockDelta() != qty || !prior.getProductId().equals(productId)) {
+              throw new ConflictException(
+                  "Idempotency-Key reused with different parameters: " + key);
+            }
+            log.info(
+                "Restock replay ignored (idempotency key already applied) orgId={} productId={}"
+                    + " key={}",
+                orgId,
+                productId,
+                key);
+            // The locked read already reflects the original (committed) +stock.
+            return current;
+          }
+
+          // Won the claim → apply the +stock (version matches; we hold the row lock).
+          return repo.adjustQuantities(orgId, productId, qty, 0, current.getVersion());
         });
   }
 

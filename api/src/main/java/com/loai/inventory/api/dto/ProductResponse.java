@@ -13,6 +13,7 @@ public class ProductResponse {
   private String description;
   private BigDecimal basePrice;
   private String sku;
+  private String barcode;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -26,6 +27,7 @@ public class ProductResponse {
     r.description = p.getDescription();
     r.basePrice = p.getBasePrice();
     r.sku = p.getSku();
+    r.barcode = p.getBarcode();
     r.createdAt = p.getCreatedAt();
     r.updatedAt = p.getUpdatedAt();
     return r;
@@ -53,6 +55,10 @@ public class ProductResponse {
 
   public String getSku() {
     return sku;
+  }
+
+  public String getBarcode() {
+    return barcode;
   }
 
   public OffsetDateTime getCreatedAt() {

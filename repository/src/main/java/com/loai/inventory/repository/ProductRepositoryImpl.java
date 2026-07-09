@@ -33,6 +33,14 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   @Override
+  public Optional<Product> findByBarcode(UUID orgId, String barcode) {
+    return dsl.selectFrom(PRODUCT)
+        .where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.BARCODE.eq(barcode)))
+        .fetchOptional()
+        .map(this::toProduct);
+  }
+
+  @Override
   public List<Product> findAll(UUID orgId, int offset, int limit) {
     return dsl.selectFrom(PRODUCT)
         .where(PRODUCT.ORG_ID.eq(orgId))
@@ -75,6 +83,27 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   @Override
+  public boolean existsByBarcode(UUID orgId, String barcode) {
+    return dsl.fetchExists(
+        dsl.selectOne()
+            .from(PRODUCT)
+            .where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.BARCODE.eq(barcode))));
+  }
+
+  @Override
+  public boolean existsByBarcodeAndIdNot(UUID orgId, String barcode, UUID excludeId) {
+    return dsl.fetchExists(
+        dsl.selectOne()
+            .from(PRODUCT)
+            .where(
+                PRODUCT
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(PRODUCT.BARCODE.eq(barcode))
+                    .and(PRODUCT.ID.ne(excludeId))));
+  }
+
+  @Override
   public Product insert(Product product) {
     ProductRecord record =
         dsl.insertInto(PRODUCT)
@@ -83,6 +112,7 @@ public class ProductRepositoryImpl implements ProductRepository {
             .set(PRODUCT.DESCRIPTION, product.getDescription())
             .set(PRODUCT.BASE_PRICE, product.getBasePrice())
             .set(PRODUCT.SKU, product.getSku())
+            .set(PRODUCT.BARCODE, product.getBarcode())
             .returning()
             .fetchOne();
 
@@ -106,6 +136,7 @@ public class ProductRepositoryImpl implements ProductRepository {
             .set(PRODUCT.DESCRIPTION, product.getDescription())
             .set(PRODUCT.BASE_PRICE, product.getBasePrice())
             .set(PRODUCT.SKU, product.getSku())
+            .set(PRODUCT.BARCODE, product.getBarcode())
             .set(PRODUCT.UPDATED_AT, OffsetDateTime.now())
             .where(PRODUCT.ORG_ID.eq(product.getOrgId()).and(PRODUCT.ID.eq(product.getId())))
             .returning()
@@ -137,6 +168,7 @@ public class ProductRepositoryImpl implements ProductRepository {
         r.getDescription(),
         r.getBasePrice(),
         r.getSku(),
+        r.getBarcode(),
         r.getCreatedAt(),
         r.getUpdatedAt());
   }
