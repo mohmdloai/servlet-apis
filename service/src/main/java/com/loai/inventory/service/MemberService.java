@@ -40,9 +40,27 @@ public class MemberService {
     this.authService = authService;
   }
 
+  public static final int DEFAULT_PAGE_SIZE = 20;
+  public static final int MAX_PAGE_SIZE = 100;
+
+  /** One page of the org's team plus the distinct-member total. */
+  public record MemberPage(List<OrgMember> items, long total) {}
+
   /** The org's team, each member with their aggregated role set. Email order. */
   public List<OrgMember> listMembers(UUID orgId) {
     return userRepoFactory.create(dsl).findMembers(orgId);
+  }
+
+  /**
+   * One page of the org's team (email order) plus the total, so the roster tile reads its count as
+   * {@code total} instead of loading every row. {@code page} floors at 0, {@code size} clamps to
+   * {@code [1, MAX_PAGE_SIZE]}. See {@code stories/org_health_rollup.md}.
+   */
+  public MemberPage listMembers(UUID orgId, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    UserRepository repo = userRepoFactory.create(dsl);
+    return new MemberPage(repo.findMembers(orgId, p * s, s), repo.countMembers(orgId));
   }
 
   /**

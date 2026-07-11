@@ -76,6 +76,7 @@ import com.loai.inventory.service.NotificationService;
 import com.loai.inventory.service.NumberSequenceReconciliationService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderExpiryService;
+import com.loai.inventory.service.OrgHealthService;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.PaymentDisputeService;
 import com.loai.inventory.service.PaymentService;
@@ -172,6 +173,7 @@ public class AppConfig {
   public final AuthMailer authMailer;
   public final AccountService accountService;
   public final OrgService orgService;
+  public final OrgHealthService orgHealthService;
   public final MemberService memberService;
   public final PlatformAuditService platformAuditService;
   public final OrgStatusService orgStatusService;
@@ -286,6 +288,7 @@ public class AppConfig {
             authMailer,
             authService);
     this.orgService = new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory);
+    this.orgHealthService = new OrgHealthService(orgHealthRepository);
     this.memberService = new MemberService(dsl, userRepositoryFactory, authService);
     this.platformAuditService = new PlatformAuditService(dsl, platformAuditRepositoryFactory);
     this.orgStatusService = new OrgStatusService(jedisPool, dsl, orgRepositoryFactory);

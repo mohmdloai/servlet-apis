@@ -57,6 +57,16 @@ public interface UserRepository {
   List<OrgMember> findMembers(UUID orgId);
 
   /**
+   * One page of {@code orgId}'s members, ordered by email — paginated over <em>distinct users</em>
+   * (a member with several roles is one row, never split across a page boundary). Backs the
+   * paginated {@code GET /api/orgs/{orgId}/members} ({@code stories/org_health_rollup.md}).
+   */
+  List<OrgMember> findMembers(UUID orgId, int offset, int limit);
+
+  /** Distinct member count for {@code orgId} — the {@code total} for the paginated roster. */
+  long countMembers(UUID orgId);
+
+  /**
    * The roles {@code userId} holds in {@code orgId} (empty ⇒ not a member). Used to decide whether
    * a PUT edits an existing member and whether a change is a demotion.
    */

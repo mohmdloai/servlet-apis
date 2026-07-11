@@ -202,9 +202,45 @@ public final class UserRepositoryImpl implements UserRepository {
 
   @Override
   public List<OrgMember> findMembers(UUID orgId) {
-    // Small result set (an org team), so we fetch (user, role) rows and group in Java rather than
-    // wrestle array_agg of the generated enum. Ordered by email — the roster's stable display
-    // order.
+    return membersWhere(USER_ORG_ROLE.ORG_ID.eq(orgId));
+  }
+
+  @Override
+  public List<OrgMember> findMembers(UUID orgId, int offset, int limit) {
+    // Page over DISTINCT users first — a member holding several roles is one roster entry and must
+    // never be split across a page boundary. Then load the (user, role) rows for just that page and
+    // group them the same way as the unpaged read.
+    List<UUID> pageUserIds =
+        dsl.select(APP_USER.ID)
+            .from(USER_ORG_ROLE)
+            .join(APP_USER)
+            .on(APP_USER.ID.eq(USER_ORG_ROLE.USER_ID))
+            .where(USER_ORG_ROLE.ORG_ID.eq(orgId))
+            .groupBy(APP_USER.ID, APP_USER.EMAIL)
+            .orderBy(APP_USER.EMAIL.asc())
+            .offset(offset)
+            .limit(limit)
+            .fetch(APP_USER.ID);
+    if (pageUserIds.isEmpty()) {
+      return List.of();
+    }
+    return membersWhere(USER_ORG_ROLE.ORG_ID.eq(orgId).and(APP_USER.ID.in(pageUserIds)));
+  }
+
+  @Override
+  public long countMembers(UUID orgId) {
+    return dsl.fetchCount(
+        dsl.selectDistinct(USER_ORG_ROLE.USER_ID)
+            .from(USER_ORG_ROLE)
+            .where(USER_ORG_ROLE.ORG_ID.eq(orgId)));
+  }
+
+  /**
+   * Assemble the OrgMember roster for the given membership predicate. Small result set (an org
+   * team), so we fetch (user, role) rows and group in Java rather than wrestle array_agg of the
+   * generated enum. Ordered by email — the roster's stable display order.
+   */
+  private List<OrgMember> membersWhere(org.jooq.Condition where) {
     Map<UUID, OrgMemberAccumulator> byUser = new LinkedHashMap<>();
     dsl.select(
             APP_USER.ID,
@@ -216,7 +252,7 @@ public final class UserRepositoryImpl implements UserRepository {
         .from(USER_ORG_ROLE)
         .join(APP_USER)
         .on(APP_USER.ID.eq(USER_ORG_ROLE.USER_ID))
-        .where(USER_ORG_ROLE.ORG_ID.eq(orgId))
+        .where(where)
         .orderBy(APP_USER.EMAIL.asc())
         .fetch()
         .forEach(

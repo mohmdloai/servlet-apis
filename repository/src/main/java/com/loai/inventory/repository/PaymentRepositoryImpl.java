@@ -105,6 +105,42 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
   }
 
   @Override
+  public List<Payment> list(
+      UUID orgId, PaymentStatus status, boolean unallocatedOnly, int offset, int limit) {
+    var query = dsl.selectFrom(PAYMENT).where(conditions(orgId, status, unallocatedOnly));
+    // Queue vs ledger: a filter is a worklist (oldest-first, the allocation FIFO); the bare list is
+    // the ledger (newest-first). Mirrors RefundRepositoryImpl / SalesInvoiceRepositoryImpl#list.
+    boolean filtered = status != null || unallocatedOnly;
+    var ordered =
+        filtered
+            ? query.orderBy(PAYMENT.RECEIVED_AT.asc(), PAYMENT.ID.asc())
+            : query.orderBy(PAYMENT.RECEIVED_AT.desc(), PAYMENT.ID.desc());
+    return ordered.offset(offset).limit(limit).fetch().map(this::toPayment);
+  }
+
+  @Override
+  public long count(UUID orgId, PaymentStatus status, boolean unallocatedOnly) {
+    return dsl.fetchCount(
+        dsl.selectFrom(PAYMENT).where(conditions(orgId, status, unallocatedOnly)));
+  }
+
+  private static org.jooq.Condition conditions(
+      UUID orgId, PaymentStatus status, boolean unallocatedOnly) {
+    org.jooq.Condition c = PAYMENT.ORG_ID.eq(orgId);
+    if (status != null) {
+      c =
+          c.and(
+              PAYMENT.STATUS.eq(
+                  com.loai.inventory.repository.generated.enums.PaymentStatus.valueOf(
+                      status.name())));
+    }
+    if (unallocatedOnly) {
+      c = c.and(PAYMENT.UNALLOCATED_AMOUNT.gt(java.math.BigDecimal.ZERO));
+    }
+    return c;
+  }
+
+  @Override
   public List<Payment> findUnallocatedByOrderForUpdate(UUID orgId, UUID salesOrderId) {
     return dsl.selectFrom(PAYMENT)
         .where(

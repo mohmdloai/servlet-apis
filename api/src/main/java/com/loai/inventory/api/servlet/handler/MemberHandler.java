@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.AddMemberRequest;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.MemberResponse;
+import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.SetMemberRoleRequest;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
@@ -11,6 +12,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgMember;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.service.MemberService;
+import com.loai.inventory.service.MemberService.MemberPage;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -68,9 +70,16 @@ public class MemberHandler implements OrgResourceHandler {
     if (userId != null) {
       throw new ValidationException("Member detail by id is not supported; read the roster");
     }
-    List<MemberResponse> data =
-        memberService.listMembers(orgId).stream().map(MemberResponse::from).toList();
-    writeJson(resp, 200, data);
+    // Paginated envelope ({data, total, page, size}) so the roster tile reads its count as `total`
+    // rather than loading the whole team — see stories/org_health_rollup.md (G4).
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", MemberService.DEFAULT_PAGE_SIZE), 1),
+            MemberService.MAX_PAGE_SIZE);
+    MemberPage result = memberService.listMembers(orgId, page, size);
+    List<MemberResponse> data = result.items().stream().map(MemberResponse::from).toList();
+    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
   }
 
   private void doPost(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID userId)
@@ -125,6 +134,18 @@ public class MemberHandler implements OrgResourceHandler {
       return UUID.fromString(raw);
     } catch (IllegalArgumentException e) {
       throw new ValidationException("Invalid user id format: " + raw);
+    }
+  }
+
+  private static int intParam(HttpServletRequest req, String name, int defaultValue) {
+    String value = req.getParameter(name);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new ValidationException("Parameter '" + name + "' must be an integer");
     }
   }
 

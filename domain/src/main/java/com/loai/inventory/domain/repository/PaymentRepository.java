@@ -1,6 +1,7 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Payment;
+import com.loai.inventory.domain.model.PaymentStatus;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +40,23 @@ public interface PaymentRepository {
    * story.
    */
   List<Payment> findByOrderId(UUID orgId, UUID salesOrderId);
+
+  /**
+   * The org's payments, optionally narrowed by {@code status} (null = any) and to those still
+   * carrying an unallocated balance ({@code unallocatedOnly} → {@code unallocated_amount > 0}) —
+   * one page of the tenant's payments worklist / ledger ({@code stories/org_health_rollup.md}).
+   * Queue-vs-ledger ordering like the other lists: a filter present → oldest-first ({@code
+   * received_at ASC, id ASC}, the allocation FIFO); no filter → newest-first ({@code received_at
+   * DESC, id DESC}). {@code status=DISPUTED} backs the disputes preview, {@code unallocatedOnly}
+   * the unallocated preview — the exact predicates behind the health rollup's counts.
+   */
+  List<Payment> list(
+      UUID orgId, PaymentStatus status, boolean unallocatedOnly, int offset, int limit);
+
+  /**
+   * Total matching {@link #list} under the same {@code status} / {@code unallocatedOnly} filter.
+   */
+  long count(UUID orgId, PaymentStatus status, boolean unallocatedOnly);
 
   /**
    * Batch projection {@code payment id → sales_order_id} for the given payments, scoped to {@code
