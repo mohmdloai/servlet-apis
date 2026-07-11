@@ -50,14 +50,18 @@ public class ProductService {
         .orElseThrow(() -> new NotFoundException("Product not found for barcode: " + normalized));
   }
 
-  public List<Product> getAll(UUID orgId, int page, int size) {
+  /**
+   * Paged product list, optionally narrowed by a name/SKU search term {@code q} (the POS "search to
+   * add" picker). A blank/{@code null} {@code q} returns the whole list — the pre-search behaviour.
+   */
+  public List<Product> getAll(UUID orgId, String q, int page, int size) {
     if (page < 0) throw new ValidationException("page must be >= 0");
     if (size < 1 || size > 100) throw new ValidationException("size must be 1-100");
-    return repo.findAll(orgId, page * size, size);
+    return repo.findAll(orgId, q, page * size, size);
   }
 
-  public long count(UUID orgId) {
-    return repo.count(orgId);
+  public long count(UUID orgId, String q) {
+    return repo.count(orgId, q);
   }
 
   // ── Commands

@@ -78,10 +78,13 @@ public class ProductHandler implements OrgResourceHandler {
         writeJson(resp, 200, ProductResponse.from(product));
         return;
       }
+      // ?q= — optional case-insensitive name/SKU search (the POS "search to add" picker). Absent/
+      // blank ⇒ the whole paged list, unchanged. Mirrors the /inventory overview's q convention.
+      String q = req.getParameter("q");
       int page = intParam(req, "page", 0);
       int size = intParam(req, "size", 10);
-      List<Product> products = productService.getAll(orgId, page, size);
-      long total = productService.count(orgId);
+      List<Product> products = productService.getAll(orgId, q, page, size);
+      long total = productService.count(orgId, q);
       List<ProductResponse> data = products.stream().map(ProductResponse::from).toList();
       writeJson(resp, 200, new PageResponse<>(data, total, page, size));
     } else {

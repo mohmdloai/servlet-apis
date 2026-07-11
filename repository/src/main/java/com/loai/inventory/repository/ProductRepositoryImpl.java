@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.jooq.Condition;
 import org.jooq.DSLContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,9 +42,9 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   @Override
-  public List<Product> findAll(UUID orgId, int offset, int limit) {
+  public List<Product> findAll(UUID orgId, String q, int offset, int limit) {
     return dsl.selectFrom(PRODUCT)
-        .where(PRODUCT.ORG_ID.eq(orgId))
+        .where(searchCondition(orgId, q))
         .orderBy(PRODUCT.CREATED_AT.desc())
         .offset(offset)
         .limit(limit)
@@ -63,8 +64,23 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   @Override
-  public long count(UUID orgId) {
-    return dsl.fetchCount(dsl.selectFrom(PRODUCT).where(PRODUCT.ORG_ID.eq(orgId)));
+  public long count(UUID orgId, String q) {
+    return dsl.fetchCount(dsl.selectFrom(PRODUCT).where(searchCondition(orgId, q)));
+  }
+
+  /**
+   * Shared filter for {@link #findAll} / {@link #count}: always org-scoped, plus an optional
+   * case-insensitive name/SKU substring match when {@code q} is non-blank. {@code
+   * containsIgnoreCase} escapes LIKE metacharacters, so a term with {@code %} or {@code _} matches
+   * literally. Mirrors {@code InventoryRepositoryImpl.overviewConditions}.
+   */
+  private Condition searchCondition(UUID orgId, String q) {
+    Condition c = PRODUCT.ORG_ID.eq(orgId);
+    if (q != null && !q.isBlank()) {
+      String term = q.trim();
+      c = c.and(PRODUCT.NAME.containsIgnoreCase(term).or(PRODUCT.SKU.containsIgnoreCase(term)));
+    }
+    return c;
   }
 
   @Override
