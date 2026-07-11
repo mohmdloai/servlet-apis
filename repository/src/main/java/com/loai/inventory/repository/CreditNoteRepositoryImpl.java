@@ -175,7 +175,7 @@ public final class CreditNoteRepositoryImpl implements CreditNoteRepository {
   }
 
   @Override
-  public long claimCreditNoteNumber(UUID orgId, int year) {
+  public String claimCreditNoteNumber(UUID orgId, int year) {
     dsl.insertInto(CREDIT_NOTE_NUMBER_COUNTER)
         .columns(
             CREDIT_NOTE_NUMBER_COUNTER.ORG_ID,
@@ -208,7 +208,10 @@ public final class CreditNoteRepositoryImpl implements CreditNoteRepository {
                 .eq(orgId)
                 .and(CREDIT_NOTE_NUMBER_COUNTER.YEAR.eq(year)))
         .execute();
-    return claimed;
+
+    // Format here, not in the caller: the allocator owns both the sequence and the CN-YYYY-NNNN
+    // shape (the repair routine parses the trailing NNNN, so the two must agree).
+    return String.format("CN-%d-%04d", year, claimed);
   }
 
   private CreditNote toCreditNote(CreditNoteRecord r) {

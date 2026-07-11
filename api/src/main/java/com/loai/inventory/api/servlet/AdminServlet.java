@@ -10,6 +10,7 @@ import com.loai.inventory.api.servlet.handler.OrgAdminHandler;
 import com.loai.inventory.api.servlet.handler.UserAdminHandler;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.service.NumberSequenceReconciliationService;
 import com.loai.inventory.service.OrderExpiryService;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -41,6 +42,7 @@ public class AdminServlet extends HttpServlet {
   private static final int DEFAULT_BATCH_LIMIT = 200;
 
   private OrderExpiryService orderExpiryService;
+  private NumberSequenceReconciliationService numberSequenceReconciliationService;
   private Map<String, AdminResourceHandler> resources;
   private ObjectMapper mapper;
 
@@ -49,6 +51,7 @@ public class AdminServlet extends HttpServlet {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.mapper = config.objectMapper;
     this.orderExpiryService = config.orderExpiryService;
+    this.numberSequenceReconciliationService = config.numberSequenceReconciliationService;
     this.resources =
         Map.of(
             "orgs",
@@ -66,6 +69,10 @@ public class AdminServlet extends HttpServlet {
       Route route = parseRoute(req.getPathInfo());
       if ("sweep".equals(route.resource())) {
         handleSweep(req, resp);
+        return;
+      }
+      if ("reconcile-number-sequences".equals(route.resource())) {
+        handleReconcileNumberSequences(req, resp);
         return;
       }
       AdminResourceHandler handler = resources.get(route.resource());
@@ -91,6 +98,23 @@ public class AdminServlet extends HttpServlet {
     AuthzHelper.requireAdmin(req);
     int batchLimit = parseBatchLimit(req.getParameter("batchLimit"));
     OrderExpiryService.Summary summary = orderExpiryService.sweep(batchLimit);
+    writeJson(resp, 200, summary);
+  }
+
+  /**
+   * {@code POST /api/admin/reconcile-number-sequences} — forward-only heal of drifted invoice /
+   * credit-note counters (see {@code stories/number_sequence_integrity.md}). ADMIN only;
+   * idempotent, so a healthy database returns an empty realignment list.
+   */
+  private void handleReconcileNumberSequences(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    if (!"POST".equals(req.getMethod())) {
+      writeJson(resp, 405, ApiError.of(405, "Method not allowed"));
+      return;
+    }
+    AuthzHelper.requireAdmin(req);
+    NumberSequenceReconciliationService.Summary summary =
+        numberSequenceReconciliationService.reconcile();
     writeJson(resp, 200, summary);
   }
 
