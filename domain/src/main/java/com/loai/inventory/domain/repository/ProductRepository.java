@@ -24,9 +24,16 @@ public interface ProductRepository {
    */
   Map<UUID, String> findNamesByIds(UUID orgId, Collection<UUID> ids);
 
-  List<Product> findAll(UUID orgId, int offset, int limit);
+  /**
+   * Paged product list, optionally filtered by a name/SKU search term {@code q} (case-insensitive
+   * substring, either field). A {@code null}/blank {@code q} returns the whole org list — the
+   * pre-search behaviour. Mirrors the {@code /inventory} overview's {@code q} convention so the POS
+   * "search to add" picker can ring up an item whose barcode is missing or unscannable.
+   */
+  List<Product> findAll(UUID orgId, String q, int offset, int limit);
 
-  long count(UUID orgId);
+  /** Row count matching {@link #findAll}'s {@code q} filter (for pagination totals). */
+  long count(UUID orgId, String q);
 
   Product insert(Product product);
 
