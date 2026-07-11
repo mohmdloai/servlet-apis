@@ -195,7 +195,7 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
   }
 
   @Override
-  public long claimInvoiceNumber(UUID orgId, int year) {
+  public String claimInvoiceNumber(UUID orgId, int year) {
     // Ensure the counter row exists without disturbing a concurrent claimant's value.
     dsl.insertInto(INVOICE_NUMBER_COUNTER)
         .columns(
@@ -224,7 +224,10 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
         .set(INVOICE_NUMBER_COUNTER.NEXT_VAL, INVOICE_NUMBER_COUNTER.NEXT_VAL.plus(1))
         .where(INVOICE_NUMBER_COUNTER.ORG_ID.eq(orgId).and(INVOICE_NUMBER_COUNTER.YEAR.eq(year)))
         .execute();
-    return claimed;
+
+    // Format here, not in the caller: the allocator is the sole owner of both the sequence and the
+    // INV-YYYY-NNNN shape (the repair routine parses the trailing NNNN, so the two must agree).
+    return String.format("INV-%d-%04d", year, claimed);
   }
 
   private SalesInvoice toInvoice(SalesInvoiceRecord r) {

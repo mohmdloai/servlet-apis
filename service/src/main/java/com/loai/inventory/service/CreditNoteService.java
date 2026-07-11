@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.jooq.DSLContext;
+import org.jooq.exception.DataAccessException;
 import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,12 @@ import org.slf4j.LoggerFactory;
 public final class CreditNoteService {
 
   private static final Logger log = LoggerFactory.getLogger(CreditNoteService.class);
+
+  /**
+   * Postgres-named unique index behind {@code UNIQUE (org_id, credit_note_number)} on credit_note.
+   */
+  private static final String CREDIT_NOTE_NUMBER_CONSTRAINT =
+      "credit_note_org_id_credit_note_number_key";
 
   private final DSLContext rootDsl;
   private final CreditNoteRepositoryFactory creditNoteRepoFactory;
@@ -170,9 +177,23 @@ public final class CreditNoteService {
                   now);
 
           int year = now.getYear();
-          long seq = creditNoteRepo.claimCreditNoteNumber(orgId, year);
-          note.issue(String.format("CN-%d-%04d", year, seq), now);
-          creditNoteRepo.insert(note, lines);
+          // The allocator is the single owner of the number: it both claims the gapless sequence
+          // and formats CN-YYYY-NNNN. This service never constructs a credit-note number itself.
+          String creditNoteNumber = creditNoteRepo.claimCreditNoteNumber(orgId, year);
+          note.issue(creditNoteNumber, now);
+          try {
+            creditNoteRepo.insert(note, lines);
+          } catch (DataAccessException e) {
+            // Same drift hazard as invoices: if credit_note_number_counter trails the credit_note
+            // table, the minted number is already taken and the (org_id, credit_note_number) unique
+            // index rejects the insert. Map it to a 409 that names the remedy, not an "Unexpected
+            // error" 500. Narrowed to the number constraint; any other violation still bubbles.
+            if (NumberSequenceConflicts.isUniqueViolationOn(e, CREDIT_NOTE_NUMBER_CONSTRAINT)) {
+              throw new ConflictException(
+                  "Credit-note number sequence is out of sync — contact support.");
+            }
+            throw e;
+          }
 
           log.info(
               "Issued credit note {} (id={}) orgId={} invoice={} reason={} total={}",

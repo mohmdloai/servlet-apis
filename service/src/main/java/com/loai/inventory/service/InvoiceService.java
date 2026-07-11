@@ -1,5 +1,6 @@
 package com.loai.inventory.service;
 
+import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
@@ -18,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
+import org.jooq.exception.DataAccessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,6 +47,11 @@ import org.slf4j.LoggerFactory;
 public final class InvoiceService {
 
   private static final Logger log = LoggerFactory.getLogger(InvoiceService.class);
+
+  /**
+   * Postgres-named unique index behind {@code UNIQUE (org_id, invoice_number)} on sales_invoice.
+   */
+  private static final String INVOICE_NUMBER_CONSTRAINT = "sales_invoice_org_id_invoice_number_key";
 
   private final SalesInvoiceRepositoryFactory invoiceRepoFactory;
   private final PaymentRepositoryFactory paymentRepoFactory;
@@ -157,9 +164,24 @@ public final class InvoiceService {
             now);
 
     int year = now.getYear();
-    long seq = invoiceRepo.claimInvoiceNumber(orgId, year);
-    invoice.issue(String.format("INV-%d-%04d", year, seq), now);
-    invoiceRepo.insert(invoice, invoiceLines);
+    // The allocator is the single owner of the number: it both claims the gapless sequence and
+    // formats INV-YYYY-NNNN. This service never constructs an invoice number itself.
+    String invoiceNumber = invoiceRepo.claimInvoiceNumber(orgId, year);
+    invoice.issue(invoiceNumber, now);
+    try {
+      invoiceRepo.insert(invoice, invoiceLines);
+    } catch (DataAccessException e) {
+      // A counter drifted behind the table (a seed/import/fixture wrote invoice_number without
+      // advancing invoice_number_counter) makes the just-minted number already taken, so the
+      // (org_id, invoice_number) unique index rejects the insert. Surface it as a 409 that names
+      // the
+      // remedy, not an opaque 500 — narrowed to the number constraint so any other integrity
+      // violation still bubbles. The enclosing transaction rolls back cleanly.
+      if (NumberSequenceConflicts.isUniqueViolationOn(e, INVOICE_NUMBER_CONSTRAINT)) {
+        throw new ConflictException("Invoice number sequence is out of sync — contact support.");
+      }
+      throw e;
+    }
 
     // Auto-allocate prepayment FIFO up to the invoice grand total.
     List<PaymentAllocation> allocations = new ArrayList<>();

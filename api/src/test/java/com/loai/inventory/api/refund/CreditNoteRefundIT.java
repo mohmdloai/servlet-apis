@@ -1,6 +1,7 @@
 package com.loai.inventory.api.refund;
 
 import static com.loai.inventory.repository.generated.Tables.CREDIT_NOTE;
+import static com.loai.inventory.repository.generated.Tables.CREDIT_NOTE_NUMBER_COUNTER;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY_RESERVATION;
 import static com.loai.inventory.repository.generated.Tables.ORG;
@@ -16,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ConflictException;
@@ -28,6 +30,7 @@ import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.NumberSequenceReconciliationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
@@ -47,6 +50,7 @@ import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.FulfillmentService.DeliveredView;
 import com.loai.inventory.service.FulfillmentService.LineInput;
 import com.loai.inventory.service.InvoiceService;
+import com.loai.inventory.service.NumberSequenceReconciliationService;
 import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.RefundService.CreateCommand;
 import com.loai.inventory.service.RefundService.Executed;
@@ -92,6 +96,7 @@ class CreditNoteRefundIT {
   static FulfillmentService fulfillmentService;
   static CreditNoteService creditNoteService;
   static RefundService refundService;
+  static NumberSequenceReconciliationService reconciliationService;
 
   private final AtomicInteger seq = new AtomicInteger(1);
   private final ActorContext actor = ActorContext.user(UUID.randomUUID().toString());
@@ -167,6 +172,9 @@ class CreditNoteRefundIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl());
+    reconciliationService =
+        new NumberSequenceReconciliationService(
+            dsl, new NumberSequenceReconciliationRepositoryFactoryImpl());
 
     actorId = UUID.randomUUID();
     dsl.insertInto(com.loai.inventory.repository.generated.Tables.APP_USER)
@@ -197,6 +205,56 @@ class CreditNoteRefundIT {
   }
 
   // CreditNote-backed
+
+  /**
+   * Number-sequence integrity for credit notes ({@code stories/number_sequence_integrity.md}): the
+   * same drift hazard the story confirmed on credit-note numbering. A counter behind the table
+   * re-mints a taken CN number; that must be a clean 409 (not a raw 500), roll back, and be
+   * healable by the reconcile routine.
+   */
+  @Test
+  void issueCreditNote_counterDriftedBehindTable_is409_thenReconcileHeals() {
+    int year = OffsetDateTime.now(ZoneOffset.UTC).getYear();
+    Fixture f =
+        deliverPaidInvoice("60.00", "60.00"); // cap = 60.00; leaves room for two 10.00 notes
+
+    // First credit note → CN-YYYY-0001; the counter advances to 2.
+    var i1 = creditNoteService.issue(f.org, returnCommand(f.invoiceId, "10.00"), false);
+    assertEquals("CN-" + year + "-0001", i1.creditNote().getCreditNoteNumber());
+
+    // Simulate drift: rewind the credit-note counter behind the table so the next claim regenerates
+    // the taken CN-YYYY-0001.
+    int reset =
+        dsl.update(CREDIT_NOTE_NUMBER_COUNTER)
+            .set(CREDIT_NOTE_NUMBER_COUNTER.NEXT_VAL, 1L)
+            .where(CREDIT_NOTE_NUMBER_COUNTER.ORG_ID.eq(f.org))
+            .execute();
+    assertEquals(1, reset);
+
+    // Second credit note re-mints CN-YYYY-0001 → (org, credit_note_number) unique violation,
+    // translated to a 409 that names the remedy — not an "Unexpected error" 500.
+    ConflictException ex =
+        assertThrows(
+            ConflictException.class,
+            () -> creditNoteService.issue(f.org, returnCommand(f.invoiceId, "10.00"), false));
+    assertTrue(ex.getMessage().contains("Credit-note number sequence is out of sync"));
+
+    // Rolled back cleanly: still exactly one credit note against the invoice.
+    assertEquals(
+        1, dsl.fetchCount(dsl.selectFrom(CREDIT_NOTE).where(CREDIT_NOTE.ORG_ID.eq(f.org))));
+
+    // Repair: reconcile realigns only the credit-note counter (the invoice counter is already
+    // ahead), forward-only to MAX+1 = 2.
+    NumberSequenceReconciliationService.Summary summary = reconciliationService.reconcile();
+    assertEquals(1, summary.counted());
+    assertEquals("CREDIT_NOTE", summary.realignments().get(0).documentType());
+
+    // The retry now mints the next gapless number.
+    var i2 = creditNoteService.issue(f.org, returnCommand(f.invoiceId, "10.00"), false);
+    assertEquals("CN-" + year + "-0002", i2.creditNote().getCreditNoteNumber());
+    assertEquals(
+        2, dsl.fetchCount(dsl.selectFrom(CREDIT_NOTE).where(CREDIT_NOTE.ORG_ID.eq(f.org))));
+  }
 
   /**
    * Full return: refund covers the whole invoice → payment REFUNDED, CN SETTLED, invoice stays

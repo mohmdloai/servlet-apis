@@ -59,9 +59,14 @@ public interface CreditNoteRepository {
   java.math.BigDecimal sumIssuedTotalByInvoice(UUID orgId, UUID salesInvoiceId);
 
   /**
-   * Claim the next gapless credit-note sequence number for {@code (orgId, year)} under a {@code
-   * SELECT … FOR UPDATE} row lock — gapless, since the increment rolls back with the issuing
-   * transaction. Returns the claimed value (first claim returns 1).
+   * Mint the next gapless credit-note number for {@code (orgId, year)} — {@code CN-YYYY-NNNN} —
+   * under a {@code SELECT … FOR UPDATE} row lock, gapless since the increment rolls back with the
+   * issuing transaction.
+   *
+   * <p>The <b>single owner</b> of credit-note numbering: it both allocates the sequence and formats
+   * the {@code CN-YYYY-NNNN} string, so no caller constructs a credit-note number itself. Returns
+   * the formatted number (first claim of a year returns {@code CN-YYYY-0001}). See {@code
+   * stories/number_sequence_integrity.md}.
    */
-  long claimCreditNoteNumber(UUID orgId, int year);
+  String claimCreditNoteNumber(UUID orgId, int year);
 }

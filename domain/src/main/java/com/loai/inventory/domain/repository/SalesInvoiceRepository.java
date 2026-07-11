@@ -68,10 +68,16 @@ public interface SalesInvoiceRepository {
   List<SalesInvoiceLine> findLinesByInvoiceId(UUID salesInvoiceId);
 
   /**
-   * Claim the next gapless invoice sequence number for {@code (orgId, year)}. Ensures the counter
-   * row exists, then advances it under a {@code SELECT … FOR UPDATE} row lock held for the rest of
-   * the transaction — so the increment rolls back with the issuing transaction and no number is
-   * ever burned. Returns the claimed value (first claim returns 1).
+   * Mint the next gapless invoice number for {@code (orgId, year)} — {@code INV-YYYY-NNNN}. Ensures
+   * the counter row exists, then advances it under a {@code SELECT … FOR UPDATE} row lock held for
+   * the rest of the transaction — so the increment rolls back with the issuing transaction and no
+   * number is ever burned.
+   *
+   * <p>This is the <b>single owner</b> of invoice numbering: it both allocates the sequence and
+   * formats the {@code INV-YYYY-NNNN} string, so no caller ever constructs an invoice number itself
+   * (which is how a counter could drift behind the table — see {@code
+   * stories/number_sequence_integrity.md}). Returns the formatted number (first claim of a year
+   * returns {@code INV-YYYY-0001}).
    */
-  long claimInvoiceNumber(UUID orgId, int year);
+  String claimInvoiceNumber(UUID orgId, int year);
 }

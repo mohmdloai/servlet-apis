@@ -21,6 +21,7 @@ import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationPreferenceRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
+import com.loai.inventory.domain.repository.NumberSequenceReconciliationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
@@ -47,6 +48,7 @@ import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
+import com.loai.inventory.repository.NumberSequenceReconciliationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
@@ -71,6 +73,7 @@ import com.loai.inventory.service.InvoiceService;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.MemberService;
 import com.loai.inventory.service.NotificationService;
+import com.loai.inventory.service.NumberSequenceReconciliationService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderExpiryService;
 import com.loai.inventory.service.OrgService;
@@ -159,6 +162,8 @@ public class AppConfig {
   public final CreditNoteRepositoryFactory creditNoteRepositoryFactory;
   public final RefundRepositoryFactory refundRepositoryFactory;
   public final RefundAllocationRepositoryFactory refundAllocationRepositoryFactory;
+  public final NumberSequenceReconciliationRepositoryFactory
+      numberSequenceReconciliationRepositoryFactory;
 
   // Services
   public final RefreshTokenStore refreshTokenStore;
@@ -183,6 +188,7 @@ public class AppConfig {
   public final ReservationService reservationService;
   public final SalesOrderService salesOrderService;
   public final OrderExpiryService orderExpiryService;
+  public final NumberSequenceReconciliationService numberSequenceReconciliationService;
   public final PaymentService paymentService;
   public final PaymentDisputeService paymentDisputeService;
   public final PaymentTransactionService paymentTransactionService;
@@ -246,6 +252,8 @@ public class AppConfig {
     this.creditNoteRepositoryFactory = new CreditNoteRepositoryFactoryImpl();
     this.refundRepositoryFactory = new RefundRepositoryFactoryImpl();
     this.refundAllocationRepositoryFactory = new RefundAllocationRepositoryFactoryImpl();
+    this.numberSequenceReconciliationRepositoryFactory =
+        new NumberSequenceReconciliationRepositoryFactoryImpl();
 
     long impersonationTtl =
         parseLong(System.getenv("IMPERSONATION_TTL_MILLIS"), DEFAULT_IMPERSONATION_TTL_MILLIS);
@@ -344,6 +352,8 @@ public class AppConfig {
             inventoryLogRepositoryFactory);
     this.orderExpiryService =
         new OrderExpiryService(dsl, salesOrderRepositoryFactory, reservationService);
+    this.numberSequenceReconciliationService =
+        new NumberSequenceReconciliationService(dsl, numberSequenceReconciliationRepositoryFactory);
     // NotificationService + MagicLinkService are both constructed above — the ORDER_PAID producer
     // (stories/notify_order_paid.md) mints a fresh order-view link per customer email.
     this.paymentService =

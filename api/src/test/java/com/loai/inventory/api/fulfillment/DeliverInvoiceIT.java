@@ -2,6 +2,7 @@ package com.loai.inventory.api.fulfillment;
 
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY_RESERVATION;
+import static com.loai.inventory.repository.generated.Tables.INVOICE_NUMBER_COUNTER;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT_ALLOCATION;
@@ -14,6 +15,7 @@ import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.domain.model.ActorContext;
@@ -21,6 +23,7 @@ import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.NumberSequenceReconciliationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
@@ -35,6 +38,7 @@ import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.FulfillmentService.DeliveredView;
 import com.loai.inventory.service.FulfillmentService.LineInput;
 import com.loai.inventory.service.InvoiceService;
+import com.loai.inventory.service.NumberSequenceReconciliationService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -80,6 +84,7 @@ class DeliverInvoiceIT {
   static HikariDataSource dataSource;
   static DSLContext dsl;
   static FulfillmentService service;
+  static NumberSequenceReconciliationService reconciliationService;
 
   private final AtomicInteger seq = new AtomicInteger(1);
   private final ActorContext actor = ActorContext.user(UUID.randomUUID().toString());
@@ -131,6 +136,9 @@ class DeliverInvoiceIT {
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl()));
+    reconciliationService =
+        new NumberSequenceReconciliationService(
+            dsl, new NumberSequenceReconciliationRepositoryFactoryImpl());
   }
 
   @AfterAll
@@ -314,6 +322,69 @@ class DeliverInvoiceIT {
 
     // Invoice PAID + all lines delivered → order CLOSED.
     assertEquals("CLOSED", orderStatus(order.id()));
+  }
+
+  /**
+   * Number-sequence integrity ({@code stories/number_sequence_integrity.md}): a counter that has
+   * drifted <em>behind</em> the table makes the next issue re-mint an already-taken number. That
+   * must surface as a clean 409 (not a raw 500), roll the whole delivery back, and be healable by
+   * the reconcile routine — after which the retry succeeds and numbering resumes gaplessly.
+   */
+  @Test
+  void deliver_counterDriftedBehindTable_is409NotDuplicate_thenReconcileHeals() {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "Rana", "rana@acme.test");
+    UUID a = createProduct(org, "A");
+    UUID b = createProduct(org, "B");
+    createInventory(org, a, 10, 2);
+    createInventory(org, b, 10, 2);
+    Order order =
+        seedPaidOrder(
+            org, customer, List.of(new Want(a, 2), new Want(b, 2)), "40.00", now().minusHours(1));
+
+    // Deliver line A → INV-YYYY-0001 issued; the counter advances to 2.
+    UUID fa = shipLine(org, order, order.lines().get(0));
+    DeliveredView va = service.markDelivered(org, fa, actor);
+    assertEquals("INV-" + now().getYear() + "-0001", va.invoice().getInvoiceNumber());
+
+    // Simulate the drift the story describes (a seed/import wrote a number without advancing the
+    // counter): rewind the counter behind the table, so the next claim regenerates the taken 0001.
+    int reset =
+        dsl.update(INVOICE_NUMBER_COUNTER)
+            .set(INVOICE_NUMBER_COUNTER.NEXT_VAL, 1L)
+            .where(INVOICE_NUMBER_COUNTER.ORG_ID.eq(org))
+            .execute();
+    assertEquals(1, reset);
+
+    // Deliver line B → the allocator re-mints INV-YYYY-0001 → (org, invoice_number) unique
+    // violation, translated to a 409 that names the remedy, not an "Unexpected error" 500.
+    UUID fb = shipLine(org, order, order.lines().get(1));
+    ConflictException ex =
+        assertThrows(ConflictException.class, () -> service.markDelivered(org, fb, actor));
+    assertTrue(ex.getMessage().contains("Invoice number sequence is out of sync"));
+
+    // The whole delivery rolled back: still exactly one invoice, order still FULFILLING.
+    assertEquals(1, invoiceCount(org));
+    assertEquals("FULFILLING", orderStatus(order.id()));
+
+    // Repair: reconcile detects the one drifted counter and realigns it forward to MAX+1 = 2.
+    NumberSequenceReconciliationService.Summary summary = reconciliationService.reconcile();
+    assertEquals(1, summary.counted());
+    NumberSequenceReconciliationService.Realignment r = summary.realignments().get(0);
+    assertEquals("INVOICE", r.documentType());
+    assertEquals(org, r.orgId());
+    assertEquals(now().getYear(), r.year());
+    assertEquals(Long.valueOf(1L), r.fromNextVal());
+    assertEquals(2L, r.toNextVal());
+
+    // The retry now succeeds with the next gapless number and the order closes.
+    DeliveredView vb = service.markDelivered(org, fb, actor);
+    assertEquals("INV-" + now().getYear() + "-0002", vb.invoice().getInvoiceNumber());
+    assertEquals(2, invoiceCount(org));
+    assertEquals("CLOSED", orderStatus(order.id()));
+
+    // Forward-only + idempotent: a second reconcile over the healed DB realigns nothing.
+    assertEquals(0, reconciliationService.reconcile().counted());
   }
 
   // flow helpers
