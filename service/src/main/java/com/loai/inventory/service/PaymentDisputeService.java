@@ -5,6 +5,7 @@ import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
+import com.loai.inventory.domain.model.PaymentStatus;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepository;
@@ -145,6 +146,30 @@ public final class PaymentDisputeService {
    * fully-unallocated payment.
    */
   public record PaymentView(Payment payment, List<AllocationView> allocations) {}
+
+  public static final int DEFAULT_PAGE_SIZE = 20;
+  public static final int MAX_PAGE_SIZE = 100;
+
+  /** One page of the org's payments plus the total under the same filter. */
+  public record PaymentPage(List<Payment> items, long total) {}
+
+  /**
+   * The org's payments worklist / ledger, optionally narrowed by {@code status} (null = any) and to
+   * those still carrying an unallocated balance ({@code unallocatedOnly}). Backs {@code GET
+   * /api/orgs/{orgId}/payments} — the disputes preview ({@code status=DISPUTED}) and the
+   * unallocated preview ({@code unallocatedOnly}) whose totals equal the health rollup's {@code
+   * open_disputes} / {@code unallocated_payments}. {@code page} floors at 0, {@code size} clamps to
+   * {@code [1, MAX_PAGE_SIZE]}. Read-only. See {@code stories/org_health_rollup.md}.
+   */
+  public PaymentPage list(
+      UUID orgId, PaymentStatus status, boolean unallocatedOnly, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    PaymentRepository repo = paymentRepoFactory.create(rootDsl);
+    List<Payment> items = repo.list(orgId, status, unallocatedOnly, p * s, s);
+    long total = repo.count(orgId, status, unallocatedOnly);
+    return new PaymentPage(items, total);
+  }
 
   /** Read a payment + its allocations for the GET endpoint. */
   public PaymentView get(UUID orgId, UUID id) {

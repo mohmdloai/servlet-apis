@@ -3,6 +3,8 @@ package com.loai.inventory.api.servlet.handler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.DisputePaymentRequest;
+import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.dto.PaymentResponse;
 import com.loai.inventory.api.mapper.PaymentMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
@@ -11,10 +13,12 @@ import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.PaymentDisputeService;
+import com.loai.inventory.service.PaymentDisputeService.PaymentPage;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,7 +62,11 @@ public class PaymentHandler implements OrgResourceHandler {
     try {
       String[] parts = splitPath(remainingPath);
       if (parts.length == 0) {
-        writeError(resp, 405, "Method not allowed");
+        if ("GET".equals(method)) {
+          doList(req, resp, orgId);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
         return;
       }
 
@@ -104,6 +112,31 @@ public class PaymentHandler implements OrgResourceHandler {
     writeJson(resp, 200, PaymentMapper.toResponse(service.get(orgId, id)));
   }
 
+  /**
+   * {@code GET /payments?status=&unallocated=&page=&size=} — the org's payments worklist / ledger
+   * ({@code stories/org_health_rollup.md}). {@code status=DISPUTED} is the disputes preview, {@code
+   * unallocated=true} the unallocated preview; unknown {@code status} → 400. VIEWER+.
+   */
+  private void doList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", PaymentDisputeService.DEFAULT_PAGE_SIZE), 1),
+            PaymentDisputeService.MAX_PAGE_SIZE);
+    boolean unallocatedOnly = Boolean.parseBoolean(req.getParameter("unallocated"));
+    PaymentPage result =
+        service.list(
+            orgId,
+            PaymentMapper.toStatusFilter(req.getParameter("status")),
+            unallocatedOnly,
+            page,
+            size);
+    List<PaymentResponse> data = result.items().stream().map(PaymentMapper::toResponse).toList();
+    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+  }
+
   private void doDispute(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
       throws IOException {
     SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
@@ -136,6 +169,18 @@ public class PaymentHandler implements OrgResourceHandler {
       return UUID.fromString(s);
     } catch (IllegalArgumentException e) {
       throw new ValidationException("Invalid payment id: " + s);
+    }
+  }
+
+  private static int intParam(HttpServletRequest req, String name, int defaultValue) {
+    String value = req.getParameter(name);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new ValidationException("Parameter '" + name + "' must be an integer");
     }
   }
 

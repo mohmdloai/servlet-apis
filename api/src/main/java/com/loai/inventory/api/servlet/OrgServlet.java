@@ -8,6 +8,7 @@ import com.loai.inventory.api.servlet.handler.CategoryHandler;
 import com.loai.inventory.api.servlet.handler.CreditNoteHandler;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
 import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
+import com.loai.inventory.api.servlet.handler.HealthHandler;
 import com.loai.inventory.api.servlet.handler.ImpersonationHandler;
 import com.loai.inventory.api.servlet.handler.InventoryHandler;
 import com.loai.inventory.api.servlet.handler.InvoiceHandler;
@@ -62,6 +63,7 @@ public class OrgServlet extends HttpServlet {
     this.subResources =
         Map.ofEntries(
             Map.entry("members", new MemberHandler(config.memberService, mapper)),
+            Map.entry("health", new HealthHandler(config.orgHealthService, mapper)),
             Map.entry("products", new ProductHandler(config.productService, mapper)),
             Map.entry("categories", new CategoryHandler(config.categoryService, mapper)),
             Map.entry("notifications", new NotificationHandler(config.notificationService, mapper)),
