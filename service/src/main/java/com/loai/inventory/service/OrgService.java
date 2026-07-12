@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.repository.OrgRepository;
@@ -24,14 +25,39 @@ public class OrgService {
   private final DSLContext rootDsl;
   private final OrgRepositoryFactory orgRepoFactory;
   private final UserRepositoryFactory userRepoFactory;
+  private final ObjectStorage storage;
 
   public OrgService(
       DSLContext rootDsl,
       OrgRepositoryFactory orgRepoFactory,
-      UserRepositoryFactory userRepoFactory) {
+      UserRepositoryFactory userRepoFactory,
+      ObjectStorage storage) {
     this.rootDsl = rootDsl;
     this.orgRepoFactory = orgRepoFactory;
     this.userRepoFactory = userRepoFactory;
+    this.storage = storage;
+  }
+
+  /** A presigned logo upload: a PUT URL + the object key to attach afterwards. */
+  public record LogoPresign(String uploadUrl, String objectKey, long expiresInSeconds) {}
+
+  /**
+   * Hand out a presigned PUT URL + an org-scoped object key for a storefront logo upload ({@code
+   * stories/storefront_org_profile.md}). No column is written here — the client uploads the bytes
+   * to the URL, then sets {@code logo_object_key} via {@code PUT /api/orgs/{orgId}} (which enforces
+   * the same org key-prefix). Mirrors the listing-image presign machinery.
+   */
+  public LogoPresign presignLogoUpload(UUID orgId, String filename, String contentType) {
+    if (filename == null || filename.isBlank()) {
+      throw new ValidationException("filename is required");
+    }
+    orgRepoFactory
+        .create(rootDsl)
+        .findById(orgId)
+        .orElseThrow(() -> new NotFoundException("Org", orgId));
+    String objectKey = storage.newLogoKey(orgId, filename);
+    String url = storage.presignPut(objectKey, contentType);
+    return new LogoPresign(url, objectKey, storage.presignTtlSeconds());
   }
 
   public Org getById(UUID id) {
@@ -98,6 +124,27 @@ public class OrgService {
     return update(id, name, refundApprovalThreshold, orderTtlMinutes, null);
   }
 
+  public Org update(
+      UUID id,
+      String name,
+      java.math.BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes,
+      BillingProfile profile) {
+    return update(id, name, refundApprovalThreshold, orderTtlMinutes, profile, null);
+  }
+
+  /**
+   * Per-org storefront branding (V52) — the public identity the storefront + checkout confirmation
+   * render. Every field is optional; a {@code null} field leaves the stored value unchanged (merge,
+   * like {@link BillingProfile}), a blank string clears the nullable ones. {@code defaultLocale} is
+   * NOT NULL at the DB, so a blank/null on it leaves the current value (never cleared to null). See
+   * {@code stories/storefront_org_profile.md} (B1).
+   */
+  public record StorefrontBranding(
+      String themeColor, String instapayHandle, String paymentInstructions, String defaultLocale) {}
+
+  private static final Pattern THEME_COLOR_PATTERN = Pattern.compile("^#[0-9A-Fa-f]{6}$");
+
   /**
    * The org's billing profile — the seller identity a printable invoice / credit-note / receipt
    * header renders (V51). Every field is optional; a {@code null} field on an incoming profile
@@ -132,10 +179,13 @@ public class OrgService {
       String name,
       java.math.BigDecimal refundApprovalThreshold,
       Integer orderTtlMinutes,
-      BillingProfile profile) {
+      BillingProfile profile,
+      StorefrontBranding branding) {
     validateName(name);
     validatePolicy(refundApprovalThreshold, orderTtlMinutes);
     validateBillingProfile(profile);
+    validateBranding(branding);
+    validateLogoKeyOwnership(id, profile);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -151,11 +201,54 @@ public class OrgService {
             existing.setOrderTtlMinutes(orderTtlMinutes);
           }
           applyBillingProfile(existing, profile);
+          applyBranding(existing, branding);
 
           Org updated = orgRepo.update(existing);
           log.info("Updated org id={}", id);
           return updated;
         });
+  }
+
+  /**
+   * Merge storefront branding onto the org: a {@code null} field leaves the stored value unchanged;
+   * a non-null field is normalized and applied (blank → null for the nullable fields; {@code
+   * defaultLocale} is left unchanged on blank since its column is NOT NULL). A {@code null}
+   * branding is a no-op.
+   */
+  public static void applyBranding(Org org, StorefrontBranding b) {
+    if (b == null) {
+      return;
+    }
+    if (b.themeColor() != null) org.setThemeColor(blankToNull(b.themeColor()));
+    if (b.instapayHandle() != null) org.setInstapayHandle(blankToNull(b.instapayHandle()));
+    if (b.paymentInstructions() != null) {
+      org.setPaymentInstructions(blankToNull(b.paymentInstructions()));
+    }
+    if (b.defaultLocale() != null && !b.defaultLocale().isBlank()) {
+      org.setDefaultLocale(b.defaultLocale().trim().toLowerCase());
+    }
+  }
+
+  /**
+   * Branding validation: {@code theme_color} must be a {@code #RRGGBB} hex when present (400
+   * otherwise); {@code default_locale} must be one of {@code ar}/{@code en} when present. A null
+   * branding or a null/blank field passes.
+   */
+  public static void validateBranding(StorefrontBranding b) {
+    if (b == null) {
+      return;
+    }
+    String theme = blankToNull(b.themeColor());
+    if (theme != null && !THEME_COLOR_PATTERN.matcher(theme).matches()) {
+      throw new ValidationException("theme_color must be a #RRGGBB hex colour");
+    }
+    checkLen("instapay_handle", b.instapayHandle(), 255);
+    if (b.defaultLocale() != null && !b.defaultLocale().isBlank()) {
+      String loc = b.defaultLocale().trim().toLowerCase();
+      if (!loc.equals("ar") && !loc.equals("en")) {
+        throw new ValidationException("default_locale must be 'ar' or 'en'");
+      }
+    }
   }
 
   /**
@@ -210,6 +303,22 @@ public class OrgService {
     String email = blankToNull(p.contactEmail());
     if (email != null && !EMAIL_PATTERN.matcher(email).matches()) {
       throw new ValidationException("contact_email is not a valid email address");
+    }
+  }
+
+  /**
+   * When an org update sets a non-blank {@code logo_object_key}, it must be one we minted for this
+   * org — {@code {orgId}/logo/…} — blocking a caller from attaching another tenant's (or an
+   * arbitrary) object. Mirrors the listing-image attach guard. A null/blank key (leave-unchanged or
+   * clear) passes.
+   */
+  private void validateLogoKeyOwnership(UUID orgId, BillingProfile profile) {
+    if (profile == null) {
+      return;
+    }
+    String key = blankToNull(profile.logoObjectKey());
+    if (key != null && !key.startsWith(ObjectStorage.logoKeyPrefix(orgId))) {
+      throw new ValidationException("logo_object_key does not belong to this org");
     }
   }
 

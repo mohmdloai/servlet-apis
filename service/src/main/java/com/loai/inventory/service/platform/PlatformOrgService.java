@@ -225,8 +225,20 @@ public class PlatformOrgService {
       String name,
       BigDecimal refundApprovalThreshold,
       Integer orderTtlMinutes) {
+    return updateOrg(actor, env, orgId, name, refundApprovalThreshold, orderTtlMinutes, null);
+  }
+
+  public Org updateOrg(
+      SecurityContext actor,
+      Environment env,
+      UUID orgId,
+      String name,
+      BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes,
+      OrgService.StorefrontBranding branding) {
     OrgService.validateName(name);
     OrgService.validatePolicy(refundApprovalThreshold, orderTtlMinutes);
+    OrgService.validateBranding(branding);
 
     return dsl.transactionResult(
         cfg -> {
@@ -241,6 +253,7 @@ public class PlatformOrgService {
           if (orderTtlMinutes != null) {
             existing.setOrderTtlMinutes(orderTtlMinutes);
           }
+          OrgService.applyBranding(existing, branding);
           Org updated = orgRepo.update(existing);
 
           Map<String, Object> detail = new LinkedHashMap<>();
@@ -250,6 +263,18 @@ public class PlatformOrgService {
           }
           if (orderTtlMinutes != null) {
             detail.put("order_ttl_minutes", orderTtlMinutes);
+          }
+          if (branding != null) {
+            if (branding.themeColor() != null) detail.put("theme_color", branding.themeColor());
+            if (branding.instapayHandle() != null) {
+              detail.put("instapay_handle", branding.instapayHandle());
+            }
+            if (branding.paymentInstructions() != null) {
+              detail.put("payment_instructions", branding.paymentInstructions());
+            }
+            if (branding.defaultLocale() != null) {
+              detail.put("default_locale", branding.defaultLocale());
+            }
           }
           audit.recordInTx(
               tx, actor, env, "ORG_UPDATE", PlatformAuditEvent.Target.ORG, orgId, detail);

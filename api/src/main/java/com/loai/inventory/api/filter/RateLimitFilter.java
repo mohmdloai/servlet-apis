@@ -13,17 +13,70 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 
+/**
+ * Per-IP fixed-window (Redis {@code INCR} + 60s TTL) rate limiter. Mapped to {@code /api/auth/*}
+ * (login/refresh) and {@code /api/public/*} (the anonymous storefront). Each request selects a
+ * bucket by method + path:
+ *
+ * <ul>
+ *   <li>{@code /login} → {@code rl:login:} (10/min), {@code /refresh} → {@code rl:refresh:}
+ *       (30/min) — the pre-existing auth buckets, untouched.
+ *   <li>{@code POST /api/public/**​/checkout} → {@code rl:pub-checkout:} (strict, {@code
+ *       PUBLIC_CHECKOUT_LIMIT}, default 5/min) — a checkout is an expensive anonymous write
+ *       (customer upsert + stock reservation + magic link + email).
+ *   <li>every other {@code /api/public/*} request → {@code rl:pub-read:} (generous, {@code
+ *       PUBLIC_READ_LIMIT}, default 120/min).
+ * </ul>
+ *
+ * <p>The buckets use distinct key prefixes, so the read and checkout counters are fully
+ * independent. See {@code stories/public_rate_limiting.md} (B4).
+ *
+ * <p><b>Client-IP resolution behind a proxy.</b> A storefront normally sits behind a CDN/LB, where
+ * {@code getRemoteAddr()} is the proxy's IP — keying on it would put every shopper in one bucket
+ * and self-DoS the store. When {@code TRUST_PROXY=true} the key is the first hop of {@code
+ * X-Forwarded-For} (the originating client), falling back to {@code getRemoteAddr()} when the
+ * header is absent/blank. It is gated (default false) because XFF is client-spoofable unless a
+ * proxy we control overwrites it — only enable it once the edge proxy is confirmed to strip inbound
+ * XFF.
+ */
 public class RateLimitFilter implements Filter {
+
+  private static final Logger log = LoggerFactory.getLogger(RateLimitFilter.class);
 
   private static final int LOGIN_LIMIT = 10;
   private static final int REFRESH_LIMIT = 30;
   private static final int WINDOW_SECONDS = 60;
 
+  static final int DEFAULT_PUBLIC_READ_LIMIT = 120;
+  static final int DEFAULT_PUBLIC_CHECKOUT_LIMIT = 5;
+
   private JedisPool jedisPool;
   private ObjectMapper objectMapper;
+  private int publicReadLimit = DEFAULT_PUBLIC_READ_LIMIT;
+  private int publicCheckoutLimit = DEFAULT_PUBLIC_CHECKOUT_LIMIT;
+  private boolean trustProxy;
+
+  /** No-arg constructor for the servlet container; config is read in {@link #init}. */
+  public RateLimitFilter() {}
+
+  /** Test constructor: inject the collaborators + limits directly (bypasses {@link #init}). */
+  RateLimitFilter(
+      JedisPool jedisPool,
+      ObjectMapper objectMapper,
+      int publicReadLimit,
+      int publicCheckoutLimit,
+      boolean trustProxy) {
+    this.jedisPool = jedisPool;
+    this.objectMapper = objectMapper;
+    this.publicReadLimit = publicReadLimit;
+    this.publicCheckoutLimit = publicCheckoutLimit;
+    this.trustProxy = trustProxy;
+  }
 
   @Override
   public void init(FilterConfig filterConfig) {
@@ -31,6 +84,17 @@ public class RateLimitFilter implements Filter {
         (AppConfig) filterConfig.getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.jedisPool = config.jedisPool;
     this.objectMapper = config.objectMapper;
+    // Env-tunable public limits + proxy trust; a bad/unset value falls back to the default and logs
+    // once rather than failing startup (a typo in a limit must not take the storefront down).
+    this.publicReadLimit = envIntOrDefault("PUBLIC_READ_LIMIT", DEFAULT_PUBLIC_READ_LIMIT);
+    this.publicCheckoutLimit =
+        envIntOrDefault("PUBLIC_CHECKOUT_LIMIT", DEFAULT_PUBLIC_CHECKOUT_LIMIT);
+    this.trustProxy = Boolean.parseBoolean(System.getenv("TRUST_PROXY"));
+    log.info(
+        "RateLimitFilter: pub-read={}/min, pub-checkout={}/min, trustProxy={}",
+        publicReadLimit,
+        publicCheckoutLimit,
+        trustProxy);
   }
 
   @Override
@@ -40,7 +104,7 @@ public class RateLimitFilter implements Filter {
     HttpServletResponse resp = (HttpServletResponse) response;
 
     String path = req.getServletPath() + (req.getPathInfo() != null ? req.getPathInfo() : "");
-    String ip = req.getRemoteAddr();
+    String ip = resolveClientIp(req);
 
     int limit;
     String keyPrefix;
@@ -50,7 +114,16 @@ public class RateLimitFilter implements Filter {
     } else if (path.endsWith("/refresh")) {
       keyPrefix = "rl:refresh:";
       limit = REFRESH_LIMIT;
+    } else if (path.startsWith("/api/public/")) {
+      if ("POST".equals(req.getMethod()) && path.endsWith("/checkout")) {
+        keyPrefix = "rl:pub-checkout:";
+        limit = publicCheckoutLimit;
+      } else {
+        keyPrefix = "rl:pub-read:";
+        limit = publicReadLimit;
+      }
     } else {
+      // Neither auth nor public — shouldn't occur given the two mappings. Fail open.
       chain.doFilter(request, response);
       return;
     }
@@ -72,6 +145,37 @@ public class RateLimitFilter implements Filter {
     }
 
     chain.doFilter(request, response);
+  }
+
+  /**
+   * The client IP the bucket is keyed on. Default: the connecting socket ({@code getRemoteAddr()}).
+   * With {@code TRUST_PROXY=true}: the first hop of {@code X-Forwarded-For} (the originating client
+   * the proxy recorded), falling back to {@code getRemoteAddr()} when the header is absent/blank.
+   */
+  String resolveClientIp(HttpServletRequest req) {
+    if (trustProxy) {
+      String xff = req.getHeader("X-Forwarded-For");
+      if (xff != null && !xff.isBlank()) {
+        String first = xff.split(",", 2)[0].trim();
+        if (!first.isEmpty()) {
+          return first;
+        }
+      }
+    }
+    return req.getRemoteAddr();
+  }
+
+  private static int envIntOrDefault(String name, int defaultValue) {
+    String v = System.getenv(name);
+    if (v == null || v.isBlank()) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(v.trim());
+    } catch (NumberFormatException e) {
+      log.warn("Ignoring unparseable {}='{}' — using default {}", name, v, defaultValue);
+      return defaultValue;
+    }
   }
 
   @Override

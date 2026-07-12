@@ -1,6 +1,7 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.CATEGORY;
+import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_CATEGORY;
@@ -40,6 +41,68 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
         .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.ID.eq(id)))
         .fetchOptional()
         .map(this::toListing);
+  }
+
+  @Override
+  public List<CheckoutLineResolution> resolveForCheckout(
+      UUID orgId, java.util.Collection<String> slugs, ListingStatus status) {
+    if (slugs == null || slugs.isEmpty()) {
+      return List.of();
+    }
+    return dsl.select(
+            PRODUCT_LISTING.SLUG,
+            PRODUCT_LISTING.PRODUCT_ID,
+            PRODUCT_LISTING.SALES_PRICE,
+            PRODUCT_LISTING.TITLE)
+        .from(PRODUCT_LISTING)
+        .where(
+            PRODUCT_LISTING
+                .ORG_ID
+                .eq(orgId)
+                .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)))
+                .and(PRODUCT_LISTING.SLUG.in(slugs)))
+        .fetch(
+            r ->
+                new CheckoutLineResolution(
+                    r.get(PRODUCT_LISTING.SLUG),
+                    r.get(PRODUCT_LISTING.PRODUCT_ID),
+                    r.get(PRODUCT_LISTING.SALES_PRICE),
+                    r.get(PRODUCT_LISTING.TITLE)));
+  }
+
+  @Override
+  public List<ListingAvailability> resolveAvailability(
+      UUID orgId, java.util.Collection<String> slugs, ListingStatus status) {
+    if (slugs == null || slugs.isEmpty()) {
+      return List.of();
+    }
+    // available = stock_qty - reserved_qty; untracked (no inventory row) → COALESCE 0. The join is
+    // on (org_id, product_id) so a cross-org inventory row can never satisfy it.
+    org.jooq.Field<Integer> available =
+        org.jooq
+            .impl
+            .DSL
+            .coalesce(
+                INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY), org.jooq.impl.DSL.inline(0))
+            .as("available");
+    return dsl.select(PRODUCT_LISTING.SLUG, available)
+        .from(PRODUCT_LISTING)
+        .leftJoin(INVENTORY)
+        .on(
+            INVENTORY
+                .ORG_ID
+                .eq(PRODUCT_LISTING.ORG_ID)
+                .and(INVENTORY.PRODUCT_ID.eq(PRODUCT_LISTING.PRODUCT_ID)))
+        .where(
+            PRODUCT_LISTING
+                .ORG_ID
+                .eq(orgId)
+                .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)))
+                .and(PRODUCT_LISTING.SLUG.in(slugs)))
+        .fetch(
+            r ->
+                new ListingAvailability(
+                    r.get(PRODUCT_LISTING.SLUG), r.get(available) == null ? 0 : r.get(available)));
   }
 
   @Override

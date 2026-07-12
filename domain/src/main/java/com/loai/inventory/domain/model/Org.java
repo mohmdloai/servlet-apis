@@ -27,6 +27,14 @@ public class Org {
   private String contactEmail;
   private String logoObjectKey;
 
+  // Storefront branding (V52) — the per-org identity the public storefront + checkout confirmation
+  // render. All nullable; default_locale defaults to 'ar' at the DB. See
+  // stories/storefront_org_profile.md (B1).
+  private String themeColor;
+  private String instapayHandle;
+  private String paymentInstructions;
+  private String defaultLocale;
+
   public Org() {}
 
   public Org(
@@ -183,6 +191,38 @@ public class Org {
 
   public void setLogoObjectKey(String logoObjectKey) {
     this.logoObjectKey = logoObjectKey;
+  }
+
+  public String getThemeColor() {
+    return themeColor;
+  }
+
+  public void setThemeColor(String themeColor) {
+    this.themeColor = themeColor;
+  }
+
+  public String getInstapayHandle() {
+    return instapayHandle;
+  }
+
+  public void setInstapayHandle(String instapayHandle) {
+    this.instapayHandle = instapayHandle;
+  }
+
+  public String getPaymentInstructions() {
+    return paymentInstructions;
+  }
+
+  public void setPaymentInstructions(String paymentInstructions) {
+    this.paymentInstructions = paymentInstructions;
+  }
+
+  public String getDefaultLocale() {
+    return defaultLocale;
+  }
+
+  public void setDefaultLocale(String defaultLocale) {
+    this.defaultLocale = defaultLocale;
   }
 
   @Override

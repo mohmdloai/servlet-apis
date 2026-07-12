@@ -15,6 +15,15 @@ public interface InventoryRepository {
   Optional<Inventory> findByProductId(UUID orgId, UUID productId);
 
   /**
+   * Batch availability read for a set of products in {@code orgId}: {@code productId → available}
+   * ({@code stock_qty - reserved_qty}), one query. A product with no {@code inventory} row is
+   * <b>absent</b> from the map (the caller treats absent as available 0 / not in stock). Powers the
+   * storefront listing page's per-row {@code in_stock} without an N+1. See {@code
+   * stories/storefront_availability_signal.md} (B2).
+   */
+  Map<UUID, Integer> findAvailableByProductIds(UUID orgId, Collection<UUID> productIds);
+
+  /**
    * One row of the stock-overview list: a product LEFT JOINed to its {@code inventory} row. An
    * <b>untracked</b> product (no inventory row) has {@code tracked=false} and null {@code stockQty}
    * / {@code reservedQty} / {@code availableQty} / {@code version} / {@code updatedAt} — the

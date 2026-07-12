@@ -135,6 +135,12 @@ public class OrgAdminHandler implements AdminResourceHandler {
     SecurityContext ctx = AuthzHelper.requireAdmin(req);
     Environment env = (Environment) req.getAttribute(JwtAuthFilter.ENVIRONMENT_ATTR);
     AdminUpdateOrgRequest body = readBody(req, AdminUpdateOrgRequest.class);
+    com.loai.inventory.service.OrgService.StorefrontBranding branding =
+        new com.loai.inventory.service.OrgService.StorefrontBranding(
+            body.getThemeColor(),
+            body.getInstapayHandle(),
+            body.getPaymentInstructions(),
+            body.getDefaultLocale());
     Org updated =
         platformOrgService.updateOrg(
             ctx,
@@ -142,7 +148,8 @@ public class OrgAdminHandler implements AdminResourceHandler {
             path.orgId(),
             body.getName(),
             body.getRefundApprovalThreshold(),
-            body.getOrderTtlMinutes());
+            body.getOrderTtlMinutes(),
+            branding);
     writeJson(resp, 200, OrgResponse.from(updated));
   }
 

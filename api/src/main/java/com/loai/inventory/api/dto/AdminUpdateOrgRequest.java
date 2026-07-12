@@ -11,6 +11,12 @@ public class AdminUpdateOrgRequest {
   private BigDecimal refundApprovalThreshold;
   private Integer orderTtlMinutes;
 
+  // Storefront branding (V52) — a null field leaves the stored value unchanged (merge).
+  private String themeColor;
+  private String instapayHandle;
+  private String paymentInstructions;
+  private String defaultLocale;
+
   public String getName() {
     return name;
   }
@@ -33,5 +39,37 @@ public class AdminUpdateOrgRequest {
 
   public void setOrderTtlMinutes(Integer orderTtlMinutes) {
     this.orderTtlMinutes = orderTtlMinutes;
+  }
+
+  public String getThemeColor() {
+    return themeColor;
+  }
+
+  public void setThemeColor(String themeColor) {
+    this.themeColor = themeColor;
+  }
+
+  public String getInstapayHandle() {
+    return instapayHandle;
+  }
+
+  public void setInstapayHandle(String instapayHandle) {
+    this.instapayHandle = instapayHandle;
+  }
+
+  public String getPaymentInstructions() {
+    return paymentInstructions;
+  }
+
+  public void setPaymentInstructions(String paymentInstructions) {
+    this.paymentInstructions = paymentInstructions;
+  }
+
+  public String getDefaultLocale() {
+    return defaultLocale;
+  }
+
+  public void setDefaultLocale(String defaultLocale) {
+    this.defaultLocale = defaultLocale;
   }
 }

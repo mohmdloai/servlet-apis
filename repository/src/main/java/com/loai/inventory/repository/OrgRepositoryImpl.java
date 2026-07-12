@@ -106,6 +106,10 @@ public final class OrgRepositoryImpl implements OrgRepository {
             .set(ORG.PHONE, org.getPhone())
             .set(ORG.CONTACT_EMAIL, org.getContactEmail())
             .set(ORG.LOGO_OBJECT_KEY, org.getLogoObjectKey())
+            .set(ORG.THEME_COLOR, org.getThemeColor())
+            .set(ORG.INSTAPAY_HANDLE, org.getInstapayHandle())
+            .set(ORG.PAYMENT_INSTRUCTIONS, org.getPaymentInstructions())
+            .set(ORG.DEFAULT_LOCALE, org.getDefaultLocale())
             .set(ORG.UPDATED_AT, OffsetDateTime.now())
             .where(ORG.ID.eq(org.getId()))
             .returning()
@@ -168,6 +172,10 @@ public final class OrgRepositoryImpl implements OrgRepository {
     org.setPhone(r.getPhone());
     org.setContactEmail(r.getContactEmail());
     org.setLogoObjectKey(r.getLogoObjectKey());
+    org.setThemeColor(r.getThemeColor());
+    org.setInstapayHandle(r.getInstapayHandle());
+    org.setPaymentInstructions(r.getPaymentInstructions());
+    org.setDefaultLocale(r.getDefaultLocale());
     return org;
   }
 }

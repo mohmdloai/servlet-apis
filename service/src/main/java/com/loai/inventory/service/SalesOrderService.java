@@ -99,6 +99,39 @@ public class SalesOrderService {
   public record OrderLineInput(UUID productId, int quantity) {}
 
   /**
+   * Storefront order line: like {@link OrderLineInput} but carries the {@code unitPrice} the line
+   * is snapshotted at — the resolved {@code product_listing.sales_price}, not {@code
+   * product.base_price}. See {@code stories/public_checkout.md} §Placement variant.
+   */
+  public record StorefrontLineInput(UUID productId, int quantity, BigDecimal unitPrice) {}
+
+  /**
+   * The result of an anonymous storefront placement: the placed order + lines + customer, the
+   * relative {@code trackUrl} (the anonymous order-view magic link minted in-txn; null on
+   * idempotent replay, which can't reconstruct the raw token), and {@code created} — true for a
+   * fresh order (201), false when a duplicate {@code Idempotency-Key} replayed a prior order (200).
+   */
+  public record StorefrontPlaced(
+      SalesOrder order,
+      List<SalesOrderLine> lines,
+      Customer customer,
+      String trackUrl,
+      boolean created) {}
+
+  /**
+   * Internal unified line — an optional {@code unitPriceOverride} (storefront) or null (online).
+   */
+  private record ResolvedLine(UUID productId, int quantity, BigDecimal unitPriceOverride) {}
+
+  /** Internal placement outcome carried out of the shared reservation txn. */
+  private record PlacementResult(
+      SalesOrder order,
+      List<SalesOrderLine> lines,
+      Customer customer,
+      String trackUrl,
+      boolean created) {}
+
+  /**
    * Cashier tender for an in-store sale. {@code amount} is optional (defaults to the grand total).
    */
   public record PaymentInput(PaymentProvider provider, String providerRef, BigDecimal amount) {}
@@ -130,13 +163,59 @@ public class SalesOrderService {
       ActorContext actor) {
 
     validateOnlineInputs(customer, lines);
+    List<ResolvedLine> resolved =
+        lines.stream().map(l -> new ResolvedLine(l.productId(), l.quantity(), null)).toList();
+    PlacementResult r = placeReserved(orgId, customer, resolved, idempotencyKey, notes, actor);
+    return new Placed(r.order(), r.lines(), r.customer());
+  }
+
+  /**
+   * Anonymous storefront placement ({@code stories/public_checkout.md}, B5). Identical to {@link
+   * #placeOnlineOrder} — same {@code ONLINE} channel, customer upsert, order-number claim, per-org
+   * TTL {@code expires_at}, stock reservation, {@code ORDER_PLACED} notifications, and order-view
+   * magic link — except each line's {@code unit_price} is snapshotted from the caller-supplied
+   * {@code product_listing.sales_price} (what the shopper saw), never {@code product.base_price}.
+   * Returns the {@code trackUrl} (the anonymous order-view link) and whether the order was freshly
+   * created vs an idempotent replay.
+   */
+  public StorefrontPlaced placeStorefrontOrder(
+      UUID orgId,
+      CustomerInput customer,
+      List<StorefrontLineInput> lines,
+      String idempotencyKey,
+      String notes,
+      ActorContext actor) {
+
+    validateOnlineInputs(customer, toOrderLineInputs(lines));
+    List<ResolvedLine> resolved =
+        lines.stream()
+            .map(l -> new ResolvedLine(l.productId(), l.quantity(), l.unitPrice()))
+            .toList();
+    PlacementResult r = placeReserved(orgId, customer, resolved, idempotencyKey, notes, actor);
+    return new StorefrontPlaced(r.order(), r.lines(), r.customer(), r.trackUrl(), r.created());
+  }
+
+  /**
+   * The shared placement + reservation transaction behind both {@link #placeOnlineOrder} and {@link
+   * #placeStorefrontOrder}: idempotency short-circuit, build DRAFT → PENDING_PAYMENT with the org's
+   * TTL, insert, reserve stock, notify staff, and mint the customer's order-view magic link — all
+   * in one txn, so a shortage or any failure rolls the whole thing back.
+   */
+  private PlacementResult placeReserved(
+      UUID orgId,
+      CustomerInput customer,
+      List<ResolvedLine> lines,
+      String idempotencyKey,
+      String notes,
+      ActorContext actor) {
 
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           SalesOrderRepository repo = repoFactory.create(txDsl);
 
-          // 1. Idempotency short-circuit.
+          // 1. Idempotency short-circuit — a duplicate key replays the prior order (200), no second
+          // reservation, no raw token to reconstruct (trackUrl null).
           if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             var existing = repo.findByIdempotencyKey(orgId, idempotencyKey);
             if (existing.isPresent()) {
@@ -147,7 +226,7 @@ public class SalesOrderService {
                   "Idempotent replay: returning existing order id={} number={}",
                   prior.getId(),
                   prior.getOrderNumber());
-              return new Placed(prior, priorLines, priorCustomer);
+              return new PlacementResult(prior, priorLines, priorCustomer, null, false);
             }
           }
 
@@ -194,12 +273,15 @@ public class SalesOrderService {
 
           // Notify the customer by email, carrying an order-scoped magic link (view your order, no
           // login). Both the token and the notification are written in this txn, so a rolled-back
-          // order leaves neither. Online placement always resolves a customer (email required).
+          // order leaves neither. Online/storefront placement always resolves a customer (email
+          // required). The same raw link is returned as the response's track_url.
           Customer resolvedCustomer = built.customer();
+          String trackUrl = null;
           if (resolvedCustomer != null) {
             String viewLink =
                 magicLinkService.issueOrderViewLink(
                     txDsl, orgId, resolvedCustomer.getId(), order.getId(), now);
+            trackUrl = toRelativeTrackUrl(viewLink);
             notificationService.notify(
                 txDsl,
                 orgId,
@@ -221,8 +303,30 @@ public class SalesOrderService {
               order.getGrandTotal(),
               orderLines.size());
 
-          return new Placed(order, orderLines, built.customer());
+          return new PlacementResult(order, orderLines, built.customer(), trackUrl, true);
         });
+  }
+
+  private static List<OrderLineInput> toOrderLineInputs(List<StorefrontLineInput> lines) {
+    if (lines == null) {
+      return null;
+    }
+    return lines.stream()
+        .map(l -> l == null ? null : new OrderLineInput(l.productId(), l.quantity()))
+        .toList();
+  }
+
+  /**
+   * Reduce the absolute order-view URL minted by {@link MagicLinkService} ({@code
+   * {publicBaseUrl}/api/public/orders/{token}}) to the relative {@code /api/public/orders/{token}}
+   * the public checkout contract returns as {@code track_url}.
+   */
+  private static String toRelativeTrackUrl(String absolute) {
+    if (absolute == null) {
+      return null;
+    }
+    int i = absolute.indexOf("/api/public/orders/");
+    return i >= 0 ? absolute.substring(i) : absolute;
   }
 
   /**
@@ -278,7 +382,9 @@ public class SalesOrderService {
                   orgId,
                   OrderChannel.IN_STORE,
                   customer,
-                  lines,
+                  lines.stream()
+                      .map(l -> new ResolvedLine(l.productId(), l.quantity(), null))
+                      .toList(),
                   idempotencyKey,
                   notes,
                   now,
@@ -509,7 +615,7 @@ public class SalesOrderService {
       UUID orgId,
       OrderChannel channel,
       CustomerInput customer,
-      List<OrderLineInput> lines,
+      List<ResolvedLine> lines,
       String idempotencyKey,
       String notes,
       OffsetDateTime now,
@@ -518,7 +624,7 @@ public class SalesOrderService {
     Customer resolvedCustomer = resolveCustomer(repo, orgId, customer, customerRequired);
 
     // Snapshot product data per line; fail if any product is missing for this org.
-    List<UUID> productIds = lines.stream().map(OrderLineInput::productId).toList();
+    List<UUID> productIds = lines.stream().map(ResolvedLine::productId).toList();
     Map<UUID, SalesOrderRepository.ProductSnapshot> snapshots =
         repo.fetchProductSnapshots(orgId, productIds);
     for (UUID pid : productIds) {
@@ -531,8 +637,12 @@ public class SalesOrderService {
     List<SalesOrderLine> orderLines = new ArrayList<>(lines.size());
     BigDecimal subtotal = BigDecimal.ZERO;
     BigDecimal taxTotal = BigDecimal.ZERO;
-    for (OrderLineInput in : lines) {
+    for (ResolvedLine in : lines) {
       SalesOrderRepository.ProductSnapshot snap = snapshots.get(in.productId());
+      // Storefront lines carry a unit-price override (the published sales_price the shopper saw);
+      // online/in-store lines snapshot product.base_price.
+      BigDecimal unitPrice =
+          in.unitPriceOverride() != null ? in.unitPriceOverride() : snap.unitPrice();
       SalesOrderLine line =
           SalesOrderLine.create(
               UUID.randomUUID(),
@@ -540,7 +650,7 @@ public class SalesOrderService {
               snap.productId(),
               snap.description(),
               in.quantity(),
-              snap.unitPrice(),
+              unitPrice,
               DEFAULT_TAX_RATE);
       orderLines.add(line);
       subtotal = subtotal.add(line.getLineSubtotal());

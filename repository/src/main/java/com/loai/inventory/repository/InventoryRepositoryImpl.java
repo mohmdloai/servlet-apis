@@ -40,6 +40,21 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
   }
 
   @Override
+  public Map<UUID, Integer> findAvailableByProductIds(UUID orgId, Collection<UUID> productIds) {
+    if (productIds == null || productIds.isEmpty()) {
+      return Map.of();
+    }
+    Field<Integer> available = INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY).as("available");
+    Map<UUID, Integer> result = new LinkedHashMap<>();
+    dsl.select(INVENTORY.PRODUCT_ID, available)
+        .from(INVENTORY)
+        .where(INVENTORY.ORG_ID.eq(orgId).and(INVENTORY.PRODUCT_ID.in(productIds)))
+        .fetch()
+        .forEach(r -> result.put(r.get(INVENTORY.PRODUCT_ID), r.get(available)));
+    return result;
+  }
+
+  @Override
   public List<OverviewRow> listOverview(
       UUID orgId, String q, InventoryStockFilter stock, Integer lowLte, int offset, int limit) {
     return dsl.select(
