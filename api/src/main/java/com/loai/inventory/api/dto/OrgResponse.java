@@ -15,6 +15,17 @@ public class OrgResponse {
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
+  // Billing profile (V51) — nullable; omitted from JSON when null (ObjectMapper NON_NULL).
+  private String legalName;
+  private String taxRegistrationNumber;
+  private String addressLine1;
+  private String addressLine2;
+  private String city;
+  private String country;
+  private String phone;
+  private String contactEmail;
+  private String logoObjectKey;
+
   private OrgResponse() {}
 
   public static OrgResponse from(Org o) {
@@ -27,6 +38,15 @@ public class OrgResponse {
     r.orderTtlMinutes = o.getOrderTtlMinutes();
     r.createdAt = o.getCreatedAt();
     r.updatedAt = o.getUpdatedAt();
+    r.legalName = o.getLegalName();
+    r.taxRegistrationNumber = o.getTaxRegistrationNumber();
+    r.addressLine1 = o.getAddressLine1();
+    r.addressLine2 = o.getAddressLine2();
+    r.city = o.getCity();
+    r.country = o.getCountry();
+    r.phone = o.getPhone();
+    r.contactEmail = o.getContactEmail();
+    r.logoObjectKey = o.getLogoObjectKey();
     return r;
   }
 
@@ -60,5 +80,41 @@ public class OrgResponse {
 
   public OffsetDateTime getUpdatedAt() {
     return updatedAt;
+  }
+
+  public String getLegalName() {
+    return legalName;
+  }
+
+  public String getTaxRegistrationNumber() {
+    return taxRegistrationNumber;
+  }
+
+  public String getAddressLine1() {
+    return addressLine1;
+  }
+
+  public String getAddressLine2() {
+    return addressLine2;
+  }
+
+  public String getCity() {
+    return city;
+  }
+
+  public String getCountry() {
+    return country;
+  }
+
+  public String getPhone() {
+    return phone;
+  }
+
+  public String getContactEmail() {
+    return contactEmail;
+  }
+
+  public String getLogoObjectKey() {
+    return logoObjectKey;
   }
 }

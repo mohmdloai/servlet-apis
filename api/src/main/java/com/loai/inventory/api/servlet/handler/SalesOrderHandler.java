@@ -27,6 +27,8 @@ import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.SalesOrderService.InStoreSale;
 import com.loai.inventory.service.SalesOrderService.Placed;
+import com.loai.inventory.service.document.DocumentRenderService;
+import com.loai.inventory.service.document.DocumentRenderService.RenderedDocument;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -70,6 +72,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
   private final FulfillmentService fulfillmentService;
   private final InvoiceAdminService invoiceAdminService;
   private final InventoryService inventoryService;
+  private final DocumentRenderService renderService;
   private final ObjectMapper mapper;
 
   public SalesOrderHandler(
@@ -79,6 +82,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
       FulfillmentService fulfillmentService,
       InvoiceAdminService invoiceAdminService,
       InventoryService inventoryService,
+      DocumentRenderService renderService,
       ObjectMapper mapper) {
     this.service = service;
     this.cancellationService = cancellationService;
@@ -86,6 +90,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
     this.fulfillmentService = fulfillmentService;
     this.invoiceAdminService = invoiceAdminService;
     this.inventoryService = inventoryService;
+    this.renderService = renderService;
     this.mapper = mapper;
   }
 
@@ -121,6 +126,10 @@ public class SalesOrderHandler implements OrgResourceHandler {
       }
       if ("GET".equals(method) && parts.length == 2 && "reservations".equals(parts[1])) {
         doGetReservations(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
+      if ("GET".equals(method) && parts.length == 2 && "receipt.pdf".equals(parts[1])) {
+        doReceiptPdf(req, resp, orgId, parseId(parts[0]));
         return;
       }
       if (!"POST".equals(method)) {
@@ -323,6 +332,19 @@ public class SalesOrderHandler implements OrgResourceHandler {
         PaymentMapper.toOrderPaymentsResponse(paymentService.listForOrder(orgId, orderId)));
   }
 
+  /**
+   * {@code GET /{id}/receipt.pdf} — the 80mm thermal receipt for the sale (VIEWER): store header,
+   * lines, totals, tender + change. 404 if the order has no issued invoice. See {@code
+   * stories/document_pdf_rendering.md} (Part B).
+   */
+  private void doReceiptPdf(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID orderId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    RenderedDocument doc = renderService.renderReceipt(orgId, orderId);
+    writePdf(resp, doc.bytes(), doc.filename());
+  }
+
   /** OWNER in the org (or system ADMIN) — gates an above-threshold cancellation refund. */
   private static boolean isOwnerOrAdmin(SecurityContext sc, UUID orgId) {
     if (sc.isSystemAdmin()) {
@@ -375,6 +397,15 @@ public class SalesOrderHandler implements OrgResourceHandler {
     resp.setContentType("application/json");
     resp.setCharacterEncoding("UTF-8");
     mapper.writeValue(resp.getOutputStream(), body);
+  }
+
+  private void writePdf(HttpServletResponse resp, byte[] bytes, String filename)
+      throws IOException {
+    resp.setStatus(200);
+    resp.setContentType("application/pdf");
+    resp.setContentLength(bytes.length);
+    resp.setHeader("Content-Disposition", "inline; filename=\"" + filename + "\"");
+    resp.getOutputStream().write(bytes);
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {

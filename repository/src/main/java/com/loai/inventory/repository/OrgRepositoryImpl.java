@@ -97,6 +97,15 @@ public final class OrgRepositoryImpl implements OrgRepository {
             .set(ORG.ACTIVE, org.isActive())
             .set(ORG.REFUND_APPROVAL_THRESHOLD, org.getRefundApprovalThreshold())
             .set(ORG.ORDER_TTL_MINUTES, org.getOrderTtlMinutes())
+            .set(ORG.LEGAL_NAME, org.getLegalName())
+            .set(ORG.TAX_REGISTRATION_NUMBER, org.getTaxRegistrationNumber())
+            .set(ORG.ADDRESS_LINE1, org.getAddressLine1())
+            .set(ORG.ADDRESS_LINE2, org.getAddressLine2())
+            .set(ORG.CITY, org.getCity())
+            .set(ORG.COUNTRY, org.getCountry())
+            .set(ORG.PHONE, org.getPhone())
+            .set(ORG.CONTACT_EMAIL, org.getContactEmail())
+            .set(ORG.LOGO_OBJECT_KEY, org.getLogoObjectKey())
             .set(ORG.UPDATED_AT, OffsetDateTime.now())
             .where(ORG.ID.eq(org.getId()))
             .returning()
@@ -140,14 +149,25 @@ public final class OrgRepositoryImpl implements OrgRepository {
   }
 
   private Org toOrg(OrgRecord r) {
-    return new Org(
-        r.getId(),
-        r.getName(),
-        r.getSlug(),
-        r.getActive(),
-        r.getRefundApprovalThreshold(),
-        r.getOrderTtlMinutes(),
-        r.getCreatedAt(),
-        r.getUpdatedAt());
+    Org org =
+        new Org(
+            r.getId(),
+            r.getName(),
+            r.getSlug(),
+            r.getActive(),
+            r.getRefundApprovalThreshold(),
+            r.getOrderTtlMinutes(),
+            r.getCreatedAt(),
+            r.getUpdatedAt());
+    org.setLegalName(r.getLegalName());
+    org.setTaxRegistrationNumber(r.getTaxRegistrationNumber());
+    org.setAddressLine1(r.getAddressLine1());
+    org.setAddressLine2(r.getAddressLine2());
+    org.setCity(r.getCity());
+    org.setCountry(r.getCountry());
+    org.setPhone(r.getPhone());
+    org.setContactEmail(r.getContactEmail());
+    org.setLogoObjectKey(r.getLogoObjectKey());
+    return org;
   }
 }

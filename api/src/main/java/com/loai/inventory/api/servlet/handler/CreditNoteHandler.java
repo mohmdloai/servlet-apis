@@ -12,6 +12,8 @@ import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.CreditNoteService;
 import com.loai.inventory.service.CreditNoteService.Detail;
 import com.loai.inventory.service.CreditNoteService.Issued;
+import com.loai.inventory.service.document.DocumentRenderService;
+import com.loai.inventory.service.document.DocumentRenderService.RenderedDocument;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -39,10 +41,13 @@ public class CreditNoteHandler implements OrgResourceHandler {
   private static final Logger log = LoggerFactory.getLogger(CreditNoteHandler.class);
 
   private final CreditNoteService service;
+  private final DocumentRenderService renderService;
   private final ObjectMapper mapper;
 
-  public CreditNoteHandler(CreditNoteService service, ObjectMapper mapper) {
+  public CreditNoteHandler(
+      CreditNoteService service, DocumentRenderService renderService, ObjectMapper mapper) {
     this.service = service;
+    this.renderService = renderService;
     this.mapper = mapper;
   }
 
@@ -77,6 +82,15 @@ public class CreditNoteHandler implements OrgResourceHandler {
         return;
       }
 
+      if (parts.length == 2 && "pdf".equals(parts[1])) {
+        if ("GET".equals(method)) {
+          doPdf(req, resp, orgId, creditNoteId);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+
       if (parts.length == 2 && "void".equals(parts[1]) && "POST".equals(method)) {
         doVoid(req, resp, orgId, creditNoteId);
         return;
@@ -104,6 +118,14 @@ public class CreditNoteHandler implements OrgResourceHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
     Detail detail = service.get(orgId, id);
     writeJson(resp, 200, CreditNoteMapper.toResponse(detail));
+  }
+
+  /** {@code GET /{id}/pdf} — the printable credit note (VIEWER), {@code application/pdf}. */
+  private void doPdf(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    RenderedDocument doc = renderService.renderCreditNote(orgId, id);
+    writePdf(resp, doc.bytes(), doc.filename());
   }
 
   /**
@@ -184,6 +206,15 @@ public class CreditNoteHandler implements OrgResourceHandler {
     resp.setContentType("application/json");
     resp.setCharacterEncoding("UTF-8");
     mapper.writeValue(resp.getOutputStream(), body);
+  }
+
+  private void writePdf(HttpServletResponse resp, byte[] bytes, String filename)
+      throws IOException {
+    resp.setStatus(200);
+    resp.setContentType("application/pdf");
+    resp.setContentLength(bytes.length);
+    resp.setHeader("Content-Disposition", "inline; filename=\"" + filename + "\"");
+    resp.getOutputStream().write(bytes);
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {

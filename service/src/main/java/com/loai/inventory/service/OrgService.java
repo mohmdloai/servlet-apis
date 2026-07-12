@@ -86,12 +86,34 @@ public class OrgService {
   }
 
   public Org update(UUID id, String name) {
-    return update(id, name, null, null);
+    return update(id, name, null, null, null);
   }
 
   public Org update(UUID id, String name, java.math.BigDecimal refundApprovalThreshold) {
-    return update(id, name, refundApprovalThreshold, null);
+    return update(id, name, refundApprovalThreshold, null, null);
   }
+
+  public Org update(
+      UUID id, String name, java.math.BigDecimal refundApprovalThreshold, Integer orderTtlMinutes) {
+    return update(id, name, refundApprovalThreshold, orderTtlMinutes, null);
+  }
+
+  /**
+   * The org's billing profile — the seller identity a printable invoice / credit-note / receipt
+   * header renders (V51). Every field is optional; a {@code null} field on an incoming profile
+   * leaves the stored value unchanged (merge semantics, like the policy knobs), while a blank
+   * string clears it. See {@code stories/document_pdf_rendering.md} (Part A).
+   */
+  public record BillingProfile(
+      String legalName,
+      String taxRegistrationNumber,
+      String addressLine1,
+      String addressLine2,
+      String city,
+      String country,
+      String phone,
+      String contactEmail,
+      String logoObjectKey) {}
 
   /** Bounds of {@code org.order_ttl_minutes}, mirroring the V47 CHECK (15 min … 30 days). */
   public static final int MIN_ORDER_TTL_MINUTES = 15;
@@ -106,9 +128,14 @@ public class OrgService {
    * unchanged.
    */
   public Org update(
-      UUID id, String name, java.math.BigDecimal refundApprovalThreshold, Integer orderTtlMinutes) {
+      UUID id,
+      String name,
+      java.math.BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes,
+      BillingProfile profile) {
     validateName(name);
     validatePolicy(refundApprovalThreshold, orderTtlMinutes);
+    validateBillingProfile(profile);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -123,11 +150,73 @@ public class OrgService {
           if (orderTtlMinutes != null) {
             existing.setOrderTtlMinutes(orderTtlMinutes);
           }
+          applyBillingProfile(existing, profile);
 
           Org updated = orgRepo.update(existing);
           log.info("Updated org id={}", id);
           return updated;
         });
+  }
+
+  /**
+   * Merge the incoming profile onto the org: a {@code null} field leaves the stored value
+   * unchanged; a non-null field is normalized (trimmed, blank → null) and applied — so a blank
+   * string clears the field. A {@code null} profile is a no-op (callers that only edit
+   * name/policy).
+   */
+  private static void applyBillingProfile(Org org, BillingProfile p) {
+    if (p == null) {
+      return;
+    }
+    if (p.legalName() != null) org.setLegalName(blankToNull(p.legalName()));
+    if (p.taxRegistrationNumber() != null)
+      org.setTaxRegistrationNumber(blankToNull(p.taxRegistrationNumber()));
+    if (p.addressLine1() != null) org.setAddressLine1(blankToNull(p.addressLine1()));
+    if (p.addressLine2() != null) org.setAddressLine2(blankToNull(p.addressLine2()));
+    if (p.city() != null) org.setCity(blankToNull(p.city()));
+    if (p.country() != null) org.setCountry(blankToNull(p.country()));
+    if (p.phone() != null) org.setPhone(blankToNull(p.phone()));
+    if (p.contactEmail() != null) org.setContactEmail(blankToNull(p.contactEmail()));
+    if (p.logoObjectKey() != null) org.setLogoObjectKey(blankToNull(p.logoObjectKey()));
+  }
+
+  private static String blankToNull(String s) {
+    if (s == null) {
+      return null;
+    }
+    String t = s.trim();
+    return t.isEmpty() ? null : t;
+  }
+
+  private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+
+  /**
+   * Length caps mirror the V51 columns; {@code contact_email} is shape-checked when present. A null
+   * profile or a null/blank field passes (nothing to validate).
+   */
+  public static void validateBillingProfile(BillingProfile p) {
+    if (p == null) {
+      return;
+    }
+    checkLen("legal_name", p.legalName(), 255);
+    checkLen("tax_registration_number", p.taxRegistrationNumber(), 64);
+    checkLen("address_line1", p.addressLine1(), 255);
+    checkLen("address_line2", p.addressLine2(), 255);
+    checkLen("city", p.city(), 128);
+    checkLen("country", p.country(), 128);
+    checkLen("phone", p.phone(), 32);
+    checkLen("contact_email", p.contactEmail(), 255);
+    checkLen("logo_object_key", p.logoObjectKey(), 512);
+    String email = blankToNull(p.contactEmail());
+    if (email != null && !EMAIL_PATTERN.matcher(email).matches()) {
+      throw new ValidationException("contact_email is not a valid email address");
+    }
+  }
+
+  private static void checkLen(String field, String value, int max) {
+    if (value != null && value.trim().length() > max) {
+      throw new ValidationException(field + " must be <= " + max + " chars");
+    }
   }
 
   public void delete(UUID id) {

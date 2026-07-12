@@ -86,15 +86,22 @@ public class OrgServlet extends HttpServlet {
                     config.fulfillmentService,
                     config.invoiceAdminService,
                     config.inventoryService,
+                    config.documentRenderService,
                     mapper)),
             Map.entry(
                 "payment-transactions",
                 new PaymentTransactionHandler(config.paymentTransactionService, mapper)),
             Map.entry("payments", new PaymentHandler(config.paymentDisputeService, mapper)),
             Map.entry("fulfillments", new FulfillmentHandler(config.fulfillmentService, mapper)),
-            Map.entry("credit-notes", new CreditNoteHandler(config.creditNoteService, mapper)),
+            Map.entry(
+                "credit-notes",
+                new CreditNoteHandler(
+                    config.creditNoteService, config.documentRenderService, mapper)),
             Map.entry("refunds", new RefundHandler(config.refundService, mapper)),
-            Map.entry("invoices", new InvoiceHandler(config.invoiceAdminService, mapper)),
+            Map.entry(
+                "invoices",
+                new InvoiceHandler(
+                    config.invoiceAdminService, config.documentRenderService, mapper)),
             Map.entry(
                 "impersonate",
                 new ImpersonationHandler(config.authService, mapper, config.secureCookies)));

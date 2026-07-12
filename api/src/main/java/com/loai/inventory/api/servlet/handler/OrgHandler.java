@@ -92,9 +92,24 @@ public class OrgHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.OWNER);
 
     UpdateOrgRequest body = readBody(req, UpdateOrgRequest.class);
+    OrgService.BillingProfile profile =
+        new OrgService.BillingProfile(
+            body.getLegalName(),
+            body.getTaxRegistrationNumber(),
+            body.getAddressLine1(),
+            body.getAddressLine2(),
+            body.getCity(),
+            body.getCountry(),
+            body.getPhone(),
+            body.getContactEmail(),
+            body.getLogoObjectKey());
     Org updated =
         orgService.update(
-            orgId, body.getName(), body.getRefundApprovalThreshold(), body.getOrderTtlMinutes());
+            orgId,
+            body.getName(),
+            body.getRefundApprovalThreshold(),
+            body.getOrderTtlMinutes(),
+            profile);
     writeJson(resp, 200, OrgResponse.from(updated));
   }
 
