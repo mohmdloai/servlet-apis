@@ -62,7 +62,9 @@ class MoneyReadsHandlerAuthTest {
 
   private CreditNoteHandler creditNoteHandler(CreditNoteService service) {
     return new CreditNoteHandler(
-        service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        service,
+        org.mockito.Mockito.mock(com.loai.inventory.service.document.DocumentRenderService.class),
+        com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 
   // GET /refunds

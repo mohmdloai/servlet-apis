@@ -161,7 +161,8 @@ class InvoiceHandlerAuthTest {
   void void_forbiddenForViewer_serviceNeverCalled() throws IOException {
     InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     handler.handle(
@@ -179,7 +180,8 @@ class InvoiceHandlerAuthTest {
   void void_forbiddenForStaff_serviceNeverCalled() throws IOException {
     InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     handler.handle(
@@ -199,7 +201,8 @@ class InvoiceHandlerAuthTest {
     when(service.voidInvoice(eq(ORG), eq(INVOICE), anyString()))
         .thenReturn(new InvoiceView(anInvoice(), List.of()));
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     handler.handle(
@@ -219,7 +222,8 @@ class InvoiceHandlerAuthTest {
   void reissue_forbiddenForViewer_serviceNeverCalled() throws IOException {
     InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     String body =
@@ -235,7 +239,8 @@ class InvoiceHandlerAuthTest {
   void reissue_forbiddenForStaff_serviceNeverCalled() throws IOException {
     InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     String body =
@@ -255,7 +260,8 @@ class InvoiceHandlerAuthTest {
             new com.loai.inventory.service.InvoiceService.Issued(
                 anInvoice(), List.of(), List.of(), List.of()));
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     String body =
@@ -278,7 +284,8 @@ class InvoiceHandlerAuthTest {
     InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
     when(service.get(eq(ORG), eq(INVOICE))).thenReturn(new InvoiceView(anInvoice(), List.of()));
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     handler.handle("GET", reqWith(ctxWith(OrgRole.VIEWER), null), resp.mock, ORG, "/" + INVOICE);
@@ -295,7 +302,8 @@ class InvoiceHandlerAuthTest {
     when(service.list(eq(ORG), any(), Mockito.anyInt(), Mockito.anyInt()))
         .thenReturn(new InvoiceAdminService.InvoicePage(List.of(), 0));
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     handler.handle("GET", reqWith(ctxWith(OrgRole.VIEWER), null), resp.mock, ORG, "/");
@@ -310,7 +318,8 @@ class InvoiceHandlerAuthTest {
     HttpServletRequest req = reqWith(ctxWith(OrgRole.VIEWER), null);
     when(req.getParameter("status")).thenReturn("BOGUS");
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     handler.handle("GET", req, resp.mock, ORG, "/");
@@ -323,7 +332,8 @@ class InvoiceHandlerAuthTest {
   void postAtRoot_is405() throws IOException {
     InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     handler.handle("POST", reqWith(ctxWith(OrgRole.MANAGER), "{}"), resp.mock, ORG, "/");
@@ -336,7 +346,8 @@ class InvoiceHandlerAuthTest {
   void void_unauthenticated_is401_serviceNeverCalled() throws IOException {
     InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
     InvoiceHandler handler =
-        new InvoiceHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
     Resp resp = new Resp();
 
     // No SecurityContext attribute → requireAuth throws AuthenticationException (401).

@@ -13,6 +13,8 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceAdminService.InvoicePage;
+import com.loai.inventory.service.document.DocumentRenderService;
+import com.loai.inventory.service.document.DocumentRenderService.RenderedDocument;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -42,10 +44,13 @@ public class InvoiceHandler implements OrgResourceHandler {
   private static final Logger log = LoggerFactory.getLogger(InvoiceHandler.class);
 
   private final InvoiceAdminService service;
+  private final DocumentRenderService renderService;
   private final ObjectMapper mapper;
 
-  public InvoiceHandler(InvoiceAdminService service, ObjectMapper mapper) {
+  public InvoiceHandler(
+      InvoiceAdminService service, DocumentRenderService renderService, ObjectMapper mapper) {
     this.service = service;
+    this.renderService = renderService;
     this.mapper = mapper;
   }
 
@@ -72,6 +77,15 @@ public class InvoiceHandler implements OrgResourceHandler {
       if (parts.length == 1) {
         if ("GET".equals(method)) {
           doGet(req, resp, orgId, invoiceId);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+
+      if (parts.length == 2 && "pdf".equals(parts[1])) {
+        if ("GET".equals(method)) {
+          doPdf(req, resp, orgId, invoiceId);
         } else {
           writeError(resp, 405, "Method not allowed");
         }
@@ -116,6 +130,14 @@ public class InvoiceHandler implements OrgResourceHandler {
       throws IOException {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
     writeJson(resp, 200, InvoiceMapper.toResponse(service.get(orgId, id)));
+  }
+
+  /** {@code GET /{id}/pdf} — the printable invoice (VIEWER), {@code application/pdf}. */
+  private void doPdf(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    RenderedDocument doc = renderService.renderInvoice(orgId, id);
+    writePdf(resp, doc.bytes(), doc.filename());
   }
 
   private void doVoid(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
@@ -181,6 +203,15 @@ public class InvoiceHandler implements OrgResourceHandler {
     resp.setContentType("application/json");
     resp.setCharacterEncoding("UTF-8");
     mapper.writeValue(resp.getOutputStream(), body);
+  }
+
+  private void writePdf(HttpServletResponse resp, byte[] bytes, String filename)
+      throws IOException {
+    resp.setStatus(200);
+    resp.setContentType("application/pdf");
+    resp.setContentLength(bytes.length);
+    resp.setHeader("Content-Disposition", "inline; filename=\"" + filename + "\"");
+    resp.getOutputStream().write(bytes);
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {

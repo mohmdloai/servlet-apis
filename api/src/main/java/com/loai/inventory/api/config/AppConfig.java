@@ -95,6 +95,7 @@ import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.CredentialTokenService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
+import com.loai.inventory.service.document.DocumentRenderService;
 import com.loai.inventory.service.email.EmailSender;
 import com.loai.inventory.service.email.EmailSenderFactory;
 import com.loai.inventory.service.platform.OrgStatusService;
@@ -205,6 +206,7 @@ public class AppConfig {
   public final CreditNoteService creditNoteService;
   public final RefundService refundService;
   public final OrderCancellationService orderCancellationService;
+  public final DocumentRenderService documentRenderService;
 
   // Background JobRunr jobs + their lifecycle flag.
   public final OrderTtlSweeperJob orderTtlSweeperJob;
@@ -457,6 +459,9 @@ public class AppConfig {
             fulfillmentRepositoryFactory,
             reservationService,
             refundService);
+    this.documentRenderService =
+        new DocumentRenderService(
+            orgService, invoiceAdminService, creditNoteService, paymentService);
 
     int batchLimit = (int) parseLong(System.getenv("ORDER_SWEEPER_BATCH_LIMIT"), 200L);
     this.orderTtlSweeperJob = new OrderTtlSweeperJob(orderExpiryService, batchLimit);

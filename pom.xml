@@ -33,6 +33,8 @@
         <awssdk.version>2.31.0</awssdk.version>
         <!-- Jakarta Mail (Eclipse Angus) — SMTP sender for transactional email (notifications §6). -->
         <angus.mail.version>2.0.3</angus.mail.version>
+        <!-- OpenPDF — programmatic PDF for printable documents (document_pdf_rendering.md, Part B). -->
+        <openpdf.version>1.3.43</openpdf.version>
 
         <!-- DB connection – used by Flyway & jOOQ Maven plugins.
              Keep in sync with common/src/main/resources/db.properties -->
@@ -170,6 +172,13 @@
         <groupId>org.eclipse.angus</groupId>
         <artifactId>angus-mail</artifactId>
         <version>${angus.mail.version}</version>
+      </dependency>
+      <!-- PDF rendering — printable invoice / credit-note / receipt documents.
+           Programmatic (base-14 fonts, no font assets). See stories/document_pdf_rendering.md. -->
+      <dependency>
+        <groupId>com.github.librepdf</groupId>
+        <artifactId>openpdf</artifactId>
+        <version>${openpdf.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

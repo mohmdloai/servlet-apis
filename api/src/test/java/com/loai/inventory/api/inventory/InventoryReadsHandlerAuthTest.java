@@ -72,6 +72,7 @@ class InventoryReadsHandlerAuthTest {
         Mockito.mock(com.loai.inventory.service.FulfillmentService.class),
         Mockito.mock(com.loai.inventory.service.InvoiceAdminService.class),
         service,
+        Mockito.mock(com.loai.inventory.service.document.DocumentRenderService.class),
         com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 
