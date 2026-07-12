@@ -37,7 +37,8 @@ import java.util.List;
  *   <li>{@code GET /api/public/{orgSlug}} — storefront profile (branding + payment instructions,
  *       B1); {@code Cache-Control: max-age=300}
  *   <li>{@code GET /api/public/{orgSlug}/listings[/{slug}]} — published listings (+ {@code
- *       in_stock}, B2); {@code max-age=60}
+ *       in_stock}, B2; {@code ?q=&min_price=&max_price=&sort=} search/filters, B3); {@code
+ *       max-age=60}
  *   <li>{@code GET /api/public/{orgSlug}/categories} — category nav; {@code max-age=60}
  *   <li>{@code GET /api/public/{orgSlug}/availability?slugs=a,b,c} — batch in-stock (B2); {@code
  *       max-age=15}
@@ -131,7 +132,18 @@ public class PublicStorefrontServlet extends HttpServlet {
       int page = intParam(req, "page", 0);
       int size = intParam(req, "size", 20);
       String category = req.getParameter("category");
-      ListingPage p = service.listPublished(orgSlug, category, page, size);
+      // B3 (storefront_search_and_filters.md): free-text q, inclusive EGP price band, sort — all
+      // optional, parsed/validated in the service (unknown sort / bad price → 400 there).
+      ListingPage p =
+          service.listPublished(
+              orgSlug,
+              category,
+              req.getParameter("q"),
+              req.getParameter("min_price"),
+              req.getParameter("max_price"),
+              req.getParameter("sort"),
+              page,
+              size);
       List<PublicListingResponse> data =
           p.items().stream().map(PublicListingResponse::from).toList();
       writeJson(resp, 200, new PageResponse<>(data, p.total(), p.page(), p.size()), CACHE_LISTINGS);

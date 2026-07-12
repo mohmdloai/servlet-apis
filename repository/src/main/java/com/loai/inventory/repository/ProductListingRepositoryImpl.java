@@ -8,6 +8,7 @@ import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_CAT
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_IMAGE;
 
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.domain.model.ListingSort;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
@@ -21,7 +22,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.jooq.Condition;
 import org.jooq.DSLContext;
+import org.jooq.OrderField;
+import org.jooq.Record;
+import org.jooq.Record1;
+import org.jooq.SelectJoinStep;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -120,19 +126,20 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   }
 
   @Override
-  public List<ProductListing> findByCategoryAndStatus(
-      UUID orgId, UUID categoryId, ListingStatus status, int offset, int limit) {
-    return dsl.select(PRODUCT_LISTING.fields())
-        .from(PRODUCT_LISTING)
-        .join(PRODUCT_LISTING_CATEGORY)
-        .on(PRODUCT_LISTING_CATEGORY.LISTING_ID.eq(PRODUCT_LISTING.ID))
-        .where(
-            PRODUCT_LISTING
-                .ORG_ID
-                .eq(orgId)
-                .and(PRODUCT_LISTING_CATEGORY.CATEGORY_ID.eq(categoryId))
-                .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status))))
-        .orderBy(PRODUCT_LISTING.CREATED_AT.desc())
+  public List<ProductListing> findByFilters(
+      UUID orgId,
+      ListingStatus status,
+      UUID categoryId,
+      String q,
+      java.math.BigDecimal minPrice,
+      java.math.BigDecimal maxPrice,
+      ListingSort sort,
+      int offset,
+      int limit) {
+    SelectJoinStep<Record> step = dsl.select(PRODUCT_LISTING.fields()).from(PRODUCT_LISTING);
+    return joinCategoryIfNeeded(step, categoryId)
+        .where(filterConditions(orgId, status, categoryId, q, minPrice, maxPrice))
+        .orderBy(orderFields(sort))
         .offset(offset)
         .limit(limit)
         .fetchInto(PRODUCT_LISTING)
@@ -140,18 +147,74 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   }
 
   @Override
-  public long countByCategoryAndStatus(UUID orgId, UUID categoryId, ListingStatus status) {
+  public long countByFilters(
+      UUID orgId,
+      ListingStatus status,
+      UUID categoryId,
+      String q,
+      java.math.BigDecimal minPrice,
+      java.math.BigDecimal maxPrice) {
+    SelectJoinStep<Record1<UUID>> step = dsl.select(PRODUCT_LISTING.ID).from(PRODUCT_LISTING);
     return dsl.fetchCount(
-        dsl.select(PRODUCT_LISTING.ID)
-            .from(PRODUCT_LISTING)
-            .join(PRODUCT_LISTING_CATEGORY)
-            .on(PRODUCT_LISTING_CATEGORY.LISTING_ID.eq(PRODUCT_LISTING.ID))
-            .where(
-                PRODUCT_LISTING
-                    .ORG_ID
-                    .eq(orgId)
-                    .and(PRODUCT_LISTING_CATEGORY.CATEGORY_ID.eq(categoryId))
-                    .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)))));
+        joinCategoryIfNeeded(step, categoryId)
+            .where(filterConditions(orgId, status, categoryId, q, minPrice, maxPrice)));
+  }
+
+  /** The category narrow is a join only when requested — the unfiltered read stays join-free. */
+  private static <R extends Record> SelectJoinStep<R> joinCategoryIfNeeded(
+      SelectJoinStep<R> step, UUID categoryId) {
+    if (categoryId == null) {
+      return step;
+    }
+    return step.join(PRODUCT_LISTING_CATEGORY)
+        .on(PRODUCT_LISTING_CATEGORY.LISTING_ID.eq(PRODUCT_LISTING.ID));
+  }
+
+  /**
+   * The shared predicate set behind {@link #findByFilters} and {@link #countByFilters}: org +
+   * status always; category / substring / price bounds each only when present. {@code q} is bound
+   * as a parameter ({@code lower(col) LIKE lower(?)} — ILIKE semantics, never interpolated); {@code
+   * %}/{@code _} in the term are treated as literal-enough user text at per-org published scale (no
+   * escaping in v1, per the B3 story).
+   */
+  private static Condition filterConditions(
+      UUID orgId,
+      ListingStatus status,
+      UUID categoryId,
+      String q,
+      java.math.BigDecimal minPrice,
+      java.math.BigDecimal maxPrice) {
+    Condition c =
+        PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)));
+    if (categoryId != null) {
+      c = c.and(PRODUCT_LISTING_CATEGORY.CATEGORY_ID.eq(categoryId));
+    }
+    if (q != null) {
+      String pattern = "%" + q + "%";
+      c =
+          c.and(
+              PRODUCT_LISTING
+                  .TITLE
+                  .likeIgnoreCase(pattern)
+                  .or(PRODUCT_LISTING.MARKETING_COPY.likeIgnoreCase(pattern)));
+    }
+    if (minPrice != null) {
+      c = c.and(PRODUCT_LISTING.SALES_PRICE.ge(minPrice));
+    }
+    if (maxPrice != null) {
+      c = c.and(PRODUCT_LISTING.SALES_PRICE.le(maxPrice));
+    }
+    return c;
+  }
+
+  /** Every sort is tie-broken by {@code slug ASC} (unique per org) so paging is deterministic. */
+  private static List<OrderField<?>> orderFields(ListingSort sort) {
+    return switch (sort) {
+      case NEWEST ->
+          List.of(PRODUCT_LISTING.PUBLISHED_AT.desc().nullsLast(), PRODUCT_LISTING.SLUG.asc());
+      case PRICE_ASC -> List.of(PRODUCT_LISTING.SALES_PRICE.asc(), PRODUCT_LISTING.SLUG.asc());
+      case PRICE_DESC -> List.of(PRODUCT_LISTING.SALES_PRICE.desc(), PRODUCT_LISTING.SLUG.asc());
+    };
   }
 
   @Override

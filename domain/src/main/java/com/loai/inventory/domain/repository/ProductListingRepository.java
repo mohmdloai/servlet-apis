@@ -1,8 +1,10 @@
 package com.loai.inventory.domain.repository;
 
+import com.loai.inventory.domain.model.ListingSort;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -59,15 +61,50 @@ public interface ProductListingRepository {
 
   List<ProductListing> findAllByStatus(UUID orgId, ListingStatus status, int offset, int limit);
 
-  /** Storefront read: listings in a category with the given status (e.g. PUBLISHED). */
-  List<ProductListing> findByCategoryAndStatus(
-      UUID orgId, UUID categoryId, ListingStatus status, int offset, int limit);
+  /**
+   * The one storefront filtered read ({@code stories/storefront_search_and_filters.md}, B3),
+   * generalizing — and subsuming — the old {@code findByCategoryAndStatus}: every filter beyond
+   * {@code orgId} + {@code status} is an <b>optional predicate</b>, ANDed only when present.
+   *
+   * <ul>
+   *   <li>{@code categoryId} — narrow to one category (via the listing⇄category join); null = all.
+   *   <li>{@code q} — case-insensitive substring over {@code title} OR {@code marketing_copy},
+   *       bound as a parameter (never interpolated); null = no text filter. The caller passes a
+   *       trimmed, non-blank term or null — blank handling is the service's job.
+   *   <li>{@code minPrice} / {@code maxPrice} — inclusive bounds on {@code sales_price}; null =
+   *       unbounded.
+   * </ul>
+   *
+   * <p>{@code status} is supplied by the caller but the storefront always passes PUBLISHED — the
+   * status is never a public parameter. {@code sort} orders per {@link ListingSort}, always
+   * tie-broken by {@code slug ASC} so paging is deterministic.
+   */
+  List<ProductListing> findByFilters(
+      UUID orgId,
+      ListingStatus status,
+      UUID categoryId,
+      String q,
+      BigDecimal minPrice,
+      BigDecimal maxPrice,
+      ListingSort sort,
+      int offset,
+      int limit);
 
   long count(UUID orgId);
 
   long countByStatus(UUID orgId, ListingStatus status);
 
-  long countByCategoryAndStatus(UUID orgId, UUID categoryId, ListingStatus status);
+  /**
+   * Count over exactly the same predicate set as {@link #findByFilters} so a page's {@code total}
+   * always matches its rows.
+   */
+  long countByFilters(
+      UUID orgId,
+      ListingStatus status,
+      UUID categoryId,
+      String q,
+      BigDecimal minPrice,
+      BigDecimal maxPrice);
 
   ProductListing insert(ProductListing listing);
 

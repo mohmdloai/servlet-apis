@@ -7,6 +7,7 @@ import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Category;
+import com.loai.inventory.domain.model.ListingSort;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.ProductListing;
@@ -288,28 +289,57 @@ public class StorefrontService {
     return out;
   }
 
+  /** The unfiltered/category-only read — delegates with no search, no bounds, default sort. */
   public ListingPage listPublished(String orgSlug, String categorySlug, int page, int size) {
+    return listPublished(orgSlug, categorySlug, null, null, null, null, page, size);
+  }
+
+  /**
+   * The one storefront listings read ({@code stories/storefront_search_and_filters.md}, B3):
+   * category ∧ substring ∧ price band over the org's PUBLISHED listings, ordered by {@code sort}.
+   * PUBLISHED is hard-coded — status is never a parameter. The raw query-param strings are parsed
+   * and validated here: unknown {@code sort} → 400 (never a silent default); non-numeric / negative
+   * / {@code min > max} price → 400 with a cause-naming message; blank {@code q} → ignored (no
+   * filter).
+   */
+  public ListingPage listPublished(
+      String orgSlug,
+      String categorySlug,
+      String q,
+      String minPrice,
+      String maxPrice,
+      String sort,
+      int page,
+      int size) {
     int offset = Pagination.offset(page, size);
+
+    String query = trimToNull(q);
+    ListingSort listingSort = parseSort(sort);
+    java.math.BigDecimal min = parsePrice("min_price", minPrice);
+    java.math.BigDecimal max = parsePrice("max_price", maxPrice);
+    if (min != null && max != null && min.compareTo(max) > 0) {
+      throw new com.loai.inventory.common.exception.ValidationException(
+          "min_price must not exceed max_price");
+    }
 
     UUID orgId = resolveOrg(orgSlug).getId();
     ProductListingRepository listings = listingRepoFactory.create(rootDsl);
 
-    List<ProductListing> rows;
-    long total;
+    UUID categoryId = null;
     if (categorySlug != null && !categorySlug.isBlank()) {
       Category category =
           categoryRepoFactory
               .create(rootDsl)
               .findBySlug(orgId, categorySlug)
               .orElseThrow(() -> new NotFoundException("Category not found: " + categorySlug));
-      rows =
-          listings.findByCategoryAndStatus(
-              orgId, category.getId(), ListingStatus.PUBLISHED, offset, size);
-      total = listings.countByCategoryAndStatus(orgId, category.getId(), ListingStatus.PUBLISHED);
-    } else {
-      rows = listings.findAllByStatus(orgId, ListingStatus.PUBLISHED, offset, size);
-      total = listings.countByStatus(orgId, ListingStatus.PUBLISHED);
+      categoryId = category.getId();
     }
+
+    List<ProductListing> rows =
+        listings.findByFilters(
+            orgId, ListingStatus.PUBLISHED, categoryId, query, min, max, listingSort, offset, size);
+    long total =
+        listings.countByFilters(orgId, ListingStatus.PUBLISHED, categoryId, query, min, max);
 
     // One batched image query for the whole page (avoids an N+1), and the grid presigns only each
     // listing's primary image — full galleries and category breadcrumbs are a detail-view concern.
@@ -389,6 +419,53 @@ public class StorefrontService {
   }
 
   // ───────── helpers ─────────
+
+  private static String trimToNull(String raw) {
+    if (raw == null) {
+      return null;
+    }
+    String t = raw.trim();
+    return t.isEmpty() ? null : t;
+  }
+
+  /**
+   * Parse the {@code sort} param: absent/blank → {@link ListingSort#NEWEST}; anything else must be
+   * one of the three wire values — a typo is a 400, never silently coerced to the default.
+   */
+  private static ListingSort parseSort(String raw) {
+    String t = trimToNull(raw);
+    if (t == null) {
+      return ListingSort.NEWEST;
+    }
+    return switch (t) {
+      case "newest" -> ListingSort.NEWEST;
+      case "price_asc" -> ListingSort.PRICE_ASC;
+      case "price_desc" -> ListingSort.PRICE_DESC;
+      default ->
+          throw new com.loai.inventory.common.exception.ValidationException(
+              "Parameter 'sort' must be one of: newest, price_asc, price_desc");
+    };
+  }
+
+  /** Parse a price bound: absent/blank → null; non-numeric or negative → a cause-naming 400. */
+  private static java.math.BigDecimal parsePrice(String name, String raw) {
+    String t = trimToNull(raw);
+    if (t == null) {
+      return null;
+    }
+    java.math.BigDecimal value;
+    try {
+      value = new java.math.BigDecimal(t);
+    } catch (NumberFormatException e) {
+      throw new com.loai.inventory.common.exception.ValidationException(
+          "Parameter '" + name + "' must be a number");
+    }
+    if (value.signum() < 0) {
+      throw new com.loai.inventory.common.exception.ValidationException(
+          "Parameter '" + name + "' must not be negative");
+    }
+    return value;
+  }
 
   private Org resolveOrg(String orgSlug) {
     OrgRepository orgRepo = orgRepoFactory.create(rootDsl);
