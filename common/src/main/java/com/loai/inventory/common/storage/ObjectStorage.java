@@ -56,6 +56,20 @@ public final class ObjectStorage implements AutoCloseable {
     return orgId + "/logo/";
   }
 
+  /**
+   * A tenant-scoped storefront-banner object key: {@code {orgId}/banner/{uuid}-{name}}
+   * (customization epic §4). The prefix lets the banner-attach path verify the key really belongs
+   * to this org (cross-tenant guard, mirroring logo + listing images).
+   */
+  public String newBannerKey(UUID orgId, String filename) {
+    return orgId + "/banner/" + UUID.randomUUID() + "-" + sanitize(filename);
+  }
+
+  /** The key prefix every banner object of this org must start with. */
+  public static String bannerKeyPrefix(UUID orgId) {
+    return orgId + "/banner/";
+  }
+
   /** A presigned PUT URL the client uploads bytes to directly. */
   public String presignPut(String objectKey, String contentType) {
     PutObjectRequest put =

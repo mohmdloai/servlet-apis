@@ -86,6 +86,7 @@ class StorefrontAvailabilityIT {
             new ProductListingRepositoryFactoryImpl(),
             new CategoryRepositoryFactoryImpl(),
             new InventoryRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
             storage,
             null);
   }

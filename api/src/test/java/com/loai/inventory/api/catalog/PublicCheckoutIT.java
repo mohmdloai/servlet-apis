@@ -181,6 +181,7 @@ class PublicCheckoutIT {
             new ProductListingRepositoryFactoryImpl(),
             new CategoryRepositoryFactoryImpl(),
             new InventoryRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
             storage,
             salesOrders);
   }

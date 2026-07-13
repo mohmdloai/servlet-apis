@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.servlet.handler.BannerHandler;
 import com.loai.inventory.api.servlet.handler.CategoryHandler;
 import com.loai.inventory.api.servlet.handler.CreditNoteHandler;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
@@ -66,6 +67,7 @@ public class OrgServlet extends HttpServlet {
         Map.ofEntries(
             Map.entry("members", new MemberHandler(config.memberService, mapper)),
             Map.entry("logo", new LogoHandler(config.orgService, mapper)),
+            Map.entry("storefront", new BannerHandler(config.storefrontBannerService, mapper)),
             Map.entry("health", new HealthHandler(config.orgHealthService, mapper)),
             Map.entry("reports", new ReportsHandler(config.reportService, mapper)),
             Map.entry("products", new ProductHandler(config.productService, mapper)),

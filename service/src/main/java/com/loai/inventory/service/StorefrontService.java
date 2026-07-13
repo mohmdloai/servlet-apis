@@ -22,6 +22,8 @@ import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepository;
 import com.loai.inventory.domain.repository.ProductListingRepository.CheckoutLineResolution;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
+import com.loai.inventory.domain.repository.StorefrontBannerRepositoryFactory;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -50,6 +52,7 @@ public class StorefrontService {
   private final ProductListingRepositoryFactory listingRepoFactory;
   private final CategoryRepositoryFactory categoryRepoFactory;
   private final InventoryRepositoryFactory inventoryRepoFactory;
+  private final StorefrontBannerRepositoryFactory bannerRepoFactory;
   private final ObjectStorage storage;
   private final SalesOrderService salesOrderService;
 
@@ -59,6 +62,7 @@ public class StorefrontService {
       ProductListingRepositoryFactory listingRepoFactory,
       CategoryRepositoryFactory categoryRepoFactory,
       InventoryRepositoryFactory inventoryRepoFactory,
+      StorefrontBannerRepositoryFactory bannerRepoFactory,
       ObjectStorage storage,
       SalesOrderService salesOrderService) {
     this.rootDsl = rootDsl;
@@ -66,6 +70,7 @@ public class StorefrontService {
     this.listingRepoFactory = listingRepoFactory;
     this.categoryRepoFactory = categoryRepoFactory;
     this.inventoryRepoFactory = inventoryRepoFactory;
+    this.bannerRepoFactory = bannerRepoFactory;
     this.storage = storage;
     this.salesOrderService = salesOrderService;
   }
@@ -140,6 +145,53 @@ public class StorefrontService {
         CURRENCY_EGP,
         org.getInstapayHandle(),
         org.getPaymentInstructions());
+  }
+
+  // ───────── banners (C1) ─────────
+
+  /**
+   * A public banner row — whitelisted for the anonymous storefront (customization epic slice C1).
+   * Both locale columns cross verbatim so the cache stays one entry per org (the client resolves
+   * the path-locale → default-locale fallback, epic §1); {@code imageUrl} is a short-lived
+   * presigned GET URL or null (→ gradient slide); the target is the structured slug pair. Carries
+   * <b>no</b> id, org id, object key, window bounds, or timestamps.
+   */
+  public record PublicBannerView(
+      String headlineAr,
+      String headlineEn,
+      String subheadingAr,
+      String subheadingEn,
+      String imageUrl,
+      String targetType,
+      String targetSlug) {}
+
+  /**
+   * The anonymous home-banner carousel for {@code orgSlug}: the org's banners that are active,
+   * in-window, and whose target still resolves (a category that exists, or a <b>PUBLISHED</b>
+   * listing), {@code sort_order ASC}. The stale-target filtering is the repository's JOIN (epic §3)
+   * — a banner pointing at an unpublished listing silently drops here and returns when it
+   * re-publishes, with no edit from the merchant. 404 on unknown/inactive slug (opaque, via {@link
+   * #resolveOrg}).
+   */
+  public List<PublicBannerView> banners(String orgSlug) {
+    UUID orgId = resolveOrg(orgSlug).getId();
+    return bannerRepoFactory
+        .create(rootDsl)
+        .findPublicResolved(orgId, OffsetDateTime.now())
+        .stream()
+        .map(
+            b ->
+                new PublicBannerView(
+                    b.getHeadlineAr(),
+                    b.getHeadlineEn(),
+                    b.getSubheadingAr(),
+                    b.getSubheadingEn(),
+                    b.getImageObjectKey() == null
+                        ? null
+                        : storage.presignGet(b.getImageObjectKey()),
+                    b.getTargetType().wire(),
+                    b.getTargetSlug()))
+        .toList();
   }
 
   // ───────── checkout (B5) ─────────

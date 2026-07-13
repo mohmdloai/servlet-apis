@@ -81,6 +81,7 @@ class StorefrontProfileIT {
             new com.loai.inventory.repository.ProductListingRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CategoryRepositoryFactoryImpl(),
             new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
             storage,
             null);
     orgService =

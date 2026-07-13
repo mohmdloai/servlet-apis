@@ -35,6 +35,7 @@ import com.loai.inventory.domain.repository.RefundRepositoryFactory;
 import com.loai.inventory.domain.repository.ReportRepository;
 import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
+import com.loai.inventory.domain.repository.StorefrontBannerRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
@@ -63,6 +64,7 @@ import com.loai.inventory.repository.RefundRepositoryFactoryImpl;
 import com.loai.inventory.repository.ReportRepositoryImpl;
 import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
+import com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CategoryService;
@@ -89,6 +91,7 @@ import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReportService;
 import com.loai.inventory.service.ReservationService;
 import com.loai.inventory.service.SalesOrderService;
+import com.loai.inventory.service.StorefrontBannerService;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.auth.AccountService;
 import com.loai.inventory.service.auth.AuthMailer;
@@ -151,6 +154,7 @@ public class AppConfig {
   public final CustomerMagicTokenRepositoryFactory customerMagicTokenRepositoryFactory;
   public final AppUserMagicTokenRepositoryFactory appUserMagicTokenRepositoryFactory;
   public final ProductListingRepositoryFactory productListingRepositoryFactory;
+  public final StorefrontBannerRepositoryFactory storefrontBannerRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
   public final InventoryLogRepositoryFactory inventoryLogRepositoryFactory;
@@ -191,6 +195,7 @@ public class AppConfig {
   public final NotificationService notificationService;
   public final MagicLinkService magicLinkService;
   public final ProductListingService productListingService;
+  public final StorefrontBannerService storefrontBannerService;
   public final StorefrontService storefrontService;
   public final CustomerService customerService;
   public final InventoryService inventoryService;
@@ -245,6 +250,7 @@ public class AppConfig {
     this.customerMagicTokenRepositoryFactory = new CustomerMagicTokenRepositoryFactoryImpl();
     this.appUserMagicTokenRepositoryFactory = new AppUserMagicTokenRepositoryFactoryImpl();
     this.productListingRepositoryFactory = new ProductListingRepositoryFactoryImpl();
+    this.storefrontBannerRepositoryFactory = new StorefrontBannerRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
     this.inventoryLogRepositoryFactory = new InventoryLogRepositoryFactoryImpl();
@@ -343,6 +349,14 @@ public class AppConfig {
             emailMaxAttempts);
     this.productListingService =
         new ProductListingService(dsl, productListingRepositoryFactory, objectStorage);
+    this.storefrontBannerService =
+        new StorefrontBannerService(
+            dsl,
+            storefrontBannerRepositoryFactory,
+            orgRepositoryFactory,
+            categoryRepositoryFactory,
+            productListingRepositoryFactory,
+            objectStorage);
     // storefrontService is constructed after salesOrderService below — its anonymous checkout
     // (public_checkout.md) delegates to SalesOrderService.placeStorefrontOrder.
     this.customerService = new CustomerService(dsl, customerRepositoryFactory);
@@ -448,6 +462,7 @@ public class AppConfig {
             productListingRepositoryFactory,
             categoryRepositoryFactory,
             inventoryRepositoryFactory,
+            storefrontBannerRepositoryFactory,
             objectStorage,
             salesOrderService);
     this.creditNoteService =
