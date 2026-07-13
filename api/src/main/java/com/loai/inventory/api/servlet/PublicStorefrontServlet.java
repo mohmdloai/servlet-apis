@@ -6,6 +6,7 @@ import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PublicAvailabilityResponse;
+import com.loai.inventory.api.dto.PublicBannerResponse;
 import com.loai.inventory.api.dto.PublicCategoryResponse;
 import com.loai.inventory.api.dto.PublicCheckoutError;
 import com.loai.inventory.api.dto.PublicCheckoutRequest;
@@ -113,6 +114,14 @@ public class PublicStorefrontServlet extends HttpServlet {
           writeJson(resp, 200, data, CACHE_LISTINGS);
         }
         case "availability" -> doAvailability(req, resp, orgSlug, parts);
+        case "banners" -> {
+          if (parts.length != 2) {
+            throw new ValidationException("Unknown route");
+          }
+          List<PublicBannerResponse> data =
+              service.banners(orgSlug).stream().map(PublicBannerResponse::from).toList();
+          writeJson(resp, 200, data, CACHE_LISTINGS);
+        }
         default -> throw new ValidationException("Unknown resource: " + resource);
       }
     } catch (StorefrontService.StorefrontOutOfStockException e) {
