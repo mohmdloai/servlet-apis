@@ -160,3 +160,19 @@ GET /api/public/{orgSlug}                → 200 StorefrontProfileResponse   (Ca
 | **Frontend story 24 (shell + branding)** | name/logo/theme/locales for the header + theme provider |
 | **`public_checkout.md` response** | `payment_instructions` in the confirmation |
 | **Frontend story 29 (confirmation)** | InstaPay handle + instruction text |
+
+---
+
+## Addendum — admin logo read (2026-07-13)
+
+The presign + attach flow above lets a client **set** a logo but gave the admin plane no way to
+**see** the current one (`GET /api/orgs/{orgId}` returns the raw `logo_object_key`, not a
+fetchable URL — only the public profile presigned a GET). Added for the admin branding UI:
+
+- `GET /api/orgs/{orgId}/logo` (VIEWER) → `{url}` — the current logo as a short-lived presigned
+  GET URL; `url` omitted (NON_NULL) when no logo is set. `OrgService.logoUrl(orgId)`; 404 on an
+  unknown org; non-GET → 405. Covered in `StorefrontProfileIT` (presign → attach → both the
+  public profile and the admin read presign a GET URL; no-logo → null).
+
+The same key now also renders on finance documents — see `document_pdf_rendering.md` (logo
+addendum).
