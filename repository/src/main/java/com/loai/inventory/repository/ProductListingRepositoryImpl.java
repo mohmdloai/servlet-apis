@@ -18,7 +18,9 @@ import com.loai.inventory.repository.generated.tables.records.ProductListingImag
 import com.loai.inventory.repository.generated.tables.records.ProductListingRecord;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -462,6 +464,28 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
             PRODUCT_LISTING_IMAGE.CREATED_AT.asc())
         .fetch()
         .map(this::toImage);
+  }
+
+  @Override
+  public Map<UUID, String> findPrimaryImageObjectKeys(
+      UUID orgId, java.util.Collection<UUID> productIds) {
+    if (productIds.isEmpty()) {
+      return Map.of();
+    }
+    // Ordered product → sort_order → created_at, so the first row seen per product is its primary
+    // image; putIfAbsent keeps it (no DISTINCT ON needed, and a page is a bounded set of products).
+    Map<UUID, String> keys = new HashMap<>();
+    dsl.select(PRODUCT_LISTING.PRODUCT_ID, PRODUCT_LISTING_IMAGE.OBJECT_KEY)
+        .from(PRODUCT_LISTING)
+        .join(PRODUCT_LISTING_IMAGE)
+        .on(PRODUCT_LISTING_IMAGE.LISTING_ID.eq(PRODUCT_LISTING.ID))
+        .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.PRODUCT_ID.in(productIds)))
+        .orderBy(
+            PRODUCT_LISTING.PRODUCT_ID.asc(),
+            PRODUCT_LISTING_IMAGE.SORT_ORDER.asc(),
+            PRODUCT_LISTING_IMAGE.CREATED_AT.asc())
+        .forEach(r -> keys.putIfAbsent(r.value1(), r.value2()));
+    return keys;
   }
 
   @Override

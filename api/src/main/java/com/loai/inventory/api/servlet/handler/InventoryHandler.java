@@ -18,6 +18,7 @@ import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InventoryService.LogPage;
 import com.loai.inventory.service.InventoryService.OverviewPage;
+import com.loai.inventory.service.ProductListingService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -35,10 +36,15 @@ public class InventoryHandler implements OrgResourceHandler {
   private static final Logger log = LoggerFactory.getLogger(InventoryHandler.class);
 
   private final InventoryService inventoryService;
+  private final ProductListingService productListingService;
   private final ObjectMapper mapper;
 
-  public InventoryHandler(InventoryService inventoryService, ObjectMapper mapper) {
+  public InventoryHandler(
+      InventoryService inventoryService,
+      ProductListingService productListingService,
+      ObjectMapper mapper) {
     this.inventoryService = inventoryService;
+    this.productListingService = productListingService;
     this.mapper = mapper;
   }
 
@@ -102,11 +108,15 @@ public class InventoryHandler implements OrgResourceHandler {
     Integer lowLte = lowLteParam(req);
     OverviewPage result =
         inventoryService.listOverview(orgId, req.getParameter("q"), stock, lowLte, page, size);
+    // Batch-load each row's storefront listing thumbnail (product → listing → primary image),
+    // presigned. One extra query per page; products without a listing image are simply omitted.
+    var productIds = result.rows().stream().map(r -> r.productId()).toList();
+    var imageUrls = productListingService.primaryImageUrlsByProductId(orgId, productIds);
     writeJson(
         resp,
         200,
         new PageResponse<>(
-            InventoryMapper.toOverviewRows(result.rows()), result.total(), page, size));
+            InventoryMapper.toOverviewRows(result.rows(), imageUrls), result.total(), page, size));
   }
 
   /** {@code GET /inventory/{productId}/log?page=&size=} — the movement ledger. */

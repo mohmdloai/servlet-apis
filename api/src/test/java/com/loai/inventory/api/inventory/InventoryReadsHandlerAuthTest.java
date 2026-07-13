@@ -60,8 +60,10 @@ class InventoryReadsHandlerAuthTest {
   }
 
   private InventoryHandler inventoryHandler(InventoryService service) {
+    var listings = Mockito.mock(com.loai.inventory.service.ProductListingService.class);
+    when(listings.primaryImageUrlsByProductId(any(), any())).thenReturn(Map.of());
     return new InventoryHandler(
-        service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        service, listings, com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 
   private SalesOrderHandler salesOrderHandler(InventoryService service) {
