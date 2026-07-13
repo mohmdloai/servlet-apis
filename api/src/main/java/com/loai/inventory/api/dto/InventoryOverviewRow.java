@@ -26,10 +26,21 @@ public class InventoryOverviewRow {
   private Integer availableQty;
   private Long version;
   private OffsetDateTime updatedAt;
+  private String imageUrl;
 
   private InventoryOverviewRow() {}
 
   public static InventoryOverviewRow from(InventoryRepository.OverviewRow row) {
+    return from(row, null);
+  }
+
+  /**
+   * As {@link #from(InventoryRepository.OverviewRow)} plus a short-lived presigned thumbnail URL
+   * for the product's storefront listing image (the stock-overview / out-of-stock thumbnail).
+   * {@code null} when the product has no listing image — the global ObjectMapper omits the key and
+   * the frontend renders a placeholder.
+   */
+  public static InventoryOverviewRow from(InventoryRepository.OverviewRow row, String imageUrl) {
     InventoryOverviewRow r = new InventoryOverviewRow();
     r.productId = row.productId();
     r.name = row.name();
@@ -41,6 +52,7 @@ public class InventoryOverviewRow {
     r.availableQty = row.availableQty();
     r.version = row.version();
     r.updatedAt = row.updatedAt();
+    r.imageUrl = imageUrl;
     return r;
   }
 
@@ -82,5 +94,9 @@ public class InventoryOverviewRow {
 
   public OffsetDateTime getUpdatedAt() {
     return updatedAt;
+  }
+
+  public String getImageUrl() {
+    return imageUrl;
   }
 }

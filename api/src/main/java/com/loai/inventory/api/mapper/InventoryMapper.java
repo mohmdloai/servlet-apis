@@ -56,6 +56,16 @@ public final class InventoryMapper {
     return rows.stream().map(InventoryOverviewRow::from).toList();
   }
 
+  /**
+   * As {@link #toOverviewRows(List)}, attaching each product's presigned thumbnail URL (or null).
+   */
+  public static List<InventoryOverviewRow> toOverviewRows(
+      List<InventoryRepository.OverviewRow> rows, java.util.Map<java.util.UUID, String> imageUrls) {
+    return rows.stream()
+        .map(row -> InventoryOverviewRow.from(row, imageUrls.get(row.productId())))
+        .toList();
+  }
+
   public static List<InventoryLogRow> toLogRows(LogPage page) {
     return page.logs().stream().map(l -> InventoryLogRow.from(l, orderNumber(page, l))).toList();
   }

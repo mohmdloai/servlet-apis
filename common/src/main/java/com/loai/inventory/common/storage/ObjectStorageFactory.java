@@ -34,7 +34,13 @@ public final class ObjectStorageFactory {
       throw new RuntimeException("Failed to load storage.properties", e);
     }
 
-    String endpoint = props.getProperty("storage.endpoint");
+    // A presigned URL's signature is bound to its host, so the endpoint must be the host the
+    // BROWSER uses. In dev on the machine itself that's localhost; for phone/LAN testing the
+    // browser is on another device and localhost won't resolve — override with the dev machine's
+    // LAN IP via MINIO_PUBLIC_ENDPOINT (e.g. http://192.168.100.41:9100). Presigning is offline,
+    // so the backend never contacts MinIO — only the browser needs to reach this host.
+    String endpoint =
+        getenvOrDefault("MINIO_PUBLIC_ENDPOINT", props.getProperty("storage.endpoint"));
     String region = props.getProperty("storage.region", "us-east-1");
     String bucket = props.getProperty("storage.bucket");
     boolean pathStyle =

@@ -155,6 +155,14 @@ public interface ProductListingRepository {
   List<ProductListingImage> findImagesForListings(Collection<UUID> listingIds);
 
   /**
+   * Primary-image object keys for a set of products (org-scoped), keyed by {@code productId}. The
+   * primary image is the lowest {@code sort_order} (then oldest) image of the product's listing.
+   * Products with no listing, or a listing with no image, are simply absent from the map. Batch-
+   * loaded in one query so the stock-overview thumbnail never issues a per-row fetch (N+1).
+   */
+  Map<UUID, String> findPrimaryImageObjectKeys(UUID orgId, Collection<UUID> productIds);
+
+  /**
    * Update an existing image's editable fields ({@code alt_text}, {@code sort_order}), scoped to
    * {@code orgId} + {@code listingId}. Enables alt-text edits and reordering without a
    * delete-and-re-add. Throws if no such image exists.

@@ -53,6 +53,24 @@ public class ProductListingService {
 
   // --- reads ---
 
+  /**
+   * Presigned primary-image URLs for a set of products (org-scoped), keyed by {@code productId} —
+   * the stock-overview / out-of-stock thumbnails. A product with no listing, or a listing with no
+   * image, is simply absent from the map (the caller renders a placeholder). One batch query, then
+   * a local presign per hit. Read-only on {@code rootDsl}.
+   */
+  public Map<UUID, String> primaryImageUrlsByProductId(
+      UUID orgId, java.util.Collection<UUID> productIds) {
+    if (productIds == null || productIds.isEmpty()) {
+      return Map.of();
+    }
+    ProductListingRepository repo = repoFactory.create(rootDsl);
+    Map<UUID, String> keys = repo.findPrimaryImageObjectKeys(orgId, productIds);
+    Map<UUID, String> urls = new java.util.HashMap<>(keys.size());
+    keys.forEach((productId, key) -> urls.put(productId, storage.presignGet(key)));
+    return urls;
+  }
+
   public ListingView getById(UUID orgId, UUID id) {
     ProductListingRepository repo = repoFactory.create(rootDsl);
     ProductListing listing =
