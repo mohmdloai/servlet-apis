@@ -38,9 +38,13 @@ public class EmbeddedTomcatLauncher {
       AppConfig config = new AppConfig();
       ctx.getServletContext().setAttribute(AppBootstrap.CONFIG_KEY, config);
 
-      // Filters: CORS → RateLimit (auth only) → JwtAuth (skips /api/auth/login + /api/auth/refresh)
+      // Filters: CORS → RateLimit (auth + anonymous public) → JwtAuth (bypasses /api/public/* and
+      // the /api/auth/login + /api/auth/refresh endpoints). One RateLimitFilter, two URL patterns:
+      // /api/auth/* (login/refresh buckets) and /api/public/* (pub-read/pub-checkout buckets) — see
+      // stories/public_rate_limiting.md.
       addFilter(ctx, "corsFilter", CorsFilter.class.getName(), "/api/*");
-      addFilter(ctx, "rateLimitFilter", RateLimitFilter.class.getName(), "/api/auth/*");
+      addFilter(
+          ctx, "rateLimitFilter", RateLimitFilter.class.getName(), "/api/auth/*", "/api/public/*");
       addFilter(ctx, "jwtAuthFilter", JwtAuthFilter.class.getName(), "/api/*");
 
       // Servlets
@@ -83,7 +87,7 @@ public class EmbeddedTomcatLauncher {
     }
   }
 
-  private static void addFilter(Context ctx, String name, String className, String urlPattern) {
+  private static void addFilter(Context ctx, String name, String className, String... urlPatterns) {
     FilterDef def = new FilterDef();
     def.setFilterName(name);
     def.setFilterClass(className);
@@ -91,7 +95,9 @@ public class EmbeddedTomcatLauncher {
 
     FilterMap map = new FilterMap();
     map.setFilterName(name);
-    map.addURLPattern(urlPattern);
+    for (String urlPattern : urlPatterns) {
+      map.addURLPattern(urlPattern);
+    }
     ctx.addFilterMap(map);
   }
 }

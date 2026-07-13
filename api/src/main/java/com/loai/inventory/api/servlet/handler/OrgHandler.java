@@ -103,13 +103,20 @@ public class OrgHandler {
             body.getPhone(),
             body.getContactEmail(),
             body.getLogoObjectKey());
+    OrgService.StorefrontBranding branding =
+        new OrgService.StorefrontBranding(
+            body.getThemeColor(),
+            body.getInstapayHandle(),
+            body.getPaymentInstructions(),
+            body.getDefaultLocale());
     Org updated =
         orgService.update(
             orgId,
             body.getName(),
             body.getRefundApprovalThreshold(),
             body.getOrderTtlMinutes(),
-            profile);
+            profile,
+            branding);
     writeJson(resp, 200, OrgResponse.from(updated));
   }
 

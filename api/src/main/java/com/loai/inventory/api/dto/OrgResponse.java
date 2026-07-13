@@ -26,6 +26,12 @@ public class OrgResponse {
   private String contactEmail;
   private String logoObjectKey;
 
+  // Storefront branding (V52) — nullable; omitted from JSON when null.
+  private String themeColor;
+  private String instapayHandle;
+  private String paymentInstructions;
+  private String defaultLocale;
+
   private OrgResponse() {}
 
   public static OrgResponse from(Org o) {
@@ -47,6 +53,10 @@ public class OrgResponse {
     r.phone = o.getPhone();
     r.contactEmail = o.getContactEmail();
     r.logoObjectKey = o.getLogoObjectKey();
+    r.themeColor = o.getThemeColor();
+    r.instapayHandle = o.getInstapayHandle();
+    r.paymentInstructions = o.getPaymentInstructions();
+    r.defaultLocale = o.getDefaultLocale();
     return r;
   }
 
@@ -116,5 +126,21 @@ public class OrgResponse {
 
   public String getLogoObjectKey() {
     return logoObjectKey;
+  }
+
+  public String getThemeColor() {
+    return themeColor;
+  }
+
+  public String getInstapayHandle() {
+    return instapayHandle;
+  }
+
+  public String getPaymentInstructions() {
+    return paymentInstructions;
+  }
+
+  public String getDefaultLocale() {
+    return defaultLocale;
   }
 }

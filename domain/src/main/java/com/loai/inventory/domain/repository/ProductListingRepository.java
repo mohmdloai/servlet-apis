@@ -12,6 +12,42 @@ import java.util.UUID;
 
 public interface ProductListingRepository {
 
+  /**
+   * One PUBLISHED listing resolved for anonymous checkout: the public {@code slug} mapped to the
+   * internal {@code productId} and the published {@code salesPrice} the shopper is charged, plus
+   * the display {@code title}. The slug→product mapping never crosses the public boundary — it
+   * stays inside {@link #resolveForCheckout}. See {@code stories/public_checkout.md}.
+   */
+  record CheckoutLineResolution(
+      String slug, UUID productId, java.math.BigDecimal salesPrice, String title) {}
+
+  /**
+   * Resolve a cart's listing slugs → {@link CheckoutLineResolution} in one query, constrained to
+   * the given status (PUBLISHED for checkout) and {@code orgId}. A slug that is unknown or not in
+   * {@code status} is simply absent from the result — the caller detects the miss and answers an
+   * opaque 404 without distinguishing "no such slug" from "exists but DRAFT/ARCHIVED".
+   */
+  List<CheckoutLineResolution> resolveForCheckout(
+      UUID orgId, Collection<String> slugs, ListingStatus status);
+
+  /**
+   * One PUBLISHED listing's advisory availability: the public {@code slug} mapped to its {@code
+   * available} quantity ({@code stock_qty - reserved_qty}; untracked/missing inventory → 0), via a
+   * LEFT JOIN to {@code inventory}. Slug-keyed — the {@code product_id} never leaves the
+   * repository; the service turns {@code available} into the boolean {@code in_stock}. See {@code
+   * stories/storefront_availability_signal.md} (B2).
+   */
+  record ListingAvailability(String slug, int available) {}
+
+  /**
+   * Resolve a set of listing slugs → {@link ListingAvailability}, constrained to {@code status}
+   * (PUBLISHED) and {@code orgId}, LEFT JOINed to {@code inventory} so an untracked product yields
+   * {@code available = 0}. A slug that is unknown or not in {@code status} is absent from the
+   * result (the caller maps it to {@code in_stock: false} — never a 404, never an oracle).
+   */
+  List<ListingAvailability> resolveAvailability(
+      UUID orgId, Collection<String> slugs, ListingStatus status);
+
   // --- listing CRUD ---
 
   Optional<ProductListing> findById(UUID orgId, UUID id);

@@ -19,6 +19,13 @@ public class UpdateOrgRequest {
   private String contactEmail;
   private String logoObjectKey;
 
+  // Storefront branding (V52). A null field leaves the stored value unchanged (merge). See
+  // stories/storefront_org_profile.md (B1).
+  private String themeColor;
+  private String instapayHandle;
+  private String paymentInstructions;
+  private String defaultLocale;
+
   public UpdateOrgRequest() {}
 
   public String getName() {
@@ -115,5 +122,37 @@ public class UpdateOrgRequest {
 
   public void setLogoObjectKey(String logoObjectKey) {
     this.logoObjectKey = logoObjectKey;
+  }
+
+  public String getThemeColor() {
+    return themeColor;
+  }
+
+  public void setThemeColor(String themeColor) {
+    this.themeColor = themeColor;
+  }
+
+  public String getInstapayHandle() {
+    return instapayHandle;
+  }
+
+  public void setInstapayHandle(String instapayHandle) {
+    this.instapayHandle = instapayHandle;
+  }
+
+  public String getPaymentInstructions() {
+    return paymentInstructions;
+  }
+
+  public void setPaymentInstructions(String paymentInstructions) {
+    this.paymentInstructions = paymentInstructions;
+  }
+
+  public String getDefaultLocale() {
+    return defaultLocale;
+  }
+
+  public void setDefaultLocale(String defaultLocale) {
+    this.defaultLocale = defaultLocale;
   }
 }

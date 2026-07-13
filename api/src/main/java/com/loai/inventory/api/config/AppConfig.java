@@ -295,7 +295,8 @@ public class AppConfig {
             credentialTokenService,
             authMailer,
             authService);
-    this.orgService = new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory);
+    this.orgService =
+        new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory, objectStorage);
     this.orgHealthService = new OrgHealthService(orgHealthRepository);
     this.reportService = new ReportService(reportRepository);
     this.memberService = new MemberService(dsl, userRepositoryFactory, authService);
@@ -341,13 +342,8 @@ public class AppConfig {
             emailMaxAttempts);
     this.productListingService =
         new ProductListingService(dsl, productListingRepositoryFactory, objectStorage);
-    this.storefrontService =
-        new StorefrontService(
-            dsl,
-            orgRepositoryFactory,
-            productListingRepositoryFactory,
-            categoryRepositoryFactory,
-            objectStorage);
+    // storefrontService is constructed after salesOrderService below — its anonymous checkout
+    // (public_checkout.md) delegates to SalesOrderService.placeStorefrontOrder.
     this.customerService = new CustomerService(dsl, customerRepositoryFactory);
     this.inventoryService =
         new InventoryService(
@@ -444,6 +440,15 @@ public class AppConfig {
             refundService,
             notificationService,
             magicLinkService);
+    this.storefrontService =
+        new StorefrontService(
+            dsl,
+            orgRepositoryFactory,
+            productListingRepositoryFactory,
+            categoryRepositoryFactory,
+            inventoryRepositoryFactory,
+            objectStorage,
+            salesOrderService);
     this.creditNoteService =
         new CreditNoteService(
             dsl,

@@ -42,6 +42,20 @@ public final class ObjectStorage implements AutoCloseable {
     return orgId + "/listings/" + listingId + "/";
   }
 
+  /**
+   * A tenant-scoped storefront-logo object key: {@code {orgId}/logo/{uuid}-{name}}. The prefix lets
+   * the org-update path verify on attach that the key really belongs to this org (cross-tenant
+   * guard, mirroring listing images).
+   */
+  public String newLogoKey(UUID orgId, String filename) {
+    return orgId + "/logo/" + UUID.randomUUID() + "-" + sanitize(filename);
+  }
+
+  /** The key prefix every logo object of this org must start with. */
+  public static String logoKeyPrefix(UUID orgId) {
+    return orgId + "/logo/";
+  }
+
   /** A presigned PUT URL the client uploads bytes to directly. */
   public String presignPut(String objectKey, String contentType) {
     PutObjectRequest put =

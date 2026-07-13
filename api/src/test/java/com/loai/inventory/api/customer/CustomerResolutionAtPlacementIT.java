@@ -470,7 +470,8 @@ class CustomerResolutionAtPlacementIT {
         new OrgService(
             dsl,
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.UserRepositoryFactoryImpl());
+            new com.loai.inventory.repository.UserRepositoryFactoryImpl(),
+            null);
 
     assertEquals(1440, orgService.getById(org).getOrderTtlMinutes(), "V47 default");
 

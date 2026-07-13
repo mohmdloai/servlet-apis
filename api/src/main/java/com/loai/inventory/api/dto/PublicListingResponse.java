@@ -14,6 +14,7 @@ public class PublicListingResponse {
   private String title;
   private String marketingCopy;
   private BigDecimal salesPrice;
+  private boolean inStock;
   private List<PublicListingImageResponse> images;
   private List<PublicCategoryRefResponse> categories;
 
@@ -25,6 +26,7 @@ public class PublicListingResponse {
     r.title = v.title();
     r.marketingCopy = v.marketingCopy();
     r.salesPrice = v.salesPrice();
+    r.inStock = v.inStock();
     r.images = v.images().stream().map(PublicListingImageResponse::from).toList();
     r.categories =
         v.categories() == null || v.categories().isEmpty()
@@ -47,6 +49,10 @@ public class PublicListingResponse {
 
   public BigDecimal getSalesPrice() {
     return salesPrice;
+  }
+
+  public boolean isInStock() {
+    return inStock;
   }
 
   public List<PublicListingImageResponse> getImages() {

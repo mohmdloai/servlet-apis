@@ -205,7 +205,7 @@ class OrgAdminHandlerAuthTest {
     Resp resp = new Resp();
     handler(service).handle("PATCH", reqWith(platform(SystemRole.SUPPORT)), resp.mock, "/" + ORG);
     assertEquals(403, resp.status);
-    verify(service, never()).updateOrg(any(), any(), any(), any(), any(), any());
+    verify(service, never()).updateOrg(any(), any(), any(), any(), any(), any(), any());
   }
 
   @Test
@@ -214,7 +214,7 @@ class OrgAdminHandlerAuthTest {
     Org org =
         new Org(
             ORG, "Renamed", "acme", true, null, 1440, OffsetDateTime.now(), OffsetDateTime.now());
-    when(service.updateOrg(any(), any(), eq(ORG), any(), any(), any())).thenReturn(org);
+    when(service.updateOrg(any(), any(), eq(ORG), any(), any(), any(), any())).thenReturn(org);
     Resp resp = new Resp();
     handler(service)
         .handle(
@@ -223,7 +223,7 @@ class OrgAdminHandlerAuthTest {
             resp.mock,
             "/" + ORG);
     assertEquals(200, resp.status);
-    verify(service).updateOrg(any(), any(), eq(ORG), eq("Renamed"), any(), any());
+    verify(service).updateOrg(any(), any(), eq(ORG), eq("Renamed"), any(), any(), any());
   }
 
   private static final class Resp {
