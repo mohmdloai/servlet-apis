@@ -341,3 +341,22 @@ main packaging is unaffected.
 | Frontend download/print + receipt print + branding editor | `frontst/stories/23_st_document_pdf.md` — consumes the three PDF routes + the profile fields |
 | Credit-note / refund customer emails | reuse the attachment pipeline + a new event |
 | ETA e-invoicing / fiscal receipts | the render service is the natural seam for a signed/QR variant |
+
+---
+
+## Addendum — letterhead logo (2026-07-13)
+
+Part A stored `logo_object_key` and the plan above assumed the (deferred) HTML engine would inline
+it; the shipped OpenPDF v1 renderer never used it — the letterhead was text-only. Now wired, still
+on OpenPDF:
+
+- `DocumentRenderService` takes a `LogoSource` (`objectKey → byte[]`) — production impl
+  `PresignedLogoSource` presigns a GET (offline HMAC, `ObjectStorage` stays store-blind) and
+  fetches over HTTP with tight timeouts (2s connect / 4s request). The old 4-arg constructor
+  keeps a null source (text-only) for callers/tests without storage.
+- **A4 (invoice + credit note):** the logo renders above the seller name, `scaleToFit(140×48pt)`.
+  **Receipt (80mm):** centered above the header, `scaleToFit(100×40pt)`, slip height grows 48pt.
+- **Degrade guarantee:** null key, fetch error, timeout, or undecodable bytes → the text-only
+  header, logged at WARN — a broken logo must never break a finance document download.
+- Tests: logo render is strictly larger than text-only (image stream present); a throwing source
+  still renders the named PDF; receipt-with-logo renders.

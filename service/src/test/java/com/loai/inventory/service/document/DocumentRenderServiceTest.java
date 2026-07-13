@@ -175,4 +175,94 @@ class DocumentRenderServiceTest {
     assertTrue(doc.filename().endsWith(".pdf"));
     assertTrue(isPdf(doc.bytes()));
   }
+
+  // ---- letterhead logo (V51 logo_object_key via LogoSource) ------------------------------------
+
+  /** A valid 1×1 red PNG — the smallest bytes OpenPDF's Image.getInstance can decode. */
+  private static final byte[] ONE_PIXEL_PNG =
+      java.util.Base64.getDecoder()
+          .decode(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAA"
+                  + "AABJRU5ErkJggg==");
+
+  private static Org orgWithLogo() {
+    Org o = orgWithProfile();
+    o.setLogoObjectKey(ORG + "/logo/abc-logo.png");
+    return o;
+  }
+
+  @Test
+  void renderInvoice_embedsTheLogoWhenTheSourceResolvesIt() {
+    when(invoiceAdminService.get(ORG, INVOICE))
+        .thenReturn(new InvoiceView(anInvoice(), List.of(aLine())));
+    when(orgService.getById(ORG)).thenReturn(orgWithLogo());
+
+    DocumentRenderService withLogo =
+        new DocumentRenderService(
+            orgService,
+            invoiceAdminService,
+            creditNoteService,
+            paymentService,
+            key -> ONE_PIXEL_PNG);
+    RenderedDocument logoDoc = withLogo.renderInvoice(ORG, INVOICE);
+    RenderedDocument textDoc = svc.renderInvoice(ORG, INVOICE); // default source resolves nothing
+
+    assertTrue(isPdf(logoDoc.bytes()));
+    // The embedded image stream makes the logo render strictly larger than the text-only one.
+    assertTrue(
+        logoDoc.bytes().length > textDoc.bytes().length,
+        "logo render should carry an image stream");
+  }
+
+  @Test
+  void renderInvoice_fallsBackToTextHeaderWhenTheLogoFetchFails() {
+    when(invoiceAdminService.get(ORG, INVOICE))
+        .thenReturn(new InvoiceView(anInvoice(), List.of(aLine())));
+    when(orgService.getById(ORG)).thenReturn(orgWithLogo());
+
+    DocumentRenderService broken =
+        new DocumentRenderService(
+            orgService,
+            invoiceAdminService,
+            creditNoteService,
+            paymentService,
+            key -> {
+              throw new java.io.IOException("object store down");
+            });
+
+    RenderedDocument doc = broken.renderInvoice(ORG, INVOICE);
+
+    assertEquals("INV-2026-0007.pdf", doc.filename());
+    assertTrue(isPdf(doc.bytes()), "a broken logo must never break the document");
+  }
+
+  @Test
+  void renderReceipt_embedsTheLogoAndStillRenders() {
+    SalesInvoice inv = anInvoice();
+    SalesOrder order = mock(SalesOrder.class);
+    when(order.getOrderNumber()).thenReturn("SO-2026-000123");
+    when(invoiceAdminService.listForOrder(ORG, ORDER))
+        .thenReturn(
+            new InvoiceAdminService.OrderInvoices(
+                order, List.of(new InvoiceView(inv, List.of(aLine())))));
+    Payment payment = mock(Payment.class);
+    when(payment.getAmount()).thenReturn(new BigDecimal("150.00"));
+    when(paymentService.listForOrder(ORG, ORDER))
+        .thenReturn(
+            new PaymentService.OrderPayments(
+                order, List.of(new PaymentWithRefunds(payment, List.of()))));
+    when(orgService.getById(ORG)).thenReturn(orgWithLogo());
+
+    DocumentRenderService withLogo =
+        new DocumentRenderService(
+            orgService,
+            invoiceAdminService,
+            creditNoteService,
+            paymentService,
+            key -> ONE_PIXEL_PNG);
+
+    RenderedDocument doc = withLogo.renderReceipt(ORG, ORDER);
+
+    assertTrue(isPdf(doc.bytes()));
+  }
 }

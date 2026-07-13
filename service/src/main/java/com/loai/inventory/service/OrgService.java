@@ -60,6 +60,16 @@ public class OrgService {
     return new LogoPresign(url, objectKey, storage.presignTtlSeconds());
   }
 
+  /**
+   * The org's current logo as a short-lived presigned GET URL, or {@code null} when none is set —
+   * the admin-plane read (the public storefront profile presigns its own copy). See {@code
+   * stories/storefront_org_profile.md}.
+   */
+  public String logoUrl(UUID orgId) {
+    String key = getById(orgId).getLogoObjectKey();
+    return key == null || key.isBlank() ? null : storage.presignGet(key);
+  }
+
   public Org getById(UUID id) {
     return orgRepoFactory
         .create(rootDsl)

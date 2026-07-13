@@ -206,6 +206,16 @@ class StorefrontProfileIT {
 
     StorefrontProfileView v = storefront.profile("acme");
     assertTrue(v.logoUrl() != null && v.logoUrl().startsWith("http"), "profile presigns a GET URL");
+
+    // The admin-plane read (GET /api/orgs/{orgId}/logo) presigns the same key.
+    String adminUrl = orgService.logoUrl(id);
+    assertTrue(adminUrl != null && adminUrl.startsWith("http"), "admin read presigns a GET URL");
+  }
+
+  @Test
+  void logoUrl_isNullWhenNoLogoIsSet() {
+    UUID id = insertOrg("acme", "Acme Store", true);
+    assertNull(orgService.logoUrl(id));
   }
 
   @Test

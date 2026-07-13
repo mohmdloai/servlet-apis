@@ -2,6 +2,7 @@ package com.loai.inventory.api.servlet.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.LogoUrlResponse;
 import com.loai.inventory.api.dto.PresignLogoRequest;
 import com.loai.inventory.api.dto.PresignLogoResponse;
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -15,8 +16,9 @@ import java.io.IOException;
 import java.util.UUID;
 
 /**
- * Storefront-logo upload under {@code /api/orgs/{orgId}/logo/*} (STAFF). Mirrors the listing-image
- * presign flow: {@code POST /logo/presign} hands out a presigned PUT URL + an org-scoped object
+ * Storefront logo under {@code /api/orgs/{orgId}/logo/*}. {@code GET /logo} (VIEWER) returns the
+ * current logo as a presigned GET URL for the admin preview. {@code POST /logo/presign} (STAFF)
+ * mirrors the listing-image presign flow: it hands out a presigned PUT URL + an org-scoped object
  * key; the client uploads the bytes, then sets {@code logo_object_key} via {@code PUT
  * /api/orgs/{orgId}} (which enforces the same org key-prefix). See {@code
  * stories/storefront_org_profile.md}.
@@ -37,7 +39,14 @@ public class LogoHandler implements OrgResourceHandler {
       throws IOException {
     try {
       String[] parts = split(remaining);
-      if (parts.length == 1 && "presign".equals(parts[0])) {
+      if (parts.length == 0) {
+        if (!"GET".equals(method)) {
+          writeError(resp, 405, "Method not allowed");
+          return;
+        }
+        AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+        writeJson(resp, 200, LogoUrlResponse.of(orgService.logoUrl(orgId)));
+      } else if (parts.length == 1 && "presign".equals(parts[0])) {
         if (!"POST".equals(method)) {
           writeError(resp, 405, "Method not allowed");
           return;
@@ -48,7 +57,7 @@ public class LogoHandler implements OrgResourceHandler {
             orgService.presignLogoUpload(orgId, body.getFilename(), body.getContentType());
         writeJson(resp, 200, PresignLogoResponse.from(result));
       } else {
-        throw new ValidationException("Expected /api/orgs/{orgId}/logo/presign");
+        throw new ValidationException("Expected /api/orgs/{orgId}/logo or .../logo/presign");
       }
     } catch (AppException e) {
       writeError(resp, e);

@@ -18,6 +18,7 @@ import com.lowagie.text.DocumentException;
 import com.lowagie.text.Element;
 import com.lowagie.text.Font;
 import com.lowagie.text.FontFactory;
+import com.lowagie.text.Image;
 import com.lowagie.text.PageSize;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.Phrase;
@@ -34,6 +35,8 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Renders an already-frozen finance aggregate to a PDF document — the single, server-side renderer
@@ -49,25 +52,60 @@ import java.util.UUID;
  */
 public final class DocumentRenderService {
 
+  private static final Logger log = LoggerFactory.getLogger(DocumentRenderService.class);
+
   private static final DateTimeFormatter DATE =
       DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'");
   private static final Color MUTED = new Color(0x66, 0x66, 0x66);
   private static final Color RULE = new Color(0xDD, 0xDD, 0xDD);
 
+  /** Letterhead logo bounds (pt) — scaled to fit, aspect kept. */
+  private static final float LOGO_MAX_W = 140f;
+
+  private static final float LOGO_MAX_H = 48f;
+
+  /** Receipt (80mm) logo bounds + the extra slip height reserved when a logo is set. */
+  private static final float RECEIPT_LOGO_MAX_W = 100f;
+
+  private static final float RECEIPT_LOGO_MAX_H = 40f;
+  private static final float RECEIPT_LOGO_EXTRA_H = 48f;
+
+  /**
+   * Resolves an org's {@code logo_object_key} to raw image bytes (V51/V52 — the same key the
+   * storefront renders). Returning {@code null} (or throwing) means "no logo" — the document falls
+   * back to the text-only header; a broken logo must never break an invoice download.
+   */
+  @FunctionalInterface
+  public interface LogoSource {
+    byte[] fetch(String objectKey) throws Exception;
+  }
+
   private final OrgService orgService;
   private final InvoiceAdminService invoiceAdminService;
   private final CreditNoteService creditNoteService;
   private final PaymentService paymentService;
+  private final LogoSource logoSource;
 
+  /** Text-only headers (no logo resolution) — kept for callers/tests that don't wire storage. */
   public DocumentRenderService(
       OrgService orgService,
       InvoiceAdminService invoiceAdminService,
       CreditNoteService creditNoteService,
       PaymentService paymentService) {
+    this(orgService, invoiceAdminService, creditNoteService, paymentService, key -> null);
+  }
+
+  public DocumentRenderService(
+      OrgService orgService,
+      InvoiceAdminService invoiceAdminService,
+      CreditNoteService creditNoteService,
+      PaymentService paymentService,
+      LogoSource logoSource) {
     this.orgService = orgService;
     this.invoiceAdminService = invoiceAdminService;
     this.creditNoteService = creditNoteService;
     this.paymentService = paymentService;
+    this.logoSource = logoSource;
   }
 
   // ---- fonts (base-14, no assets) -------------------------------------------------------------
@@ -204,16 +242,24 @@ public final class DocumentRenderService {
     final BigDecimal tenderF = tender;
     final BigDecimal changeF = change;
 
+    Org org = org(orgId);
+    Image receiptLogo = logoImage(org, RECEIPT_LOGO_MAX_W, RECEIPT_LOGO_MAX_H);
+
     // 80mm ≈ 226.77 pt wide; height sized to content so the slip isn't mostly blank.
     float width = 226.77f;
-    float height = 220f + live.lines().size() * 16f;
+    float height =
+        220f + live.lines().size() * 16f + (receiptLogo == null ? 0f : RECEIPT_LOGO_EXTRA_H);
     byte[] bytes =
         build(
             new Rectangle(width, height),
             10,
             doc -> {
-              receiptCenter(doc, headerName(org(orgId)), H2);
-              for (String line : orgAddressLines(org(orgId))) {
+              if (receiptLogo != null) {
+                receiptLogo.setAlignment(Element.ALIGN_CENTER);
+                doc.add(receiptLogo);
+              }
+              receiptCenter(doc, headerName(org), H2);
+              for (String line : orgAddressLines(org)) {
                 receiptCenter(doc, line, MUTED_BODY);
               }
               receiptRule(doc);
@@ -276,7 +322,12 @@ public final class DocumentRenderService {
     return out.toByteArray();
   }
 
-  private static void orgHeader(Document doc, Org org) throws DocumentException {
+  private void orgHeader(Document doc, Org org) throws DocumentException {
+    Image logo = logoImage(org, LOGO_MAX_W, LOGO_MAX_H);
+    if (logo != null) {
+      doc.add(logo);
+      doc.add(spacer(4));
+    }
     Paragraph name = new Paragraph(headerName(org), H2);
     doc.add(name);
     for (String line : orgAddressLines(org)) {
@@ -284,6 +335,30 @@ public final class DocumentRenderService {
       doc.add(p);
     }
     doc.add(spacer(8));
+  }
+
+  /**
+   * The org's logo as a print-ready {@link Image} scaled into the given bounds, or {@code null}
+   * when the org has none or the bytes can't be fetched/decoded — the header then falls back to
+   * text only. Never throws: a broken logo must not break a finance document download.
+   */
+  private Image logoImage(Org org, float maxWidth, float maxHeight) {
+    String key = org.getLogoObjectKey();
+    if (blank(key)) {
+      return null;
+    }
+    try {
+      byte[] bytes = logoSource.fetch(key);
+      if (bytes == null || bytes.length == 0) {
+        return null;
+      }
+      Image img = Image.getInstance(bytes);
+      img.scaleToFit(maxWidth, maxHeight);
+      return img;
+    } catch (Exception e) {
+      log.warn("Logo unavailable for document header (key={}): {}", key, e.toString());
+      return null;
+    }
   }
 
   private static String headerName(Org org) {
