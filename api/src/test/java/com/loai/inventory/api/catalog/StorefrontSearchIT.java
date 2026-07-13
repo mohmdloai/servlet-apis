@@ -107,6 +107,7 @@ class StorefrontSearchIT {
             new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
             storage,
             // Read-only tests never call checkout(), so the placement engine is unused here.
+            null,
             null);
   }
 

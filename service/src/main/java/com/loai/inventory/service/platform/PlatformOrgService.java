@@ -236,9 +236,24 @@ public class PlatformOrgService {
       BigDecimal refundApprovalThreshold,
       Integer orderTtlMinutes,
       OrgService.StorefrontBranding branding) {
+    return updateOrg(
+        actor, env, orgId, name, refundApprovalThreshold, orderTtlMinutes, branding, null);
+  }
+
+  public Org updateOrg(
+      SecurityContext actor,
+      Environment env,
+      UUID orgId,
+      String name,
+      BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes,
+      OrgService.StorefrontBranding branding,
+      OrgService.SeoMetadata seo) {
     OrgService.validateName(name);
     OrgService.validatePolicy(refundApprovalThreshold, orderTtlMinutes);
     OrgService.validateBranding(branding);
+    OrgService.validateSeoMetadata(seo);
+    OrgService.validateOgImageKeyOwnership(orgId, seo);
 
     return dsl.transactionResult(
         cfg -> {
@@ -254,6 +269,7 @@ public class PlatformOrgService {
             existing.setOrderTtlMinutes(orderTtlMinutes);
           }
           OrgService.applyBranding(existing, branding);
+          OrgService.applySeoMetadata(existing, seo);
           Org updated = orgRepo.update(existing);
 
           Map<String, Object> detail = new LinkedHashMap<>();
@@ -274,6 +290,14 @@ public class PlatformOrgService {
             }
             if (branding.defaultLocale() != null) {
               detail.put("default_locale", branding.defaultLocale());
+            }
+          }
+          if (seo != null) {
+            if (seo.metaTitle() != null) detail.put("meta_title", seo.metaTitle());
+            if (seo.metaDescription() != null)
+              detail.put("meta_description", seo.metaDescription());
+            if (seo.ogImageObjectKey() != null) {
+              detail.put("og_image_object_key", seo.ogImageObjectKey());
             }
           }
           audit.recordInTx(

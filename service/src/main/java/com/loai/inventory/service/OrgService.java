@@ -61,6 +61,26 @@ public class OrgService {
   }
 
   /**
+   * Hand out a presigned PUT URL + an org-scoped object key for a storefront og-image upload (slice
+   * C2, {@code stories/storefront_seo_metadata.md}). No column is written here — the client uploads
+   * the bytes, then sets {@code og_image_object_key} via {@code PUT /api/orgs/{orgId}} (which
+   * enforces the same {@code {orgId}/og/} prefix). Reuses the logo presign machinery with an
+   * og-scoped key prefix.
+   */
+  public LogoPresign presignOgImageUpload(UUID orgId, String filename, String contentType) {
+    if (filename == null || filename.isBlank()) {
+      throw new ValidationException("filename is required");
+    }
+    orgRepoFactory
+        .create(rootDsl)
+        .findById(orgId)
+        .orElseThrow(() -> new NotFoundException("Org", orgId));
+    String objectKey = storage.newOgImageKey(orgId, filename);
+    String url = storage.presignPut(objectKey, contentType);
+    return new LogoPresign(url, objectKey, storage.presignTtlSeconds());
+  }
+
+  /**
    * The org's current logo as a short-lived presigned GET URL, or {@code null} when none is set —
    * the admin-plane read (the public storefront profile presigns its own copy). See {@code
    * stories/storefront_org_profile.md}.
@@ -153,6 +173,23 @@ public class OrgService {
   public record StorefrontBranding(
       String themeColor, String instapayHandle, String paymentInstructions, String defaultLocale) {}
 
+  /**
+   * Storefront SEO & social metadata (V54, slice C2) — the merchant-authored text a shared store
+   * link unfurls with, plus the og-image object key. Merge semantics like {@link
+   * StorefrontBranding}: a {@code null} field leaves the stored value unchanged, a blank string
+   * clears it. Length caps ({@link #MAX_META_TITLE}/{@link #MAX_META_DESCRIPTION}) are generous
+   * over the frontend's ~60/~160 display-truncation guidance — the server rule, not the display
+   * guide. See {@code stories/storefront_seo_metadata.md} (C2).
+   */
+  public record SeoMetadata(String metaTitle, String metaDescription, String ogImageObjectKey) {}
+
+  /**
+   * Server-side length caps for the SEO text fields (generous over frontend display truncation).
+   */
+  public static final int MAX_META_TITLE = 70;
+
+  public static final int MAX_META_DESCRIPTION = 200;
+
   private static final Pattern THEME_COLOR_PATTERN = Pattern.compile("^#[0-9A-Fa-f]{6}$");
 
   /**
@@ -191,11 +228,24 @@ public class OrgService {
       Integer orderTtlMinutes,
       BillingProfile profile,
       StorefrontBranding branding) {
+    return update(id, name, refundApprovalThreshold, orderTtlMinutes, profile, branding, null);
+  }
+
+  public Org update(
+      UUID id,
+      String name,
+      java.math.BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes,
+      BillingProfile profile,
+      StorefrontBranding branding,
+      SeoMetadata seo) {
     validateName(name);
     validatePolicy(refundApprovalThreshold, orderTtlMinutes);
     validateBillingProfile(profile);
     validateBranding(branding);
+    validateSeoMetadata(seo);
     validateLogoKeyOwnership(id, profile);
+    validateOgImageKeyOwnership(id, seo);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -212,6 +262,7 @@ public class OrgService {
           }
           applyBillingProfile(existing, profile);
           applyBranding(existing, branding);
+          applySeoMetadata(existing, seo);
 
           Org updated = orgRepo.update(existing);
           log.info("Updated org id={}", id);
@@ -258,6 +309,49 @@ public class OrgService {
       if (!loc.equals("ar") && !loc.equals("en")) {
         throw new ValidationException("default_locale must be 'ar' or 'en'");
       }
+    }
+  }
+
+  /**
+   * Merge SEO metadata onto the org (slice C2): a {@code null} field leaves the stored value
+   * unchanged; a non-null field is normalized (trimmed, blank → null) and applied — so a blank
+   * string clears it. A {@code null} seo is a no-op.
+   */
+  public static void applySeoMetadata(Org org, SeoMetadata s) {
+    if (s == null) {
+      return;
+    }
+    if (s.metaTitle() != null) org.setMetaTitle(blankToNull(s.metaTitle()));
+    if (s.metaDescription() != null) org.setMetaDescription(blankToNull(s.metaDescription()));
+    if (s.ogImageObjectKey() != null) org.setOgImageObjectKey(blankToNull(s.ogImageObjectKey()));
+  }
+
+  /**
+   * SEO metadata validation (slice C2): {@code meta_title} ≤ {@value #MAX_META_TITLE} and {@code
+   * meta_description} ≤ {@value #MAX_META_DESCRIPTION} chars — cause-naming 400s, generous over the
+   * frontend's display-truncation guidance. A null seo or a null/blank field passes.
+   */
+  public static void validateSeoMetadata(SeoMetadata s) {
+    if (s == null) {
+      return;
+    }
+    checkLen("meta_title", s.metaTitle(), MAX_META_TITLE);
+    checkLen("meta_description", s.metaDescription(), MAX_META_DESCRIPTION);
+  }
+
+  /**
+   * When an org update sets a non-blank {@code og_image_object_key}, it must be one we minted for
+   * this org — {@code {orgId}/og/…} — blocking a caller from attaching another tenant's (or an
+   * arbitrary) object. Mirrors the logo-key attach guard (epic §4). A null/blank key
+   * (leave-unchanged or clear) passes.
+   */
+  public static void validateOgImageKeyOwnership(UUID orgId, SeoMetadata seo) {
+    if (seo == null) {
+      return;
+    }
+    String key = blankToNull(seo.ogImageObjectKey());
+    if (key != null && !key.startsWith(ObjectStorage.ogImageKeyPrefix(orgId))) {
+      throw new ValidationException("og_image_object_key does not belong to this org");
     }
   }
 

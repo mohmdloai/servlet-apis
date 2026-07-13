@@ -35,6 +35,14 @@ public class Org {
   private String paymentInstructions;
   private String defaultLocale;
 
+  // Storefront SEO & social metadata (V54, slice C2) — how a pasted store link unfurls. All
+  // nullable; the storefront's resolveSeo falls back (org name / localized default / logo-backed og
+  // route) when unset. og_image_object_key is a service-guarded {orgId}/og/… key streamed by the
+  // stable public og-image route. See stories/storefront_seo_metadata.md (C2).
+  private String metaTitle;
+  private String metaDescription;
+  private String ogImageObjectKey;
+
   public Org() {}
 
   public Org(
@@ -223,6 +231,30 @@ public class Org {
 
   public void setDefaultLocale(String defaultLocale) {
     this.defaultLocale = defaultLocale;
+  }
+
+  public String getMetaTitle() {
+    return metaTitle;
+  }
+
+  public void setMetaTitle(String metaTitle) {
+    this.metaTitle = metaTitle;
+  }
+
+  public String getMetaDescription() {
+    return metaDescription;
+  }
+
+  public void setMetaDescription(String metaDescription) {
+    this.metaDescription = metaDescription;
+  }
+
+  public String getOgImageObjectKey() {
+    return ogImageObjectKey;
+  }
+
+  public void setOgImageObjectKey(String ogImageObjectKey) {
+    this.ogImageObjectKey = ogImageObjectKey;
   }
 
   @Override

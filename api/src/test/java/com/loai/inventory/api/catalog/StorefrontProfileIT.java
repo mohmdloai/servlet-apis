@@ -83,6 +83,7 @@ class StorefrontProfileIT {
             new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
             new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
             storage,
+            null,
             null);
     orgService =
         new OrgService(
@@ -252,6 +253,31 @@ class StorefrontProfileIT {
     assertNull(v.instapayHandle());
     assertNull(v.paymentInstructions());
     assertEquals("ar", v.defaultLocale());
+    // C2: unset SEO text fields are null (and omitted from JSON).
+    assertNull(v.metaTitle());
+    assertNull(v.metaDescription());
+  }
+
+  @Test
+  void ownerSetsSeoMetadata_textSurfacesOnProfile_ogKeyDoesNot() throws Exception {
+    UUID id = insertOrg("acme", "Acme Store", true);
+
+    orgService.update(
+        id,
+        "Acme Store",
+        null,
+        null,
+        null,
+        null,
+        new OrgService.SeoMetadata("Acme — Fair Prices", "Everyday essentials, delivered.", null));
+
+    StorefrontProfileView v = storefront.profile("acme");
+    assertEquals("Acme — Fair Prices", v.metaTitle());
+    assertEquals("Everyday essentials, delivered.", v.metaDescription());
+
+    // The public profile never carries an og-image URL — the stable route is the URL (C2, epic §6).
+    String json = JSON.writeValueAsString(StorefrontProfileResponse.from(v));
+    assertFalse(json.contains("og_image"), json);
   }
 
   private UUID insertOrg(String slug, String name, boolean active) {

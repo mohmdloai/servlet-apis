@@ -55,6 +55,7 @@ public class StorefrontService {
   private final StorefrontBannerRepositoryFactory bannerRepoFactory;
   private final ObjectStorage storage;
   private final SalesOrderService salesOrderService;
+  private final OgImageSource ogImageSource;
 
   public StorefrontService(
       DSLContext rootDsl,
@@ -64,7 +65,8 @@ public class StorefrontService {
       InventoryRepositoryFactory inventoryRepoFactory,
       StorefrontBannerRepositoryFactory bannerRepoFactory,
       ObjectStorage storage,
-      SalesOrderService salesOrderService) {
+      SalesOrderService salesOrderService,
+      OgImageSource ogImageSource) {
     this.rootDsl = rootDsl;
     this.orgRepoFactory = orgRepoFactory;
     this.listingRepoFactory = listingRepoFactory;
@@ -73,6 +75,7 @@ public class StorefrontService {
     this.bannerRepoFactory = bannerRepoFactory;
     this.storage = storage;
     this.salesOrderService = salesOrderService;
+    this.ogImageSource = ogImageSource;
   }
 
   /** A public image — a display URL only; the object key is never exposed. */
@@ -116,7 +119,9 @@ public class StorefrontService {
       List<String> supportedLocales,
       String currency,
       String instapayHandle,
-      String paymentInstructions) {}
+      String paymentInstructions,
+      String metaTitle,
+      String metaDescription) {}
 
   /** v1 constants: both locales ship live; single-currency platform. */
   private static final List<String> SUPPORTED_LOCALES = List.of("ar", "en");
@@ -135,6 +140,9 @@ public class StorefrontService {
     String logoUrl =
         org.getLogoObjectKey() == null ? null : storage.presignGet(org.getLogoObjectKey());
     String defaultLocale = org.getDefaultLocale() == null ? "ar" : org.getDefaultLocale();
+    // meta_title/meta_description cross verbatim (nulls omitted by the DTO's NON_NULL); the profile
+    // carries NO og-image URL — the stable GET /api/public/{slug}/og-image route IS the URL, so a
+    // presigned URL (which expires) never reaches a meta tag (slice C2, epic §6).
     return new StorefrontProfileView(
         org.getName(),
         org.getSlug(),
@@ -144,7 +152,38 @@ public class StorefrontService {
         SUPPORTED_LOCALES,
         CURRENCY_EGP,
         org.getInstapayHandle(),
-        org.getPaymentInstructions());
+        org.getPaymentInstructions(),
+        org.getMetaTitle(),
+        org.getMetaDescription());
+  }
+
+  // ───────── og-image (C2) ─────────
+
+  /** The bytes + content type of a storefront's og image, for the stable public stream (C2). */
+  public record OgImage(byte[] bytes, String contentType) {}
+
+  /**
+   * Stream the storefront's social-share (og) image for {@code orgSlug}: resolve the org (active
+   * only, else opaque 404) → object key = {@code og_image_object_key}, <b>falling back to {@code
+   * logo_object_key}</b> when unset → fetch the bytes via {@link OgImageSource}. Neither key set →
+   * {@link NotFoundException}; a storage miss/error also → {@link NotFoundException} (a missing
+   * preview beats a hanging crawler, epic §6). The route caller adds {@code Cache-Control: public,
+   * max-age=3600} so a third-party cache holds it well past any presign TTL — the stability
+   * property (slice C2, {@code stories/storefront_seo_metadata.md}).
+   */
+  public OgImage ogImage(String orgSlug) {
+    Org org = resolveOrg(orgSlug);
+    String key = trimToNull(org.getOgImageObjectKey());
+    if (key == null) {
+      key = trimToNull(org.getLogoObjectKey());
+    }
+    if (key == null) {
+      throw new NotFoundException("No storefront image");
+    }
+    return ogImageSource
+        .fetch(key)
+        .map(f -> new OgImage(f.bytes(), f.contentType()))
+        .orElseThrow(() -> new NotFoundException("Storefront image unavailable"));
   }
 
   // ───────── banners (C1) ─────────

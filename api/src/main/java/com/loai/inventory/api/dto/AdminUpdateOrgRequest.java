@@ -17,6 +17,12 @@ public class AdminUpdateOrgRequest {
   private String paymentInstructions;
   private String defaultLocale;
 
+  // Storefront SEO & social metadata (V54, slice C2) — a null field leaves the stored value
+  // unchanged (merge); a blank string clears it. Admin-plane parity with the OWNER PUT route.
+  private String metaTitle;
+  private String metaDescription;
+  private String ogImageObjectKey;
+
   public String getName() {
     return name;
   }
@@ -71,5 +77,29 @@ public class AdminUpdateOrgRequest {
 
   public void setDefaultLocale(String defaultLocale) {
     this.defaultLocale = defaultLocale;
+  }
+
+  public String getMetaTitle() {
+    return metaTitle;
+  }
+
+  public void setMetaTitle(String metaTitle) {
+    this.metaTitle = metaTitle;
+  }
+
+  public String getMetaDescription() {
+    return metaDescription;
+  }
+
+  public void setMetaDescription(String metaDescription) {
+    this.metaDescription = metaDescription;
+  }
+
+  public String getOgImageObjectKey() {
+    return ogImageObjectKey;
+  }
+
+  public void setOgImageObjectKey(String ogImageObjectKey) {
+    this.ogImageObjectKey = ogImageObjectKey;
   }
 }

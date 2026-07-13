@@ -109,6 +109,9 @@ public class OrgHandler {
             body.getInstapayHandle(),
             body.getPaymentInstructions(),
             body.getDefaultLocale());
+    OrgService.SeoMetadata seo =
+        new OrgService.SeoMetadata(
+            body.getMetaTitle(), body.getMetaDescription(), body.getOgImageObjectKey());
     Org updated =
         orgService.update(
             orgId,
@@ -116,7 +119,8 @@ public class OrgHandler {
             body.getRefundApprovalThreshold(),
             body.getOrderTtlMinutes(),
             profile,
-            branding);
+            branding,
+            seo);
     writeJson(resp, 200, OrgResponse.from(updated));
   }
 

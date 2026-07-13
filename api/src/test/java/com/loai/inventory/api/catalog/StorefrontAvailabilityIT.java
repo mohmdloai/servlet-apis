@@ -88,6 +88,7 @@ class StorefrontAvailabilityIT {
             new InventoryRepositoryFactoryImpl(),
             new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
             storage,
+            null,
             null);
   }
 

@@ -85,6 +85,7 @@ import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.PaymentDisputeService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.PresignedOgImageSource;
 import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductService;
 import com.loai.inventory.service.RefundService;
@@ -464,7 +465,8 @@ public class AppConfig {
             inventoryRepositoryFactory,
             storefrontBannerRepositoryFactory,
             objectStorage,
-            salesOrderService);
+            salesOrderService,
+            new PresignedOgImageSource(objectStorage));
     this.creditNoteService =
         new CreditNoteService(
             dsl,

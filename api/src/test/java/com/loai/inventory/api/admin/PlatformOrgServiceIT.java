@@ -460,6 +460,95 @@ class PlatformOrgServiceIT {
         ValidationException.class, () -> service.updateOrg(admin(), env(), orgId, "Acme", null, 5));
   }
 
+  // ───────── C2: SEO metadata parity on the admin plane (PATCH /api/admin/orgs) ─────────
+
+  @Test
+  void updateOrg_setsSeoMetadata_merges_clears_audits() {
+    UUID orgId = org("acme", true);
+    String ogKey = orgId + "/og/share.png";
+
+    service.updateOrg(
+        admin(),
+        env(),
+        orgId,
+        "Acme",
+        null,
+        null,
+        null,
+        new com.loai.inventory.service.OrgService.SeoMetadata("Title", "Desc", ogKey));
+
+    assertEquals(
+        "Title",
+        dsl.select(DSL.field("meta_title"))
+            .from("org")
+            .where("id = ?", orgId)
+            .fetchOne(0, String.class));
+    assertEquals(
+        ogKey,
+        dsl.select(DSL.field("og_image_object_key"))
+            .from("org")
+            .where("id = ?", orgId)
+            .fetchOne(0, String.class));
+
+    // Blank clears; null leaves unchanged.
+    service.updateOrg(
+        admin(),
+        env(),
+        orgId,
+        "Acme",
+        null,
+        null,
+        null,
+        new com.loai.inventory.service.OrgService.SeoMetadata("", null, null));
+    org.junit.jupiter.api.Assertions.assertNull(
+        dsl.select(DSL.field("meta_title"))
+            .from("org")
+            .where("id = ?", orgId)
+            .fetchOne(0, String.class));
+    assertEquals(
+        ogKey,
+        dsl.select(DSL.field("og_image_object_key"))
+            .from("org")
+            .where("id = ?", orgId)
+            .fetchOne(0, String.class));
+  }
+
+  @Test
+  void updateOrg_overLengthMetaTitle_validation() {
+    UUID orgId = org("acme", true);
+    String tooLong = "x".repeat(71);
+    assertThrows(
+        ValidationException.class,
+        () ->
+            service.updateOrg(
+                admin(),
+                env(),
+                orgId,
+                "Acme",
+                null,
+                null,
+                null,
+                new com.loai.inventory.service.OrgService.SeoMetadata(tooLong, null, null)));
+  }
+
+  @Test
+  void updateOrg_foreignOgImageKey_validation() {
+    UUID orgId = org("acme", true);
+    String foreign = UUID.randomUUID() + "/og/x.png";
+    assertThrows(
+        ValidationException.class,
+        () ->
+            service.updateOrg(
+                admin(),
+                env(),
+                orgId,
+                "Acme",
+                null,
+                null,
+                null,
+                new com.loai.inventory.service.OrgService.SeoMetadata(null, null, foreign)));
+  }
+
   private SecurityContext admin() {
     // The actor must be a real user - platform_audit.actor_id is a FK into app_user.
     UUID id = user("admin-" + UUID.randomUUID() + "@x.io");

@@ -110,6 +110,9 @@ public final class OrgRepositoryImpl implements OrgRepository {
             .set(ORG.INSTAPAY_HANDLE, org.getInstapayHandle())
             .set(ORG.PAYMENT_INSTRUCTIONS, org.getPaymentInstructions())
             .set(ORG.DEFAULT_LOCALE, org.getDefaultLocale())
+            .set(ORG.META_TITLE, org.getMetaTitle())
+            .set(ORG.META_DESCRIPTION, org.getMetaDescription())
+            .set(ORG.OG_IMAGE_OBJECT_KEY, org.getOgImageObjectKey())
             .set(ORG.UPDATED_AT, OffsetDateTime.now())
             .where(ORG.ID.eq(org.getId()))
             .returning()
@@ -176,6 +179,9 @@ public final class OrgRepositoryImpl implements OrgRepository {
     org.setInstapayHandle(r.getInstapayHandle());
     org.setPaymentInstructions(r.getPaymentInstructions());
     org.setDefaultLocale(r.getDefaultLocale());
+    org.setMetaTitle(r.getMetaTitle());
+    org.setMetaDescription(r.getMetaDescription());
+    org.setOgImageObjectKey(r.getOgImageObjectKey());
     return org;
   }
 }

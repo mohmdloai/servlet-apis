@@ -141,6 +141,9 @@ public class OrgAdminHandler implements AdminResourceHandler {
             body.getInstapayHandle(),
             body.getPaymentInstructions(),
             body.getDefaultLocale());
+    com.loai.inventory.service.OrgService.SeoMetadata seo =
+        new com.loai.inventory.service.OrgService.SeoMetadata(
+            body.getMetaTitle(), body.getMetaDescription(), body.getOgImageObjectKey());
     Org updated =
         platformOrgService.updateOrg(
             ctx,
@@ -149,7 +152,8 @@ public class OrgAdminHandler implements AdminResourceHandler {
             body.getName(),
             body.getRefundApprovalThreshold(),
             body.getOrderTtlMinutes(),
-            branding);
+            branding,
+            seo);
     writeJson(resp, 200, OrgResponse.from(updated));
   }
 
