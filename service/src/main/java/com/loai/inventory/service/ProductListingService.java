@@ -120,6 +120,70 @@ public class ProductListingService {
     return status == null ? repo.count(orgId) : repo.countByStatus(orgId, status);
   }
 
+  // --- featured curation (slice C3) ---
+
+  /** Up to 12 featured listings — the cap; a set-replace above it is a 400 (epic §10). */
+  static final int MAX_FEATURED = 12;
+
+  /**
+   * The org's featured listings in curated order, each enriched with categories + presigned images
+   * (the same {@link ListingView} shape as {@link #getAll}, so the admin picker renders a thumbnail
+   * and status badge). Every status is included — a DRAFT may be staged for launch. Batch-loaded
+   * (two queries) to avoid N+1.
+   */
+  public List<ListingView> getFeatured(UUID orgId) {
+    ProductListingRepository repo = repoFactory.create(rootDsl);
+    List<ProductListing> listings = repo.findFeatured(orgId);
+    if (listings.isEmpty()) {
+      return List.of();
+    }
+    List<UUID> ids = listings.stream().map(ProductListing::getId).toList();
+    Map<UUID, List<UUID>> categoriesByListing = repo.findCategoryIdsForListings(ids);
+    Map<UUID, List<ImageView>> imagesByListing =
+        repo.findImagesForListings(ids).stream()
+            .collect(
+                Collectors.groupingBy(
+                    ProductListingImage::getListingId,
+                    Collectors.mapping(this::toImageView, Collectors.toList())));
+    return listings.stream()
+        .map(
+            l ->
+                new ListingView(
+                    l,
+                    categoriesByListing.getOrDefault(l.getId(), List.of()),
+                    imagesByListing.getOrDefault(l.getId(), List.of())))
+        .toList();
+  }
+
+  /**
+   * Set-replace the org's featured list from an ordered id list ({@code featured_sort} = index).
+   * Validates the whole set before touching a row (atomic — nothing applied on any failure): {@code
+   * > 12} ids → 400; a duplicate id → 400; any id not belonging to the org → 400. Ids absent from
+   * the list are cleared to NULL. Any status is storable — only PUBLISHED ever serves publicly (the
+   * public read's job). Returns the resulting curated list (enriched), for a save-then-refresh.
+   */
+  public List<ListingView> setFeatured(UUID orgId, List<UUID> listingIds) {
+    List<UUID> ids = listingIds == null ? List.of() : listingIds;
+    if (ids.size() > MAX_FEATURED) {
+      throw new ValidationException("at most " + MAX_FEATURED + " featured listings");
+    }
+    Set<UUID> distinct = new java.util.LinkedHashSet<>(ids);
+    if (distinct.size() != ids.size()) {
+      throw new ValidationException("duplicate listing ids are not allowed");
+    }
+    rootDsl.transaction(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          ProductListingRepository repo = repoFactory.create(txDsl);
+          if (!ids.isEmpty() && repo.countInOrg(orgId, ids) != ids.size()) {
+            throw new ValidationException("One or more listing ids do not exist in this org");
+          }
+          repo.setFeatured(orgId, ids);
+          log.info("Set {} featured listings for orgId={}", ids.size(), orgId);
+        });
+    return getFeatured(orgId);
+  }
+
   // --- listing CRUD ---
 
   public ProductListing create(

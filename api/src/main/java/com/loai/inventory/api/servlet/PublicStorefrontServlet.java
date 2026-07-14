@@ -154,7 +154,8 @@ public class PublicStorefrontServlet extends HttpServlet {
       int size = intParam(req, "size", 20);
       String category = req.getParameter("category");
       // B3 (storefront_search_and_filters.md): free-text q, inclusive EGP price band, sort — all
-      // optional, parsed/validated in the service (unknown sort / bad price → 400 there).
+      // optional, parsed/validated in the service (unknown sort / bad price → 400 there). C3 adds
+      // ?featured=true (the merchant's curated pinned list; bad value → 400 there too).
       ListingPage p =
           service.listPublished(
               orgSlug,
@@ -163,6 +164,7 @@ public class PublicStorefrontServlet extends HttpServlet {
               req.getParameter("min_price"),
               req.getParameter("max_price"),
               req.getParameter("sort"),
+              req.getParameter("featured"),
               page,
               size);
       List<PublicListingResponse> data =

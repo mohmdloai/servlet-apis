@@ -77,7 +77,9 @@ public interface ProductListingRepository {
    *
    * <p>{@code status} is supplied by the caller but the storefront always passes PUBLISHED — the
    * status is never a public parameter. {@code sort} orders per {@link ListingSort}, always
-   * tie-broken by {@code slug ASC} so paging is deterministic.
+   * tie-broken by {@code slug ASC} so paging is deterministic. {@code featuredOnly} (slice C3) adds
+   * the optional {@code featured_sort IS NOT NULL} predicate — ANDed with everything else — so
+   * {@code ?featured=true&category=x} intersects the two.
    */
   List<ProductListing> findByFilters(
       UUID orgId,
@@ -86,6 +88,7 @@ public interface ProductListingRepository {
       String q,
       BigDecimal minPrice,
       BigDecimal maxPrice,
+      boolean featuredOnly,
       ListingSort sort,
       int offset,
       int limit);
@@ -104,7 +107,31 @@ public interface ProductListingRepository {
       UUID categoryId,
       String q,
       BigDecimal minPrice,
-      BigDecimal maxPrice);
+      BigDecimal maxPrice,
+      boolean featuredOnly);
+
+  // --- featured curation (slice C3) ---
+
+  /**
+   * The org's featured listings in curated order ({@code featured_sort ASC}) — every status (a
+   * DRAFT may be staged), for the admin picker. The public read never calls this; it filters
+   * through {@link #findByFilters} with {@code featuredOnly} + PUBLISHED.
+   */
+  List<ProductListing> findFeatured(UUID orgId);
+
+  /**
+   * Count how many of {@code ids} actually belong to {@code orgId} — the set-replace ownership
+   * guard (every id must be the org's, else the write is a 400 with nothing applied).
+   */
+  long countInOrg(UUID orgId, Collection<UUID> ids);
+
+  /**
+   * Atomically set-replace the org's featured list: every id in {@code orderedIds} gets {@code
+   * featured_sort = its index} (0..n-1); every other listing in the org is cleared to {@code NULL}.
+   * Idempotent — replaying the same list yields the same state. Ownership/duplicate/cap validation
+   * is the service's job; this method assumes a clean, org-owned, deduplicated list.
+   */
+  void setFeatured(UUID orgId, List<UUID> orderedIds);
 
   ProductListing insert(ProductListing listing);
 

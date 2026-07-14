@@ -10,6 +10,7 @@ import com.loai.inventory.api.dto.PresignImageUploadResponse;
 import com.loai.inventory.api.dto.ProductListingImageResponse;
 import com.loai.inventory.api.dto.ProductListingResponse;
 import com.loai.inventory.api.dto.SetCategoriesRequest;
+import com.loai.inventory.api.dto.SetFeaturedListingsRequest;
 import com.loai.inventory.api.dto.UpdateImageRequest;
 import com.loai.inventory.api.dto.UpdateProductListingRequest;
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -79,6 +80,17 @@ public class ProductListingHandler implements OrgResourceHandler {
       }
 
       String[] parts = tail.split("/");
+
+      // Featured curation (slice C3): /product-listings/featured — a fixed segment, not a {id}.
+      if (parts.length == 1 && "featured".equals(parts[0])) {
+        switch (method) {
+          case "GET" -> doGetFeatured(req, resp, orgId);
+          case "PUT" -> doSetFeatured(req, resp, orgId);
+          default -> writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+
       UUID id = parseId(parts[0]);
 
       if (parts.length == 1) {
@@ -161,6 +173,27 @@ public class ProductListingHandler implements OrgResourceHandler {
             body.getSlug(),
             body.getSalesPrice());
     writeJson(resp, 201, ProductListingResponse.from(created));
+  }
+
+  // --- featured curation (slice C3) ---
+
+  private void doGetFeatured(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    List<ProductListingResponse> data =
+        service.getFeatured(orgId).stream().map(ProductListingResponse::fromView).toList();
+    writeJson(resp, 200, data);
+  }
+
+  private void doSetFeatured(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    SetFeaturedListingsRequest body = readBody(req, SetFeaturedListingsRequest.class);
+    List<ProductListingResponse> data =
+        service.setFeatured(orgId, body.getListingIds()).stream()
+            .map(ProductListingResponse::fromView)
+            .toList();
+    writeJson(resp, 200, data);
   }
 
   // --- single ---

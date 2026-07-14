@@ -278,6 +278,48 @@ class ProductListingHandlerAuthTest {
     verify(service).removeImage(ORG, ID, IMG);
   }
 
+  @Test
+  void getFeatured_allowedForViewer() throws IOException {
+    ProductListingService service = Mockito.mock(ProductListingService.class);
+    when(service.getFeatured(ORG)).thenReturn(List.of());
+    Resp resp = new Resp();
+    handler(service)
+        .handle("GET", reqWith(ctxWith(OrgRole.VIEWER), ""), resp.mock, ORG, "/featured");
+    assertEquals(200, resp.status);
+    verify(service).getFeatured(ORG);
+  }
+
+  @Test
+  void setFeatured_forbiddenForViewer() throws IOException {
+    ProductListingService service = Mockito.mock(ProductListingService.class);
+    Resp resp = new Resp();
+    handler(service)
+        .handle(
+            "PUT",
+            reqWith(ctxWith(OrgRole.VIEWER), "{\"listing_ids\":[]}"),
+            resp.mock,
+            ORG,
+            "/featured");
+    assertEquals(403, resp.status);
+    verify(service, never()).setFeatured(any(), any());
+  }
+
+  @Test
+  void setFeatured_allowedForStaff() throws IOException {
+    ProductListingService service = Mockito.mock(ProductListingService.class);
+    when(service.setFeatured(any(), any())).thenReturn(List.of());
+    Resp resp = new Resp();
+    handler(service)
+        .handle(
+            "PUT",
+            reqWith(ctxWith(OrgRole.STAFF), "{\"listing_ids\":[]}"),
+            resp.mock,
+            ORG,
+            "/featured");
+    assertEquals(200, resp.status);
+    verify(service).setFeatured(any(), any());
+  }
+
   // ─────────────── harness ───────────────
 
   private static final class Resp {

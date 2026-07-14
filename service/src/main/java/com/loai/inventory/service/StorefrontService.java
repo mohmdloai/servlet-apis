@@ -382,16 +382,21 @@ public class StorefrontService {
 
   /** The unfiltered/category-only read — delegates with no search, no bounds, default sort. */
   public ListingPage listPublished(String orgSlug, String categorySlug, int page, int size) {
-    return listPublished(orgSlug, categorySlug, null, null, null, null, page, size);
+    return listPublished(orgSlug, categorySlug, null, null, null, null, null, page, size);
   }
 
   /**
-   * The one storefront listings read ({@code stories/storefront_search_and_filters.md}, B3):
-   * category ∧ substring ∧ price band over the org's PUBLISHED listings, ordered by {@code sort}.
-   * PUBLISHED is hard-coded — status is never a parameter. The raw query-param strings are parsed
-   * and validated here: unknown {@code sort} → 400 (never a silent default); non-numeric / negative
-   * / {@code min > max} price → 400 with a cause-naming message; blank {@code q} → ignored (no
-   * filter).
+   * The one storefront listings read ({@code stories/storefront_search_and_filters.md}, B3; {@code
+   * ?featured=true} added in slice C3): category ∧ substring ∧ price band ∧ featured over the org's
+   * PUBLISHED listings, ordered by {@code sort}. PUBLISHED is hard-coded — status is never a
+   * parameter. The raw query-param strings are parsed and validated here: unknown {@code sort} →
+   * 400 (never a silent default); non-numeric / negative / {@code min > max} price → 400 with a
+   * cause-naming message; blank {@code q} → ignored (no filter); {@code featured} other than {@code
+   * true}/absent → 400 (same no-silent-coercion convention).
+   *
+   * <p>When {@code featured=true} and no explicit {@code sort} is given, the default order becomes
+   * the merchant's curated {@code featured_sort ASC}; an explicit {@code ?sort=} still overrides
+   * it.
    */
   public ListingPage listPublished(
       String orgSlug,
@@ -400,12 +405,19 @@ public class StorefrontService {
       String minPrice,
       String maxPrice,
       String sort,
+      String featured,
       int page,
       int size) {
     int offset = Pagination.offset(page, size);
 
     String query = trimToNull(q);
-    ListingSort listingSort = parseSort(sort);
+    boolean featuredOnly = parseFeatured(featured);
+    // featured + no explicit sort → curated order; otherwise the usual grammar (blank = NEWEST).
+    String sortTrim = trimToNull(sort);
+    ListingSort listingSort =
+        sortTrim == null
+            ? (featuredOnly ? ListingSort.FEATURED : ListingSort.NEWEST)
+            : parseSort(sortTrim);
     java.math.BigDecimal min = parsePrice("min_price", minPrice);
     java.math.BigDecimal max = parsePrice("max_price", maxPrice);
     if (min != null && max != null && min.compareTo(max) > 0) {
@@ -428,9 +440,19 @@ public class StorefrontService {
 
     List<ProductListing> rows =
         listings.findByFilters(
-            orgId, ListingStatus.PUBLISHED, categoryId, query, min, max, listingSort, offset, size);
+            orgId,
+            ListingStatus.PUBLISHED,
+            categoryId,
+            query,
+            min,
+            max,
+            featuredOnly,
+            listingSort,
+            offset,
+            size);
     long total =
-        listings.countByFilters(orgId, ListingStatus.PUBLISHED, categoryId, query, min, max);
+        listings.countByFilters(
+            orgId, ListingStatus.PUBLISHED, categoryId, query, min, max, featuredOnly);
 
     // One batched image query for the whole page (avoids an N+1), and the grid presigns only each
     // listing's primary image — full galleries and category breadcrumbs are a detail-view concern.
@@ -536,6 +558,23 @@ public class StorefrontService {
           throw new com.loai.inventory.common.exception.ValidationException(
               "Parameter 'sort' must be one of: newest, price_asc, price_desc");
     };
+  }
+
+  /**
+   * Parse the {@code featured} param (slice C3): absent/blank → false; exactly {@code true} → true;
+   * anything else → 400 (the same no-silent-coercion rule as {@code sort}). {@code featured=false}
+   * is <b>not</b> a valid narrowing — the filter is opt-in, so a stray value is a caller error.
+   */
+  private static boolean parseFeatured(String raw) {
+    String t = trimToNull(raw);
+    if (t == null) {
+      return false;
+    }
+    if ("true".equals(t)) {
+      return true;
+    }
+    throw new com.loai.inventory.common.exception.ValidationException(
+        "Parameter 'featured' must be 'true' or absent");
   }
 
   /** Parse a price bound: absent/blank → null; non-numeric or negative → a cause-naming 400. */
