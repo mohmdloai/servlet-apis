@@ -47,6 +47,7 @@ public record SecurityContext(
           case SERVICE -> ActorContext.service(actorId.toString());
           case SYSTEM -> ActorContext.system(actorId.toString());
           case MIGRATION -> ActorContext.migration(actorId.toString());
+          case CUSTOMER -> ActorContext.customer(actorId.toString());
         };
     // During an overlay the principal (sub) is the target; the real driver rides along in metadata.
     return impersonatorId == null
@@ -70,6 +71,13 @@ public record SecurityContext(
 
   public boolean isService() {
     return actorType == ActorType.SERVICE;
+  }
+
+  /**
+   * True when this principal is a portal-authenticated CRM customer (never a staff/admin token).
+   */
+  public boolean isCustomer() {
+    return actorType == ActorType.CUSTOMER;
   }
 
   /** True while this request is an impersonation overlay (carries an {@code act} claim). */

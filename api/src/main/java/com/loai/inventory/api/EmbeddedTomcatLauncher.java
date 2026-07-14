@@ -2,6 +2,7 @@ package com.loai.inventory.api;
 
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.filter.CorsFilter;
+import com.loai.inventory.api.filter.CustomerAuthFilter;
 import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.api.filter.RateLimitFilter;
 import com.loai.inventory.api.servlet.AdminServlet;
@@ -9,6 +10,7 @@ import com.loai.inventory.api.servlet.AuthServlet;
 import com.loai.inventory.api.servlet.MeServlet;
 import com.loai.inventory.api.servlet.OrgServlet;
 import com.loai.inventory.api.servlet.PlatformImpersonationServlet;
+import com.loai.inventory.api.servlet.PortalServlet;
 import com.loai.inventory.api.servlet.PublicOrderServlet;
 import com.loai.inventory.api.servlet.PublicStorefrontServlet;
 import com.loai.inventory.api.servlet.PublicUnsubscribeServlet;
@@ -42,10 +44,19 @@ public class EmbeddedTomcatLauncher {
       // the /api/auth/login + /api/auth/refresh endpoints). One RateLimitFilter, two URL patterns:
       // /api/auth/* (login/refresh buckets) and /api/public/* (pub-read/pub-checkout buckets) — see
       // stories/public_rate_limiting.md.
+      // Filter order on portal paths: CORS → RateLimit → JwtAuth (bypasses /api/portal/) →
+      // CustomerAuth. The RateLimit filter's coverage now includes /api/portal/* (portal buckets)
+      // and the OTP bootstrap under /api/public/*. See stories/portal_auth_core.md.
       addFilter(ctx, "corsFilter", CorsFilter.class.getName(), "/api/*");
       addFilter(
-          ctx, "rateLimitFilter", RateLimitFilter.class.getName(), "/api/auth/*", "/api/public/*");
+          ctx,
+          "rateLimitFilter",
+          RateLimitFilter.class.getName(),
+          "/api/auth/*",
+          "/api/public/*",
+          "/api/portal/*");
       addFilter(ctx, "jwtAuthFilter", JwtAuthFilter.class.getName(), "/api/*");
+      addFilter(ctx, "customerAuthFilter", CustomerAuthFilter.class.getName(), "/api/portal/*");
 
       // Servlets
       Tomcat.addServlet(ctx, "authServlet", new AuthServlet());
@@ -56,6 +67,9 @@ public class EmbeddedTomcatLauncher {
       ctx.addServletMappingDecoded("/api/orgs/*", "orgServlet");
       Tomcat.addServlet(ctx, "publicStorefrontServlet", new PublicStorefrontServlet());
       ctx.addServletMappingDecoded("/api/public/*", "publicStorefrontServlet");
+      // Authenticated customer portal (behind CustomerAuthFilter).
+      Tomcat.addServlet(ctx, "portalServlet", new PortalServlet());
+      ctx.addServletMappingDecoded("/api/portal/*", "portalServlet");
       // More specific than /api/public/* — the anonymous order-view magic-link route.
       Tomcat.addServlet(ctx, "publicOrderServlet", new PublicOrderServlet());
       ctx.addServletMappingDecoded("/api/public/orders/*", "publicOrderServlet");

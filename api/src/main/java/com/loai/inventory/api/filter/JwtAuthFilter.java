@@ -68,7 +68,10 @@ public class JwtAuthFilter implements Filter {
         || path.equals("/api/auth/forgot-password")
         || path.equals("/api/auth/reset-password")
         || path.equals("/api/auth/activate")
-        || path.startsWith("/api/public/")) {
+        || path.startsWith("/api/public/")
+        // The customer plane is guarded by CustomerAuthFilter with a different signing key — the
+        // staff key must never even parse a portal token (epic decision #3).
+        || path.startsWith("/api/portal/")) {
       chain.doFilter(request, response);
       return;
     }
@@ -81,6 +84,16 @@ public class JwtAuthFilter implements Filter {
 
     try {
       Claims claims = jwtUtil.parseAndVerify(token);
+
+      // Token-type separation (epic decision #2): accept aud="staff" or a MISSING aud (grace window
+      // for sessions minted before the hardening), but reject "customer" — a portal token must
+      // never be honoured on the staff/admin plane, even if it somehow verified.
+      Set<String> audience = claims.getAudience();
+      if (audience != null && audience.contains("customer")) {
+        writeUnauthorized(resp, "Wrong token audience");
+        return;
+      }
+
       UUID userId = UUID.fromString(claims.getSubject());
       int tokenVersion = claims.get("token_version", Integer.class);
 

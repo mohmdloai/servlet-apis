@@ -36,8 +36,11 @@ public class CorsFilter implements Filter {
       resp.setHeader("Access-Control-Allow-Origin", origin);
       resp.setHeader("Access-Control-Allow-Credentials", "true");
       resp.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
+      // X-Portal-Request is the customer-portal CSRF header — a cross-origin storefront must be
+      // allowed to send it, else the preflight blocks every /api/portal/* call.
       resp.setHeader(
-          "Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+          "Access-Control-Allow-Headers",
+          "Content-Type, Authorization, X-Requested-With, X-Portal-Request");
     }
     // preflight request as short circuit
     if ("OPTIONS".equalsIgnoreCase(req.getMethod())) {

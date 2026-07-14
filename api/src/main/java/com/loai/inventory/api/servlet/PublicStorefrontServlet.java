@@ -5,6 +5,9 @@ import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.dto.PortalMeResponse;
+import com.loai.inventory.api.dto.PortalRequestCodeRequest;
+import com.loai.inventory.api.dto.PortalVerifyCodeRequest;
 import com.loai.inventory.api.dto.PublicAvailabilityResponse;
 import com.loai.inventory.api.dto.PublicBannerResponse;
 import com.loai.inventory.api.dto.PublicCategoryResponse;
@@ -16,6 +19,7 @@ import com.loai.inventory.api.dto.PublicPageResponse;
 import com.loai.inventory.api.dto.PublicPageSummaryResponse;
 import com.loai.inventory.api.dto.StorefrontProfileResponse;
 import com.loai.inventory.common.exception.AppException;
+import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.StorefrontPageService;
@@ -24,6 +28,7 @@ import com.loai.inventory.service.StorefrontService.CheckoutInput;
 import com.loai.inventory.service.StorefrontService.CheckoutLine;
 import com.loai.inventory.service.StorefrontService.CheckoutResult;
 import com.loai.inventory.service.StorefrontService.ListingPage;
+import com.loai.inventory.service.auth.CustomerAuthService;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -77,14 +82,22 @@ public class PublicStorefrontServlet extends HttpServlet {
 
   private StorefrontService service;
   private StorefrontPageService pageService;
+  private CustomerAuthService customerAuthService;
   private ObjectMapper mapper;
+  private boolean secureCookies;
+  private int customerRefreshMaxAge;
+  private java.util.Set<String> allowedOrigins;
 
   @Override
   public void init() {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.service = config.storefrontService;
     this.pageService = config.storefrontPageService;
+    this.customerAuthService = config.customerAuthService;
     this.mapper = config.objectMapper;
+    this.secureCookies = config.secureCookies;
+    this.customerRefreshMaxAge = config.customerRefreshMaxAgeSeconds;
+    this.allowedOrigins = config.corsAllowedOrigins;
   }
 
   @Override
@@ -94,9 +107,11 @@ public class PublicStorefrontServlet extends HttpServlet {
       String method = req.getMethod();
 
       if ("POST".equals(method)) {
-        // The only write: POST /{orgSlug}/checkout.
+        // Writes: anonymous checkout, and the customer-portal OTP bootstrap (request/verify-code).
         if (parts.length == 2 && "checkout".equals(parts[1])) {
           doCheckout(req, resp, parts[0]);
+        } else if (parts.length == 3 && "portal".equals(parts[1])) {
+          doPortalBootstrap(req, resp, parts[0], parts[2]);
         } else {
           writeError(resp, 405, "Method not allowed");
         }
@@ -272,6 +287,48 @@ public class PublicStorefrontServlet extends HttpServlet {
     CheckoutResult result = service.checkout(orgSlug, input, idempotencyKey.trim());
     // 201 on a fresh order; 200 when a duplicate Idempotency-Key replayed the prior order.
     writeJson(resp, result.created() ? 201 : 200, PublicOrderResponse.from(result), CACHE_NONE);
+  }
+
+  /**
+   * The anonymous OTP bootstrap for the customer portal (epic §"Anon bootstrap"): {@code
+   * request-code} (enumeration-uniform send) and {@code verify-code} (sets the portal cookies). Org
+   * is resolved from {@code {orgSlug}} inside {@link CustomerAuthService}. Runs on the
+   * JWT-bypassed, rate-limited {@code /api/public/*} front door, but still enforces the portal CSRF
+   * guard (custom header + Origin allowlist on these mutations).
+   */
+  private void doPortalBootstrap(
+      HttpServletRequest req, HttpServletResponse resp, String orgSlug, String action)
+      throws IOException {
+    if (!PortalCsrf.hasHeader(req)) {
+      throw new ValidationException("Missing " + PortalCsrf.HEADER + " header");
+    }
+    if (!PortalCsrf.originAllowed(req, allowedOrigins)) {
+      throw new AuthorizationException("Origin not allowed");
+    }
+    switch (action) {
+      case "request-code" -> {
+        PortalRequestCodeRequest body = readBody(req, PortalRequestCodeRequest.class);
+        // Always the identical response — sent only if (org, email) maps to a real customer.
+        customerAuthService.requestCode(orgSlug, body.getEmail());
+        writeJson(resp, 200, java.util.Map.of("sent", true), CACHE_NONE);
+      }
+      case "verify-code" -> {
+        PortalVerifyCodeRequest body = readBody(req, PortalVerifyCodeRequest.class);
+        CustomerAuthService.SessionResult result =
+            customerAuthService.verifyCode(
+                orgSlug,
+                body.getEmail(),
+                body.getCode(),
+                req.getHeader("User-Agent"),
+                req.getRemoteAddr());
+        CustomerAuthCookies.writeAccess(
+            resp, result.accessToken(), (int) result.expiresIn(), secureCookies);
+        CustomerAuthCookies.writeRefresh(
+            resp, result.refreshToken(), customerRefreshMaxAge, secureCookies);
+        writeJson(resp, 200, PortalMeResponse.from(result.customer()), CACHE_NONE);
+      }
+      default -> writeError(resp, 404, "Unknown portal endpoint");
+    }
   }
 
   private static String[] splitPath(String pathInfo) {

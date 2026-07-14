@@ -55,10 +55,20 @@ public class RateLimitFilter implements Filter {
   static final int DEFAULT_PUBLIC_READ_LIMIT = 120;
   static final int DEFAULT_PUBLIC_CHECKOUT_LIMIT = 5;
 
+  // Customer-portal buckets (per-IP; the per-email OTP throttle lives in CustomerOtpStore). Tight
+  // on
+  // the OTP paths (inbox-spam / code brute-force), generous on authenticated portal reads.
+  static final int DEFAULT_PORTAL_OTP_REQUEST_LIMIT = 5;
+  static final int DEFAULT_PORTAL_OTP_VERIFY_LIMIT = 10;
+  static final int DEFAULT_PORTAL_REFRESH_LIMIT = 30;
+
   private JedisPool jedisPool;
   private ObjectMapper objectMapper;
   private int publicReadLimit = DEFAULT_PUBLIC_READ_LIMIT;
   private int publicCheckoutLimit = DEFAULT_PUBLIC_CHECKOUT_LIMIT;
+  private int portalOtpRequestLimit = DEFAULT_PORTAL_OTP_REQUEST_LIMIT;
+  private int portalOtpVerifyLimit = DEFAULT_PORTAL_OTP_VERIFY_LIMIT;
+  private int portalRefreshLimit = DEFAULT_PORTAL_REFRESH_LIMIT;
   private boolean trustProxy;
 
   /** No-arg constructor for the servlet container; config is read in {@link #init}. */
@@ -89,6 +99,10 @@ public class RateLimitFilter implements Filter {
     this.publicReadLimit = envIntOrDefault("PUBLIC_READ_LIMIT", DEFAULT_PUBLIC_READ_LIMIT);
     this.publicCheckoutLimit =
         envIntOrDefault("PUBLIC_CHECKOUT_LIMIT", DEFAULT_PUBLIC_CHECKOUT_LIMIT);
+    this.portalOtpRequestLimit =
+        envIntOrDefault("PORTAL_OTP_REQUEST_LIMIT", DEFAULT_PORTAL_OTP_REQUEST_LIMIT);
+    this.portalOtpVerifyLimit =
+        envIntOrDefault("PORTAL_OTP_VERIFY_LIMIT", DEFAULT_PORTAL_OTP_VERIFY_LIMIT);
     this.trustProxy = Boolean.parseBoolean(System.getenv("TRUST_PROXY"));
     log.info(
         "RateLimitFilter: pub-read={}/min, pub-checkout={}/min, trustProxy={}",
@@ -108,7 +122,21 @@ public class RateLimitFilter implements Filter {
 
     int limit;
     String keyPrefix;
-    if (path.endsWith("/login")) {
+    // Customer-portal buckets first — the OTP bootstrap lives under /api/public/ and portal-refresh
+    // ends with /refresh, so both must be matched ahead of the generic public/staff rules below.
+    if (path.endsWith("/portal/request-code")) {
+      keyPrefix = "rl:portal-otp-req:";
+      limit = portalOtpRequestLimit;
+    } else if (path.endsWith("/portal/verify-code")) {
+      keyPrefix = "rl:portal-otp-verify:";
+      limit = portalOtpVerifyLimit;
+    } else if (path.equals("/api/portal/auth/refresh")) {
+      keyPrefix = "rl:portal-refresh:";
+      limit = portalRefreshLimit;
+    } else if (path.startsWith("/api/portal/")) {
+      keyPrefix = "rl:portal-read:";
+      limit = publicReadLimit;
+    } else if (path.endsWith("/login")) {
       keyPrefix = "rl:login:";
       limit = LOGIN_LIMIT;
     } else if (path.endsWith("/refresh")) {

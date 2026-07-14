@@ -10,6 +10,7 @@ public class Customer {
   private String name;
   private String phone;
   private String address;
+  private OffsetDateTime emailVerifiedAt;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -80,6 +81,19 @@ public class Customer {
 
   public void setAddress(String address) {
     this.address = address;
+  }
+
+  /**
+   * When the customer first proved ownership of {@link #email} via a portal OTP verify — a trust
+   * signal, nullable until then. Never gates login; for display / future policy. (P1,
+   * portal_auth_core.md.)
+   */
+  public OffsetDateTime getEmailVerifiedAt() {
+    return emailVerifiedAt;
+  }
+
+  public void setEmailVerifiedAt(OffsetDateTime emailVerifiedAt) {
+    this.emailVerifiedAt = emailVerifiedAt;
   }
 
   public OffsetDateTime getCreatedAt() {

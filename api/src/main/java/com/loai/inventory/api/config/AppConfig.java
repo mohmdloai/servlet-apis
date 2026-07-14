@@ -71,6 +71,7 @@ import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CategoryService;
 import com.loai.inventory.service.CreditNoteService;
+import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.CustomerService;
 import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
@@ -101,6 +102,9 @@ import com.loai.inventory.service.auth.AccountService;
 import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.CredentialTokenService;
+import com.loai.inventory.service.auth.CustomerAuthService;
+import com.loai.inventory.service.auth.CustomerOtpStore;
+import com.loai.inventory.service.auth.CustomerSessionStore;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.loai.inventory.service.document.DocumentRenderService;
 import com.loai.inventory.service.document.PresignedLogoSource;
@@ -144,9 +148,14 @@ public class AppConfig {
   public final DSLContext dsl;
   public final ObjectMapper objectMapper;
   public final JwtUtil jwtUtil;
+  public final JwtUtil customerJwtUtil;
   public final ObjectStorage objectStorage;
   public final EmailSender emailSender;
   public final boolean secureCookies;
+  public final int customerRefreshMaxAgeSeconds;
+
+  /** Allowlisted origins (CORS_ALLOWED_ORIGINS) — reused by the portal CSRF Origin check. */
+  public final java.util.Set<String> corsAllowedOrigins;
 
   // Repositories (domain interface type, not the impl)
   public final ProductRepository productRepository;
@@ -199,6 +208,10 @@ public class AppConfig {
   public final CategoryService categoryService;
   public final NotificationService notificationService;
   public final MagicLinkService magicLinkService;
+  public final CustomerOtpStore customerOtpStore;
+  public final CustomerSessionStore customerSessionStore;
+  public final CustomerAuthService customerAuthService;
+  public final CustomerPortalService customerPortalService;
   public final ProductListingService productListingService;
   public final StorefrontBannerService storefrontBannerService;
   public final StorefrontPageService storefrontPageService;
@@ -236,13 +249,28 @@ public class AppConfig {
     long accessTtl = parseLong(System.getenv("JWT_ACCESS_TTL_MILLIS"), DEFAULT_ACCESS_TTL_MILLIS);
     this.secureCookies = Boolean.parseBoolean(System.getenv("COOKIE_SECURE"));
 
+    // Customer-portal plane: a SECOND signing key (never the staff JWT_SECRET), so a customer token
+    // cannot verify on the staff plane and a leaked customer secret leaves staff untouched.
+    String customerJwtSecret = System.getenv("CUSTOMER_JWT_SECRET");
+    if (customerJwtSecret == null || customerJwtSecret.isBlank()) {
+      throw new RuntimeException(
+          "CUSTOMER_JWT_SECRET env var is required and must be at least 32 bytes after Base64"
+              + " decode");
+    }
+    long customerRefreshTtlDays = parseLong(System.getenv("CUSTOMER_REFRESH_TTL_DAYS"), 30L);
+    this.customerRefreshMaxAgeSeconds = (int) (customerRefreshTtlDays * 24 * 3600);
+    this.corsAllowedOrigins = resolveAllowedOrigins();
+
     this.dataSource = DataSourceFactory.build();
     runMigrations();
     this.dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
     this.objectMapper = ObjectMapperProvider.build();
 
     this.jedisPool = RedisFactory.build();
-    this.jwtUtil = new JwtUtil(jwtSecret, accessTtl);
+    // Staff hardening: stamp aud="staff" on every staff token going forward (the JwtAuthFilter
+    // accepts staff or a missing aud, rejects "customer").
+    this.jwtUtil = new JwtUtil(jwtSecret, accessTtl, "staff");
+    this.customerJwtUtil = new JwtUtil(customerJwtSecret, accessTtl, "customer");
     this.objectStorage = ObjectStorageFactory.build();
     this.emailSender = EmailSenderFactory.build();
 
@@ -282,6 +310,12 @@ public class AppConfig {
     long impersonationTtl =
         parseLong(System.getenv("IMPERSONATION_TTL_MILLIS"), DEFAULT_IMPERSONATION_TTL_MILLIS);
     this.refreshTokenStore = new RefreshTokenStore(jedisPool);
+    // Customer-portal stores — an isolated Redis namespace mirroring the staff session store. The
+    // OTP challenge and customer sessions both self-expire in Redis (no DB tables).
+    this.customerOtpStore = new CustomerOtpStore(jedisPool);
+    this.customerSessionStore =
+        new CustomerSessionStore(jedisPool, customerRefreshTtlDays * 24 * 3600);
+    this.customerPortalService = new CustomerPortalService(dsl, customerRepositoryFactory);
     this.authService =
         new AuthService(
             userRepository,
@@ -358,6 +392,22 @@ public class AppConfig {
             emailSender,
             magicLinkService,
             emailMaxAttempts);
+    // Portal auth service — the OTP code is sent SYNCHRONOUSLY through the EmailSender (not the
+    // NotificationService pipeline): a login code must not be suppressible by a customer's email
+    // opt-out, nor wait on the delivery sweeper. The per-email OTP-send throttle shares the
+    // PORTAL_OTP_REQUEST_LIMIT budget over a 60s window (the per-IP twin lives in RateLimitFilter).
+    int portalOtpRequestLimit = (int) parseLong(System.getenv("PORTAL_OTP_REQUEST_LIMIT"), 5L);
+    this.customerAuthService =
+        new CustomerAuthService(
+            dsl,
+            customerRepositoryFactory,
+            orgRepositoryFactory,
+            customerOtpStore,
+            customerSessionStore,
+            customerJwtUtil,
+            emailSender,
+            portalOtpRequestLimit,
+            60);
     this.productListingService =
         new ProductListingService(dsl, productListingRepositoryFactory, objectStorage);
     this.storefrontBannerService =
@@ -579,6 +629,25 @@ public class AppConfig {
   private static String getenvOrDefault(String key, String defaultValue) {
     String v = System.getenv(key);
     return (v == null || v.isBlank()) ? defaultValue : v;
+  }
+
+  /**
+   * The CORS_ALLOWED_ORIGINS allowlist (same default as CorsFilter) — trimmed, for the portal CSRF
+   * Origin check.
+   */
+  private static java.util.Set<String> resolveAllowedOrigins() {
+    String env = System.getenv("CORS_ALLOWED_ORIGINS");
+    if (env == null || env.isBlank()) {
+      return java.util.Set.of("http://localhost:3000", "http://localhost:5173");
+    }
+    java.util.Set<String> origins = new java.util.HashSet<>();
+    for (String o : env.split(",")) {
+      String t = o.trim();
+      if (!t.isEmpty()) {
+        origins.add(t);
+      }
+    }
+    return java.util.Set.copyOf(origins);
   }
 
   private void runMigrations() {
