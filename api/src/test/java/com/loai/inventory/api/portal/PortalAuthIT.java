@@ -117,7 +117,9 @@ class PortalAuthIT {
             dsl,
             new CustomerRepositoryFactoryImpl(),
             new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl());
+            new com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CustomerAddressRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.ProductListingRepositoryFactoryImpl());
 
     emailSender = new CapturingEmailSender();
     authService =
@@ -150,7 +152,7 @@ class PortalAuthIT {
     emailSender.captured.clear();
   }
 
-  // ── AC1: happy path ─────────────────────────────────────────────────────────
+  // AC1: happy path
 
   @Test
   void happyPath_requestVerifyMintsSessionAndStampsVerified() {
@@ -190,7 +192,7 @@ class PortalAuthIT {
         "first verify stamps email_verified_at");
   }
 
-  // ── AC2: enumeration resistance ──────────────────────────────────────────────
+  // AC2: enumeration resistance
 
   @Test
   void unknownEmail_sendsNothing_butVerifyStillGenericFails() {
@@ -204,7 +206,7 @@ class PortalAuthIT {
         () -> authService.verifyCode(slug, "ghost@nowhere.test", "000000", "ua", "ip"));
   }
 
-  // ── AC3: brute force + single use ────────────────────────────────────────────
+  // AC3: brute force + single use
 
   @Test
   void sixthAttemptInvalidatesChallenge_evenWithTheRightCode() {
@@ -243,7 +245,7 @@ class PortalAuthIT {
         "the same code cannot be replayed");
   }
 
-  // ── AC4: session security ────────────────────────────────────────────────────
+  // AC4: session security
 
   @Test
   void refreshRotates_andReuseOfOldTokenIsRejected() {
@@ -293,7 +295,7 @@ class PortalAuthIT {
         "logout-all bumps the version — the old token is revoked");
   }
 
-  // ── AC6: scoping ─────────────────────────────────────────────────────────────
+  // AC6: scoping
 
   @Test
   void profileReadIsOrgScoped_customerOfOrgAUnreachableViaOrgB() {
@@ -307,7 +309,7 @@ class PortalAuthIT {
     assertThrows(NotFoundException.class, () -> portalService.me(orgId(slugB), custA));
   }
 
-  // ── helpers ──────────────────────────────────────────────────────────────────
+  // helpers
 
   private CustomerAuthService.SessionResult login(String slug, String email) {
     authService.requestCode(slug, email);

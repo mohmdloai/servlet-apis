@@ -114,6 +114,51 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   }
 
   @Override
+  public List<ReorderResolution> resolveForReorder(
+      UUID orgId, java.util.Collection<UUID> productIds, ListingStatus status) {
+    if (productIds == null || productIds.isEmpty()) {
+      return List.of();
+    }
+    // available = stock_qty - reserved_qty; untracked (no inventory row) → COALESCE 0. Same B2
+    // signal as resolveAvailability, but keyed by product_id (the order line's handle) instead of
+    // slug — a reorder starts from past order lines, which carry product_id, never a public slug.
+    org.jooq.Field<Integer> available =
+        org.jooq
+            .impl
+            .DSL
+            .coalesce(
+                INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY), org.jooq.impl.DSL.inline(0))
+            .as("available");
+    return dsl.select(
+            PRODUCT_LISTING.PRODUCT_ID,
+            PRODUCT_LISTING.SLUG,
+            PRODUCT_LISTING.TITLE,
+            PRODUCT_LISTING.SALES_PRICE,
+            available)
+        .from(PRODUCT_LISTING)
+        .leftJoin(INVENTORY)
+        .on(
+            INVENTORY
+                .ORG_ID
+                .eq(PRODUCT_LISTING.ORG_ID)
+                .and(INVENTORY.PRODUCT_ID.eq(PRODUCT_LISTING.PRODUCT_ID)))
+        .where(
+            PRODUCT_LISTING
+                .ORG_ID
+                .eq(orgId)
+                .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)))
+                .and(PRODUCT_LISTING.PRODUCT_ID.in(productIds)))
+        .fetch(
+            r ->
+                new ReorderResolution(
+                    r.get(PRODUCT_LISTING.PRODUCT_ID),
+                    r.get(PRODUCT_LISTING.SLUG),
+                    r.get(PRODUCT_LISTING.TITLE),
+                    r.get(PRODUCT_LISTING.SALES_PRICE),
+                    r.get(available) == null ? 0 : r.get(available)));
+  }
+
+  @Override
   public Optional<ProductListing> findBySlugAndStatus(
       UUID orgId, String slug, ListingStatus status) {
     return dsl.selectFrom(PRODUCT_LISTING)

@@ -3,16 +3,25 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Customer;
+import com.loai.inventory.domain.model.CustomerAddress;
+import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
+import com.loai.inventory.domain.repository.CustomerAddressRepository;
+import com.loai.inventory.domain.repository.CustomerAddressRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.ProductListingRepository;
+import com.loai.inventory.domain.repository.ProductListingRepository.ReorderResolution;
+import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesInvoiceRepository;
 import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -54,16 +63,22 @@ public class CustomerPortalService {
   private final CustomerRepositoryFactory customerRepositoryFactory;
   private final SalesOrderRepositoryFactory salesOrderRepositoryFactory;
   private final SalesInvoiceRepositoryFactory salesInvoiceRepositoryFactory;
+  private final CustomerAddressRepositoryFactory customerAddressRepositoryFactory;
+  private final ProductListingRepositoryFactory productListingRepositoryFactory;
 
   public CustomerPortalService(
       DSLContext rootDsl,
       CustomerRepositoryFactory customerRepositoryFactory,
       SalesOrderRepositoryFactory salesOrderRepositoryFactory,
-      SalesInvoiceRepositoryFactory salesInvoiceRepositoryFactory) {
+      SalesInvoiceRepositoryFactory salesInvoiceRepositoryFactory,
+      CustomerAddressRepositoryFactory customerAddressRepositoryFactory,
+      ProductListingRepositoryFactory productListingRepositoryFactory) {
     this.rootDsl = rootDsl;
     this.customerRepositoryFactory = customerRepositoryFactory;
     this.salesOrderRepositoryFactory = salesOrderRepositoryFactory;
     this.salesInvoiceRepositoryFactory = salesInvoiceRepositoryFactory;
+    this.customerAddressRepositoryFactory = customerAddressRepositoryFactory;
+    this.productListingRepositoryFactory = productListingRepositoryFactory;
   }
 
   /** One order + its lines — the shape the servlet maps to {@code PublicOrderResponse}. */
@@ -106,7 +121,7 @@ public class CustomerPortalService {
     return new OrderView(order, repo.findLinesByOrderId(order.getId()));
   }
 
-  // ── invoices (slice P3) ─────────────────────────────────────────────────────────
+  // invoices (slice P3)
 
   /** One invoice + its lines — the shape the servlet maps to the customer-safe response. */
   public record InvoiceDetail(SalesInvoice invoice, List<SalesInvoiceLine> lines) {}
@@ -142,6 +157,169 @@ public class CustomerPortalService {
             .filter(i -> !i.isVoid())
             .orElseThrow(() -> new NotFoundException("Invoice not found: " + invoiceId));
     return new InvoiceDetail(invoice, repo.findLinesByInvoiceId(invoiceId));
+  }
+
+  // saved addresses (slice P4)
+
+  /**
+   * The write body for an address create/update. {@code address} is required; the rest are optional
+   * label/contact fields. {@code makeDefault} promotes this address to the customer's default
+   * (clearing the previous); create also auto-defaults the customer's very first address.
+   */
+  public record AddressInput(
+      String label, String recipient, String phone, String address, boolean makeDefault) {}
+
+  /** The customer's saved addresses — default first, then newest. */
+  public List<CustomerAddress> listAddresses(UUID orgId, UUID customerId) {
+    return customerAddressRepositoryFactory.create(rootDsl).findByCustomerId(orgId, customerId);
+  }
+
+  /**
+   * Add a saved address for the caller. The first address a customer saves is made their default
+   * automatically; otherwise {@code makeDefault} decides. Promoting a default clears the previous
+   * one in the same transaction so the one-default invariant always holds.
+   */
+  public CustomerAddress createAddress(UUID orgId, UUID customerId, AddressInput input) {
+    validateAddress(input);
+    return rootDsl.transactionResult(
+        cfg -> {
+          CustomerAddressRepository repo = customerAddressRepositoryFactory.create(DSL.using(cfg));
+          boolean makeDefault =
+              input.makeDefault() || repo.countByCustomerId(orgId, customerId) == 0;
+          if (makeDefault) {
+            repo.clearDefault(orgId, customerId);
+          }
+          CustomerAddress a = new CustomerAddress();
+          a.setOrgId(orgId);
+          a.setCustomerId(customerId);
+          a.setLabel(trimToNull(input.label()));
+          a.setRecipient(trimToNull(input.recipient()));
+          a.setPhone(trimToNull(input.phone()));
+          a.setAddress(trimToNull(input.address()));
+          a.setDefault(makeDefault);
+          return repo.insert(a);
+        });
+  }
+
+  /**
+   * Merge-update the caller's own address content (label/recipient/phone/address). {@code
+   * makeDefault} may promote it to the default; it never demotes (delete or promoting another
+   * address are the other levers). A foreign or unknown id is an opaque 404.
+   */
+  public CustomerAddress updateAddress(
+      UUID orgId, UUID customerId, UUID addressId, AddressInput input) {
+    validateAddress(input);
+    return rootDsl.transactionResult(
+        cfg -> {
+          CustomerAddressRepository repo = customerAddressRepositoryFactory.create(DSL.using(cfg));
+          CustomerAddress existing =
+              repo.findById(orgId, customerId, addressId)
+                  .orElseThrow(() -> new NotFoundException("Address not found: " + addressId));
+          existing.setLabel(trimToNull(input.label()));
+          existing.setRecipient(trimToNull(input.recipient()));
+          existing.setPhone(trimToNull(input.phone()));
+          existing.setAddress(trimToNull(input.address()));
+          CustomerAddress saved = repo.update(existing);
+          if (input.makeDefault() && !saved.isDefault()) {
+            repo.clearDefault(orgId, customerId);
+            repo.setDefault(orgId, customerId, addressId);
+            saved.setDefault(true);
+          }
+          return saved;
+        });
+  }
+
+  /** Remove one of the caller's own addresses. A foreign or unknown id is an opaque 404. */
+  public void deleteAddress(UUID orgId, UUID customerId, UUID addressId) {
+    customerAddressRepositoryFactory.create(rootDsl).deleteById(orgId, customerId, addressId);
+  }
+
+  /**
+   * Promote one of the caller's addresses to their default, clearing the previous default in the
+   * same transaction (the DB partial unique index is the backstop). A foreign or unknown id is an
+   * opaque 404. Returns the now-default address.
+   */
+  public CustomerAddress setDefaultAddress(UUID orgId, UUID customerId, UUID addressId) {
+    return rootDsl.transactionResult(
+        cfg -> {
+          CustomerAddressRepository repo = customerAddressRepositoryFactory.create(DSL.using(cfg));
+          CustomerAddress existing =
+              repo.findById(orgId, customerId, addressId)
+                  .orElseThrow(() -> new NotFoundException("Address not found: " + addressId));
+          if (!existing.isDefault()) {
+            repo.clearDefault(orgId, customerId);
+            repo.setDefault(orgId, customerId, addressId);
+          }
+          existing.setDefault(true);
+          return existing;
+        });
+  }
+
+  private static void validateAddress(AddressInput input) {
+    if (input.address() == null || input.address().isBlank()) {
+      throw new ValidationException("address is required");
+    }
+    checkLength("label", input.label());
+    checkLength("recipient", input.recipient());
+    checkLength("phone", input.phone());
+    checkLength("address", input.address());
+  }
+
+  // reorder (slice P4)
+
+  /** One resolved, currently-buyable cart item from a past order line. */
+  public record ReorderItem(
+      String slug, String title, BigDecimal unitPrice, boolean inStock, int qty) {}
+
+  /** A past order line whose product is no longer purchasable — reported, never added. */
+  public record UnavailableItem(String description, int qty) {}
+
+  /** The reorder resolution: buyable items to prefill the cart + the ones that dropped out. */
+  public record ReorderResult(List<ReorderItem> items, List<UnavailableItem> unavailable) {}
+
+  /**
+   * Resolve one of the caller's past orders into a currently-buyable cart. Asserts ownership
+   * exactly like {@link #getOrder} (a foreign or unknown number is the same opaque 404), then maps
+   * each line's product back to its current PUBLISHED listing: a line with a live listing becomes a
+   * {@link ReorderItem} (public slug + current price + advisory {@code in_stock}, at the original
+   * quantity); a line whose product is no longer published drops to {@link UnavailableItem}. No
+   * stock is reserved and no {@code product_id} ever crosses the boundary — the shopper re-runs the
+   * normal checkout.
+   */
+  public ReorderResult reorder(UUID orgId, UUID customerId, String orderNumber) {
+    SalesOrderRepository orderRepo = salesOrderRepositoryFactory.create(rootDsl);
+    SalesOrder order =
+        orderRepo
+            .findByOrderNumber(orgId, orderNumber)
+            .filter(o -> customerId.equals(o.getCustomerId()))
+            .orElseThrow(() -> new NotFoundException("Order not found: " + orderNumber));
+    List<SalesOrderLine> lines = orderRepo.findLinesByOrderId(order.getId());
+
+    ProductListingRepository listingRepo = productListingRepositoryFactory.create(rootDsl);
+    Map<UUID, ReorderResolution> byProduct =
+        listingRepo
+            .resolveForReorder(
+                orgId,
+                lines.stream().map(SalesOrderLine::getProductId).toList(),
+                ListingStatus.PUBLISHED)
+            .stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    ReorderResolution::productId, r -> r, (a, b) -> a));
+
+    List<ReorderItem> items = new ArrayList<>();
+    List<UnavailableItem> unavailable = new ArrayList<>();
+    for (SalesOrderLine line : lines) {
+      ReorderResolution r = byProduct.get(line.getProductId());
+      if (r == null) {
+        unavailable.add(new UnavailableItem(line.getDescription(), line.getQuantity()));
+      } else {
+        items.add(
+            new ReorderItem(
+                r.slug(), r.title(), r.salesPrice(), r.available() > 0, line.getQuantity()));
+      }
+    }
+    return new ReorderResult(items, unavailable);
   }
 
   /** The patch body — any {@code null} field is left unchanged (merge). Email is not accepted. */
