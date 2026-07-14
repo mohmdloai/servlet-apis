@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.MagicLinkService.ResolvedOrderView;
 import com.zaxxer.hikari.HikariConfig;
@@ -69,6 +70,7 @@ class OrderMagicLinkIT {
         new MagicLinkService(
             dsl,
             new CustomerMagicTokenRepositoryFactoryImpl(),
+            new OrgRepositoryFactoryImpl(),
             "http://localhost:8080/",
             Duration.ofDays(30));
   }
@@ -92,9 +94,16 @@ class OrderMagicLinkIT {
     UUID orderId = UUID.randomUUID();
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
-    String url = service.issueOrderViewLink(dsl, org, customer, orderId, now);
-    // Trailing slash on the base URL is normalised; the token is the last path segment.
-    assertTrue(url.startsWith("http://localhost:8080/api/public/orders/"), url);
+    MagicLinkService.OrderViewLink link =
+        service.issueOrderViewLink(dsl, org, customer, orderId, now);
+    String url = link.absolute();
+    // The link points at the branded storefront status page /{locale}/{slug}/orders/{token} — NOT
+    // the raw JSON endpoint. Trailing slash on the base URL is normalised; the token is the last
+    // path segment. The org's default_locale drives the locale (DB default `ar`).
+    assertTrue(
+        url.matches("http://localhost:8080/(ar|en)/[^/]+/orders/[^/]+"),
+        "unexpected order-view link: " + url);
+    assertEquals(url.substring("http://localhost:8080".length()), link.relative());
     String rawToken = url.substring(url.lastIndexOf('/') + 1);
 
     Optional<ResolvedOrderView> resolved = service.resolveOrderView(rawToken, now);
@@ -117,7 +126,7 @@ class OrderMagicLinkIT {
     OffsetDateTime past = OffsetDateTime.now(ZoneOffset.UTC).minusDays(60);
 
     // Mint dated far in the past → already expired (TTL 30d).
-    String url = service.issueOrderViewLink(dsl, org, customer, UUID.randomUUID(), past);
+    String url = service.issueOrderViewLink(dsl, org, customer, UUID.randomUUID(), past).absolute();
     String rawToken = url.substring(url.lastIndexOf('/') + 1);
 
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
@@ -132,8 +141,8 @@ class OrderMagicLinkIT {
     UUID orderA = UUID.randomUUID();
     UUID orderB = UUID.randomUUID();
 
-    String urlA = service.issueOrderViewLink(dsl, org, customer, orderA, now);
-    String urlB = service.issueOrderViewLink(dsl, org, customer, orderB, now);
+    String urlA = service.issueOrderViewLink(dsl, org, customer, orderA, now).absolute();
+    String urlB = service.issueOrderViewLink(dsl, org, customer, orderB, now).absolute();
     String tokenA = urlA.substring(urlA.lastIndexOf('/') + 1);
     String tokenB = urlB.substring(urlB.lastIndexOf('/') + 1);
 

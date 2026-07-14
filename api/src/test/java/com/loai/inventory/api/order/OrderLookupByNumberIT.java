@@ -165,6 +165,7 @@ class OrderLookupByNumberIT {
         new MagicLinkService(
             dsl,
             new CustomerMagicTokenRepositoryFactoryImpl(),
+            new OrgRepositoryFactoryImpl(),
             "http://localhost:8080",
             Duration.ofDays(30));
     service =

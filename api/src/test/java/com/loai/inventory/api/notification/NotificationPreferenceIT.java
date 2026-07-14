@@ -20,6 +20,7 @@ import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.generated.enums.ActorType;
 import com.loai.inventory.service.MagicLinkService;
@@ -99,6 +100,7 @@ class NotificationPreferenceIT {
         new MagicLinkService(
             dsl,
             new CustomerMagicTokenRepositoryFactoryImpl(),
+            new OrgRepositoryFactoryImpl(),
             "http://localhost:8080",
             Duration.ofDays(30));
     service =
@@ -328,7 +330,8 @@ class NotificationPreferenceIT {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
     String viewToken =
-        lastSegment(magicLink.issueOrderViewLink(dsl, org, customer, UUID.randomUUID(), now));
+        lastSegment(
+            magicLink.issueOrderViewLink(dsl, org, customer, UUID.randomUUID(), now).absolute());
     String unsubToken = lastSegment(magicLink.issueUnsubscribeLink(dsl, org, customer, now));
 
     assertTrue(magicLink.resolveOrderView(viewToken, now).isPresent());

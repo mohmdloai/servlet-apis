@@ -249,8 +249,7 @@ class OrderPaidNotificationIT {
     EmailMessage msg = emailSender.captured.get(0);
     assertEquals("nadia@acme.test", msg.to());
     assertEquals("Payment received for " + s.orderNumber(), msg.subject());
-    assertTrue(
-        msg.html().contains("/api/public/orders/"), "email carries the order-view magic link");
+    assertTrue(msg.html().contains("/orders/"), "email carries the order-view magic link");
   }
 
   @Test

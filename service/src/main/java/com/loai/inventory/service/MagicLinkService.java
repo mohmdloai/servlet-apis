@@ -2,8 +2,10 @@ package com.loai.inventory.service;
 
 import com.loai.inventory.domain.model.CustomerMagicToken;
 import com.loai.inventory.domain.model.MagicTokenPurpose;
+import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.repository.CustomerMagicTokenRepository;
 import com.loai.inventory.domain.repository.CustomerMagicTokenRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -30,21 +32,34 @@ public class MagicLinkService {
   private static final Base64.Encoder URL_ENCODER = Base64.getUrlEncoder().withoutPadding();
   private static final int TOKEN_BYTES = 32; // 256 bits
 
+  /** Storefront locale to fall back to when an org has no {@code default_locale} set. */
+  private static final String DEFAULT_LOCALE = "en";
+
   private final DSLContext rootDsl;
   private final CustomerMagicTokenRepositoryFactory tokenRepoFactory;
+  private final OrgRepositoryFactory orgRepositoryFactory;
   private final String publicBaseUrl;
   private final Duration ttl;
 
   public MagicLinkService(
       DSLContext rootDsl,
       CustomerMagicTokenRepositoryFactory tokenRepoFactory,
+      OrgRepositoryFactory orgRepositoryFactory,
       String publicBaseUrl,
       Duration ttl) {
     this.rootDsl = rootDsl;
     this.tokenRepoFactory = tokenRepoFactory;
+    this.orgRepositoryFactory = orgRepositoryFactory;
     this.publicBaseUrl = stripTrailingSlash(publicBaseUrl);
     this.ttl = ttl;
   }
+
+  /**
+   * A minted order-view link in both forms: the {@code absolute} URL emailed to the customer and
+   * the {@code relative} path returned as the checkout {@code track_url}. Both point at the branded
+   * storefront status page {@code /{locale}/{orgSlug}/orders/{token}} (not the raw JSON endpoint).
+   */
+  public record OrderViewLink(String absolute, String relative) {}
 
   /** Where a resolved order view lives — the token's org + the order it unlocks. */
   public record ResolvedOrderView(UUID orgId, UUID orderId) {}
@@ -54,10 +69,13 @@ public class MagicLinkService {
 
   /**
    * Mint a VIEW_ORDER token for {@code (orgId, customerId, orderId)} inside the caller's txn and
-   * return the absolute public URL carrying the raw token. Because it runs in {@code txDsl}, a
-   * rolled-back order leaves no token.
+   * return the storefront order-view link in {@link OrderViewLink both forms}. The path is {@code
+   * /{locale}/{orgSlug}/orders/{token}} — the branded status page, not the raw JSON endpoint (which
+   * the page fetches server-side). The org's {@code slug} + {@code default_locale} are read from
+   * {@code txDsl} (the org row is already committed); a missing locale falls back to {@code en}.
+   * Because it runs in {@code txDsl}, a rolled-back order leaves no token.
    */
-  public String issueOrderViewLink(
+  public OrderViewLink issueOrderViewLink(
       DSLContext txDsl, UUID orgId, UUID customerId, UUID orderId, OffsetDateTime now) {
     String rawToken = generateRawToken();
     String tokenHash = RefreshTokenStore.hashToken(rawToken);
@@ -76,7 +94,17 @@ public class MagicLinkService {
         orgId,
         customerId,
         orderId);
-    return publicBaseUrl + "/api/public/orders/" + rawToken;
+    Org org =
+        orgRepositoryFactory
+            .create(txDsl)
+            .findById(orgId)
+            .orElseThrow(() -> new IllegalStateException("org not found for magic link: " + orgId));
+    String locale =
+        (org.getDefaultLocale() != null && !org.getDefaultLocale().isBlank())
+            ? org.getDefaultLocale()
+            : DEFAULT_LOCALE;
+    String relative = "/" + locale + "/" + org.getSlug() + "/orders/" + rawToken;
+    return new OrderViewLink(publicBaseUrl + relative, relative);
   }
 
   /**

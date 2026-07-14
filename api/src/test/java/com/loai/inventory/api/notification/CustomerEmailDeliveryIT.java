@@ -217,6 +217,7 @@ class CustomerEmailDeliveryIT {
         new com.loai.inventory.service.MagicLinkService(
             dsl,
             new com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
             "http://localhost:8080",
             java.time.Duration.ofDays(30)),
         maxAttempts);
