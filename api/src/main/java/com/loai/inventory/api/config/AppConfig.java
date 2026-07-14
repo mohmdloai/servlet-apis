@@ -316,7 +316,11 @@ public class AppConfig {
     this.customerSessionStore =
         new CustomerSessionStore(jedisPool, customerRefreshTtlDays * 24 * 3600);
     this.customerPortalService =
-        new CustomerPortalService(dsl, customerRepositoryFactory, salesOrderRepositoryFactory);
+        new CustomerPortalService(
+            dsl,
+            customerRepositoryFactory,
+            salesOrderRepositoryFactory,
+            salesInvoiceRepositoryFactory);
     this.authService =
         new AuthService(
             userRepository,

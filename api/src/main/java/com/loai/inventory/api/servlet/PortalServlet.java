@@ -5,6 +5,8 @@ import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.dto.PortalInvoiceResponse;
+import com.loai.inventory.api.dto.PortalInvoiceSummaryResponse;
 import com.loai.inventory.api.dto.PortalMeResponse;
 import com.loai.inventory.api.dto.PortalProfileUpdateRequest;
 import com.loai.inventory.api.dto.PortalSessionResponse;
@@ -16,6 +18,8 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.CustomerPrincipal;
 import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.auth.CustomerAuthService;
+import com.loai.inventory.service.document.DocumentRenderService;
+import com.loai.inventory.service.document.DocumentRenderService.RenderedDocument;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -23,6 +27,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,6 +42,10 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code GET|PATCH /me} — read / merge-update the caller's own profile
  *   <li>{@code GET /orders} — the caller's own orders, newest first, paged (slice P2)
  *   <li>{@code GET /orders/{orderNumber}} — one owned order (customer-safe); opaque 404 otherwise
+ *   <li>{@code GET /invoices} — the caller's own live invoices, newest first, paged (slice P3)
+ *   <li>{@code GET /invoices/{id}} — one owned invoice + lines (customer-safe); opaque 404
+ *       otherwise
+ *   <li>{@code GET /invoices/{id}/pdf} — the rendered A4 invoice PDF for an owned invoice
  * </ul>
  *
  * All identity comes from the {@link CustomerPrincipal} the filter published — never from the URL
@@ -48,6 +57,7 @@ public class PortalServlet extends HttpServlet {
 
   private CustomerAuthService authService;
   private CustomerPortalService portalService;
+  private DocumentRenderService renderService;
   private ObjectMapper mapper;
   private boolean secureCookies;
   private int refreshMaxAge;
@@ -57,6 +67,7 @@ public class PortalServlet extends HttpServlet {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.authService = config.customerAuthService;
     this.portalService = config.customerPortalService;
+    this.renderService = config.documentRenderService;
     this.mapper = config.objectMapper;
     this.secureCookies = config.secureCookies;
     this.refreshMaxAge = config.customerRefreshMaxAgeSeconds;
@@ -74,6 +85,20 @@ public class PortalServlet extends HttpServlet {
       if (path.startsWith("/orders/")) {
         String orderNumber = path.substring("/orders/".length());
         requireGet(method, () -> handleGetOrder(req, resp, orderNumber));
+        return;
+      }
+      if ("/invoices".equals(path)) {
+        requireGet(method, () -> handleListInvoices(req, resp));
+        return;
+      }
+      if (path.startsWith("/invoices/")) {
+        String rest = path.substring("/invoices/".length());
+        if (rest.endsWith("/pdf")) {
+          String id = rest.substring(0, rest.length() - "/pdf".length());
+          requireGet(method, () -> handleInvoicePdf(req, resp, id));
+        } else {
+          requireGet(method, () -> handleGetInvoice(req, resp, rest));
+        }
         return;
       }
       switch (path) {
@@ -189,6 +214,52 @@ public class PortalServlet extends HttpServlet {
     writeJson(resp, 200, PublicOrderResponse.forOrderView(view.order(), view.lines()));
   }
 
+  // ── invoices (slice P3) ────────────────────────────────────────────────────────
+
+  private void handleListInvoices(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    // Clamp here too so the envelope echoes the page/size actually served.
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", CustomerPortalService.DEFAULT_PAGE_SIZE), 1),
+            CustomerPortalService.MAX_PAGE_SIZE);
+    CustomerPortalService.InvoicePage result =
+        portalService.listInvoices(principal.orgId(), principal.customerId(), page, size);
+    List<PortalInvoiceSummaryResponse> data =
+        result.items().stream().map(PortalInvoiceSummaryResponse::from).toList();
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+  }
+
+  private void handleGetInvoice(HttpServletRequest req, HttpServletResponse resp, String idRaw)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    CustomerPortalService.InvoiceDetail detail =
+        portalService.getInvoice(principal.orgId(), principal.customerId(), parseInvoiceId(idRaw));
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, PortalInvoiceResponse.from(detail.invoice(), detail.lines()));
+  }
+
+  private void handleInvoicePdf(HttpServletRequest req, HttpServletResponse resp, String idRaw)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    UUID invoiceId = parseInvoiceId(idRaw);
+    // Ownership + live gate (opaque 404 for foreign/unknown/voided) before we render anything.
+    portalService.getInvoice(principal.orgId(), principal.customerId(), invoiceId);
+    RenderedDocument doc = renderService.renderInvoice(principal.orgId(), invoiceId);
+    writePdf(resp, doc.bytes(), doc.filename());
+  }
+
+  private UUID parseInvoiceId(String raw) {
+    try {
+      return UUID.fromString(raw);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid invoice id: " + raw);
+    }
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────────────
 
   private int intParam(HttpServletRequest req, String name, int defaultValue) {
@@ -261,6 +332,17 @@ public class PortalServlet extends HttpServlet {
     resp.setContentType("application/json");
     resp.setCharacterEncoding("UTF-8");
     mapper.writeValue(resp.getOutputStream(), body);
+  }
+
+  private void writePdf(HttpServletResponse resp, byte[] bytes, String filename)
+      throws IOException {
+    resp.setStatus(200);
+    resp.setContentType("application/pdf");
+    resp.setContentLength(bytes.length);
+    // A finance document is per-customer and must never be cached by a shared proxy.
+    resp.setHeader("Cache-Control", "private, no-store");
+    resp.setHeader("Content-Disposition", "inline; filename=\"" + filename + "\"");
+    resp.getOutputStream().write(bytes);
   }
 
   private void writeError(HttpServletResponse resp, int status, String message) throws IOException {

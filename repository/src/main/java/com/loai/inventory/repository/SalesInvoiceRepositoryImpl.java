@@ -144,6 +144,34 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
     return dsl.fetchCount(dsl.selectFrom(SALES_INVOICE).where(conditions(orgId, status)));
   }
 
+  @Override
+  public List<SalesInvoice> findByCustomerId(UUID orgId, UUID customerId, int offset, int limit) {
+    return dsl.selectFrom(SALES_INVOICE)
+        .where(customerLiveConditions(orgId, customerId))
+        .orderBy(SALES_INVOICE.CREATED_AT.desc(), SALES_INVOICE.ID.desc())
+        .offset(offset)
+        .limit(limit)
+        .fetch()
+        .map(this::toInvoice);
+  }
+
+  @Override
+  public long countByCustomerId(UUID orgId, UUID customerId) {
+    return dsl.fetchCount(
+        dsl.selectFrom(SALES_INVOICE).where(customerLiveConditions(orgId, customerId)));
+  }
+
+  /** {@code (org, customer)}-scoped, VOID excluded — the customer only ever sees live documents. */
+  private static org.jooq.Condition customerLiveConditions(UUID orgId, UUID customerId) {
+    return SALES_INVOICE
+        .ORG_ID
+        .eq(orgId)
+        .and(SALES_INVOICE.CUSTOMER_ID.eq(customerId))
+        .and(
+            SALES_INVOICE.STATUS.ne(
+                com.loai.inventory.repository.generated.enums.InvoiceStatus.VOID));
+  }
+
   private static org.jooq.Condition conditions(UUID orgId, InvoiceStatus status) {
     org.jooq.Condition c = SALES_INVOICE.ORG_ID.eq(orgId);
     if (status != null) {

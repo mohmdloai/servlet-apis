@@ -3,10 +3,14 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Customer;
+import com.loai.inventory.domain.model.SalesInvoice;
+import com.loai.inventory.domain.model.SalesInvoiceLine;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.SalesInvoiceRepository;
+import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import java.util.List;
@@ -29,6 +33,13 @@ import org.jooq.impl.DSL;
  * tracker already ships. A single-order lookup asserts ownership and otherwise answers the same
  * opaque 404 as an unknown number — never an ownership oracle. See {@code
  * stories/portal_auth_core.md}.
+ *
+ * <p>It also serves the customer's own invoices ({@code GET /api/portal/invoices[/{id}]} — slice
+ * P3, {@code stories/portal_invoices.md}): the same {@code (orgId, customerId)}-scoped read over
+ * the already-issued {@link SalesInvoice} aggregate the staff worklist uses, VOID excluded (the
+ * customer only ever sees live documents). A single-invoice lookup asserts ownership and otherwise
+ * answers the same opaque 404 as an unknown id. The PDF itself is streamed by the servlet through
+ * the shared {@code DocumentRenderService} once this ownership gate has passed.
  */
 public class CustomerPortalService {
 
@@ -42,14 +53,17 @@ public class CustomerPortalService {
   private final DSLContext rootDsl;
   private final CustomerRepositoryFactory customerRepositoryFactory;
   private final SalesOrderRepositoryFactory salesOrderRepositoryFactory;
+  private final SalesInvoiceRepositoryFactory salesInvoiceRepositoryFactory;
 
   public CustomerPortalService(
       DSLContext rootDsl,
       CustomerRepositoryFactory customerRepositoryFactory,
-      SalesOrderRepositoryFactory salesOrderRepositoryFactory) {
+      SalesOrderRepositoryFactory salesOrderRepositoryFactory,
+      SalesInvoiceRepositoryFactory salesInvoiceRepositoryFactory) {
     this.rootDsl = rootDsl;
     this.customerRepositoryFactory = customerRepositoryFactory;
     this.salesOrderRepositoryFactory = salesOrderRepositoryFactory;
+    this.salesInvoiceRepositoryFactory = salesInvoiceRepositoryFactory;
   }
 
   /** One order + its lines — the shape the servlet maps to {@code PublicOrderResponse}. */
@@ -90,6 +104,44 @@ public class CustomerPortalService {
             .filter(o -> customerId.equals(o.getCustomerId()))
             .orElseThrow(() -> new NotFoundException("Order not found: " + orderNumber));
     return new OrderView(order, repo.findLinesByOrderId(order.getId()));
+  }
+
+  // ── invoices (slice P3) ─────────────────────────────────────────────────────────
+
+  /** One invoice + its lines — the shape the servlet maps to the customer-safe response. */
+  public record InvoiceDetail(SalesInvoice invoice, List<SalesInvoiceLine> lines) {}
+
+  /** One page of the customer's invoices (lean headers) + the total (drives the pager). */
+  public record InvoicePage(List<SalesInvoice> items, long total) {}
+
+  /**
+   * The customer's own <em>live</em> invoices, newest first, paged. Strictly {@code (orgId,
+   * customerId)}-scoped — both come from the session token, never a request param. VOID invoices
+   * and walk-in receipts (null customer) never appear. A customer with none → an empty page.
+   */
+  public InvoicePage listInvoices(UUID orgId, UUID customerId, int page, int size) {
+    int p = Math.max(page, 0);
+    int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    SalesInvoiceRepository repo = salesInvoiceRepositoryFactory.create(rootDsl);
+    List<SalesInvoice> items = repo.findByCustomerId(orgId, customerId, p * s, s);
+    long total = repo.countByCustomerId(orgId, customerId);
+    return new InvoicePage(items, total);
+  }
+
+  /**
+   * One of the customer's invoices by its stable {@code id}, with its lines. Asserts {@code
+   * invoice.customer_id == customerId} and that it is not VOID — a foreign, unknown, or voided id
+   * is the <em>same</em> opaque 404, so the endpoint is never an ownership oracle. Also the
+   * ownership gate the {@code /{id}/pdf} route runs before streaming the rendered document.
+   */
+  public InvoiceDetail getInvoice(UUID orgId, UUID customerId, UUID invoiceId) {
+    SalesInvoiceRepository repo = salesInvoiceRepositoryFactory.create(rootDsl);
+    SalesInvoice invoice =
+        repo.findById(orgId, invoiceId)
+            .filter(i -> customerId.equals(i.getCustomerId()))
+            .filter(i -> !i.isVoid())
+            .orElseThrow(() -> new NotFoundException("Invoice not found: " + invoiceId));
+    return new InvoiceDetail(invoice, repo.findLinesByInvoiceId(invoiceId));
   }
 
   /** The patch body — any {@code null} field is left unchanged (merge). Email is not accepted. */

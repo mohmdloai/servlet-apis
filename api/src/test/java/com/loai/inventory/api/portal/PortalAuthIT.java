@@ -116,7 +116,8 @@ class PortalAuthIT {
         new CustomerPortalService(
             dsl,
             new CustomerRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl());
+            new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl());
 
     emailSender = new CapturingEmailSender();
     authService =
