@@ -88,6 +88,17 @@ public interface SalesOrderRepository {
   long count(UUID orgId, OrderStatus status);
 
   /**
+   * One page of a single customer's orders for the portal "my orders" read ({@code
+   * stories/portal_order_reads.md}) — {@code WHERE org_id=? AND customer_id=?}, newest first
+   * ({@code placed_at DESC, id DESC}). Strictly {@code (orgId, customerId)}-scoped; never keyed off
+   * a request-supplied customer id. Lines are batch-loaded separately by the caller (no N+1).
+   */
+  List<SalesOrder> findByCustomerId(UUID orgId, UUID customerId, int offset, int limit);
+
+  /** Count of the customer's orders (drives the portal pager). */
+  long countByCustomerId(UUID orgId, UUID customerId);
+
+  /**
    * Batch-load lines for a set of orders, keyed by {@code sales_order_id} — one query per page so
    * the worklist doesn't fetch lines per row. Orders with no lines are absent from the map.
    */
