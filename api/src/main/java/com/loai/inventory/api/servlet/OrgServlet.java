@@ -27,6 +27,8 @@ import com.loai.inventory.api.servlet.handler.ProductListingHandler;
 import com.loai.inventory.api.servlet.handler.RefundHandler;
 import com.loai.inventory.api.servlet.handler.ReportsHandler;
 import com.loai.inventory.api.servlet.handler.SalesOrderHandler;
+import com.loai.inventory.api.servlet.handler.StorefrontHandler;
+import com.loai.inventory.api.servlet.handler.StorefrontPageHandler;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import jakarta.servlet.http.HttpServlet;
@@ -69,7 +71,13 @@ public class OrgServlet extends HttpServlet {
             Map.entry("members", new MemberHandler(config.memberService, mapper)),
             Map.entry("logo", new LogoHandler(config.orgService, mapper)),
             Map.entry("og-image", new OgImageHandler(config.orgService, mapper)),
-            Map.entry("storefront", new BannerHandler(config.storefrontBannerService, mapper)),
+            Map.entry(
+                "storefront",
+                new StorefrontHandler(
+                    Map.of(
+                        "banners", new BannerHandler(config.storefrontBannerService, mapper),
+                        "pages", new StorefrontPageHandler(config.storefrontPageService, mapper)),
+                    mapper)),
             Map.entry("health", new HealthHandler(config.orgHealthService, mapper)),
             Map.entry("reports", new ReportsHandler(config.reportService, mapper)),
             Map.entry("products", new ProductHandler(config.productService, mapper)),
