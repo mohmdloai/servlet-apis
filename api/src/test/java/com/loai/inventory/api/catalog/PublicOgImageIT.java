@@ -106,6 +106,7 @@ class PublicOgImageIT {
             new com.loai.inventory.repository.CategoryRepositoryFactoryImpl(),
             new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
             new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             storage,
             null,
             source);

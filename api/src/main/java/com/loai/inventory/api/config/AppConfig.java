@@ -20,6 +20,7 @@ import com.loai.inventory.domain.repository.ImpersonationEventRepository;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
+import com.loai.inventory.domain.repository.ListingReviewRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationPreferenceRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.NumberSequenceReconciliationRepositoryFactory;
@@ -51,6 +52,7 @@ import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
 import com.loai.inventory.repository.NumberSequenceReconciliationRepositoryFactoryImpl;
@@ -79,6 +81,7 @@ import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceService;
+import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.MemberService;
 import com.loai.inventory.service.NotificationService;
@@ -173,6 +176,7 @@ public class AppConfig {
   public final StorefrontPageRepositoryFactory storefrontPageRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
   public final CustomerAddressRepositoryFactory customerAddressRepositoryFactory;
+  public final ListingReviewRepositoryFactory listingReviewRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
   public final InventoryLogRepositoryFactory inventoryLogRepositoryFactory;
   public final UserRepositoryFactory userRepositoryFactory;
@@ -215,6 +219,7 @@ public class AppConfig {
   public final CustomerSessionStore customerSessionStore;
   public final CustomerAuthService customerAuthService;
   public final CustomerPortalService customerPortalService;
+  public final ListingReviewService listingReviewService;
   public final ProductListingService productListingService;
   public final StorefrontBannerService storefrontBannerService;
   public final StorefrontPageService storefrontPageService;
@@ -291,6 +296,7 @@ public class AppConfig {
     this.storefrontPageRepositoryFactory = new StorefrontPageRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
     this.customerAddressRepositoryFactory = new CustomerAddressRepositoryFactoryImpl();
+    this.listingReviewRepositoryFactory = new ListingReviewRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
     this.inventoryLogRepositoryFactory = new InventoryLogRepositoryFactoryImpl();
     this.userRepositoryFactory = new UserRepositoryFactoryImpl();
@@ -529,6 +535,7 @@ public class AppConfig {
             categoryRepositoryFactory,
             inventoryRepositoryFactory,
             storefrontBannerRepositoryFactory,
+            listingReviewRepositoryFactory,
             objectStorage,
             salesOrderService,
             new PresignedOgImageSource(objectStorage));
@@ -542,7 +549,16 @@ public class AppConfig {
             customerAddressRepositoryFactory,
             productListingRepositoryFactory,
             orgRepositoryFactory,
+            fulfillmentRepositoryFactory,
             salesOrderService);
+    // Reviews (slice R1): portal write + staff moderation + public read, one service.
+    this.listingReviewService =
+        new ListingReviewService(
+            dsl,
+            listingReviewRepositoryFactory,
+            productListingRepositoryFactory,
+            customerRepositoryFactory,
+            orgRepositoryFactory);
     this.creditNoteService =
         new CreditNoteService(
             dsl,

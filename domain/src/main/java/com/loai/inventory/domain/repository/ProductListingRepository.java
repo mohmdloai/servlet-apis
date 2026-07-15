@@ -78,6 +78,21 @@ public interface ProductListingRepository {
   /** Storefront read: a listing by its public slug, constrained to a status (e.g. PUBLISHED). */
   Optional<ProductListing> findBySlugAndStatus(UUID orgId, String slug, ListingStatus status);
 
+  /**
+   * A listing by its public slug in the org, <b>any status</b> — the portal review-write resolution
+   * (slice R1): a customer may review a delivered item even after its listing was unpublished. The
+   * public plane never uses this; its reads stay PUBLISHED-only.
+   */
+  Optional<ProductListing> findBySlug(UUID orgId, String slug);
+
+  /**
+   * Public slugs for a set of products (org-scoped, any status), keyed by {@code productId} —
+   * batch-loaded so the portal order detail can point each line at its listing (the "rate this
+   * item" entry, slice R1) without a per-row fetch. Products with no listing are absent from the
+   * map. Product ⇄ listing is 1:1 per org (unique index), so at most one row per id.
+   */
+  Map<UUID, String> findSlugsByProductIds(UUID orgId, Collection<UUID> productIds);
+
   List<ProductListing> findAll(UUID orgId, int offset, int limit);
 
   List<ProductListing> findAllByStatus(UUID orgId, ListingStatus status, int offset, int limit);

@@ -7,7 +7,9 @@ import java.util.List;
 /**
  * Public, whitelisted storefront view of a listing. Intentionally omits internal id, {@code
  * product_id}, status, timestamps and object keys. {@code categories} is populated only on the
- * detail endpoint (null/omitted on list items).
+ * detail endpoint (null/omitted on list items). {@code rating_avg} (one decimal, string) + {@code
+ * rating_count} are the APPROVED-review aggregate (slice R1) — both omitted when the listing has no
+ * approved review (absent, never zero-fabricated; epic §8/§10).
  */
 public class PublicListingResponse {
   private String slug;
@@ -17,6 +19,8 @@ public class PublicListingResponse {
   private boolean inStock;
   private List<PublicListingImageResponse> images;
   private List<PublicCategoryRefResponse> categories;
+  private String ratingAvg;
+  private Long ratingCount;
 
   private PublicListingResponse() {}
 
@@ -32,6 +36,8 @@ public class PublicListingResponse {
         v.categories() == null || v.categories().isEmpty()
             ? null
             : v.categories().stream().map(PublicCategoryRefResponse::from).toList();
+    r.ratingAvg = v.ratingAvg();
+    r.ratingCount = v.ratingCount();
     return r;
   }
 
@@ -61,5 +67,13 @@ public class PublicListingResponse {
 
   public List<PublicCategoryRefResponse> getCategories() {
     return categories;
+  }
+
+  public String getRatingAvg() {
+    return ratingAvg;
+  }
+
+  public Long getRatingCount() {
+    return ratingCount;
   }
 }

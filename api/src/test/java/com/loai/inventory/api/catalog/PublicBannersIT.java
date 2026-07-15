@@ -93,6 +93,7 @@ class PublicBannersIT {
             new CategoryRepositoryFactoryImpl(),
             new InventoryRepositoryFactoryImpl(),
             new StorefrontBannerRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             storage,
             null,
             null);

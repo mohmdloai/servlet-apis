@@ -18,6 +18,7 @@ import com.loai.inventory.repository.generated.tables.records.ProductListingImag
 import com.loai.inventory.repository.generated.tables.records.ProductListingRecord;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -170,6 +171,25 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                 .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status))))
         .fetchOptional()
         .map(this::toListing);
+  }
+
+  @Override
+  public Optional<ProductListing> findBySlug(UUID orgId, String slug) {
+    return dsl.selectFrom(PRODUCT_LISTING)
+        .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.SLUG.eq(slug)))
+        .fetchOptional()
+        .map(this::toListing);
+  }
+
+  @Override
+  public Map<UUID, String> findSlugsByProductIds(UUID orgId, Collection<UUID> productIds) {
+    if (productIds == null || productIds.isEmpty()) {
+      return Map.of();
+    }
+    return dsl.select(PRODUCT_LISTING.PRODUCT_ID, PRODUCT_LISTING.SLUG)
+        .from(PRODUCT_LISTING)
+        .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.PRODUCT_ID.in(productIds)))
+        .fetchMap(PRODUCT_LISTING.PRODUCT_ID, PRODUCT_LISTING.SLUG);
   }
 
   @Override
