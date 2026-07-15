@@ -220,7 +220,7 @@ public final class PaymentService {
     if (order.getCustomerId() == null) {
       return;
     }
-    String viewLink =
+    MagicLinkService.OrderViewLink viewLink =
         magicLinkService.issueOrderViewLink(
             txDsl, orgId, order.getCustomerId(), order.getId(), now);
     notificationService.notify(
@@ -234,7 +234,7 @@ public final class PaymentService {
             "currency", txn.getCurrency()),
         "sales_order",
         order.getId(),
-        viewLink);
+        viewLink.absolute());
   }
 
   /**

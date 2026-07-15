@@ -338,7 +338,11 @@ public class AppConfig {
     long magicTtlDays = parseLong(System.getenv("MAGIC_LINK_TTL_DAYS"), 30L);
     this.magicLinkService =
         new MagicLinkService(
-            dsl, customerMagicTokenRepositoryFactory, publicBaseUrl, Duration.ofDays(magicTtlDays));
+            dsl,
+            customerMagicTokenRepositoryFactory,
+            orgRepositoryFactory,
+            publicBaseUrl,
+            Duration.ofDays(magicTtlDays));
     int emailMaxAttempts =
         (int)
             parseLong(

@@ -151,6 +151,7 @@ class PublicCheckoutIT {
         new MagicLinkService(
             dsl,
             new CustomerMagicTokenRepositoryFactoryImpl(),
+            new OrgRepositoryFactoryImpl(),
             "http://localhost:8080",
             Duration.ofDays(30));
     PaymentService paymentService =
@@ -228,9 +229,12 @@ class PublicCheckoutIT {
     assertEquals(3, availableOf(org, product));
     // payment instructions echoed from the org (B1).
     assertTrue(r.paymentInstructions().contains("InstaPay"));
-    // track_url is the relative anonymous order-view link.
+    // track_url is the relative order-view link — the branded storefront status page
+    // /{locale}/{slug}/orders/{token}, not the raw JSON endpoint.
     assertNotNull(r.trackUrl());
-    assertTrue(r.trackUrl().startsWith("/api/public/orders/"));
+    assertTrue(r.trackUrl().startsWith("/"), r.trackUrl());
+    assertTrue(r.trackUrl().contains("/orders/"), r.trackUrl());
+    assertFalse(r.trackUrl().startsWith("/api/"), r.trackUrl());
   }
 
   @Test
@@ -241,7 +245,8 @@ class PublicCheckoutIT {
     createInventory(org, product, 3);
 
     CheckoutResult r = storefront.checkout("acme", cart(new CheckoutLine("widget", 1)), key());
-    String token = r.trackUrl().substring("/api/public/orders/".length());
+    // The token is the last path segment of /{locale}/{slug}/orders/{token}.
+    String token = r.trackUrl().substring(r.trackUrl().lastIndexOf('/') + 1);
 
     var resolved = magicLink.resolveOrderView(token, OffsetDateTime.now());
     assertTrue(resolved.isPresent(), "track_url token resolves");

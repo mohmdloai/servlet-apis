@@ -278,10 +278,10 @@ public class SalesOrderService {
           Customer resolvedCustomer = built.customer();
           String trackUrl = null;
           if (resolvedCustomer != null) {
-            String viewLink =
+            MagicLinkService.OrderViewLink viewLink =
                 magicLinkService.issueOrderViewLink(
                     txDsl, orgId, resolvedCustomer.getId(), order.getId(), now);
-            trackUrl = toRelativeTrackUrl(viewLink);
+            trackUrl = viewLink.relative();
             notificationService.notify(
                 txDsl,
                 orgId,
@@ -291,7 +291,7 @@ public class SalesOrderService {
                 Map.of("order_number", order.getOrderNumber()),
                 "sales_order",
                 order.getId(),
-                viewLink);
+                viewLink.absolute());
           }
 
           log.info(
@@ -314,19 +314,6 @@ public class SalesOrderService {
     return lines.stream()
         .map(l -> l == null ? null : new OrderLineInput(l.productId(), l.quantity()))
         .toList();
-  }
-
-  /**
-   * Reduce the absolute order-view URL minted by {@link MagicLinkService} ({@code
-   * {publicBaseUrl}/api/public/orders/{token}}) to the relative {@code /api/public/orders/{token}}
-   * the public checkout contract returns as {@code track_url}.
-   */
-  private static String toRelativeTrackUrl(String absolute) {
-    if (absolute == null) {
-      return null;
-    }
-    int i = absolute.indexOf("/api/public/orders/");
-    return i >= 0 ? absolute.substring(i) : absolute;
   }
 
   /**

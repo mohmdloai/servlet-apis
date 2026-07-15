@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
-import com.loai.inventory.api.dto.SalesOrderResponse;
+import com.loai.inventory.api.dto.PublicOrderResponse;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.MagicLinkService.ResolvedOrderView;
 import com.loai.inventory.service.SalesOrderService;
@@ -65,8 +65,10 @@ public class PublicOrderServlet extends HttpServlet {
         return;
       }
       Placed p = placed.get();
-      // Customer view: withhold staff-facing fields (notes) from this anonymous route.
-      writeJson(resp, 200, SalesOrderResponse.forCustomerView(p.order(), p.lines()));
+      // Customer-safe view: a whitelisted body carrying no internal id, product_id, prepaid, or
+      // channel — the same guarantee the checkout confirmation upholds. Rendered as a branded
+      // status page by the storefront (the magic link points there).
+      writeJson(resp, 200, PublicOrderResponse.forOrderView(p.order(), p.lines()));
     } catch (Exception e) {
       writeError(resp, 500, "Internal server error");
     }

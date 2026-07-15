@@ -1,5 +1,6 @@
 package com.loai.inventory.api.dto;
 
+import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
 import com.loai.inventory.service.StorefrontService.CheckoutResult;
 import java.math.BigDecimal;
@@ -47,6 +48,31 @@ public class PublicOrderResponse {
             .toList();
     out.paymentInstructions = r.paymentInstructions();
     out.trackUrl = r.trackUrl();
+    return out;
+  }
+
+  /**
+   * The customer-safe body for the anonymous order-view magic link ({@code GET
+   * /api/public/orders/{token}} — the {@code track_url}). Same whitelist as {@link
+   * #from(CheckoutResult)}: <b>no</b> internal order {@code id}, {@code org_id}, {@code
+   * customer_id}, per-line {@code product_id}, {@code prepaid_amount}, {@code channel}, or {@code
+   * created_at}/{@code updated_at} — nothing beyond what the shopper needs to see their order.
+   * Lines are labelled with their placement-time {@code description} (the label the customer saw at
+   * checkout). {@code payment_instructions}/{@code track_url} stay null — the storefront page reads
+   * payment details from the org profile it already loads.
+   */
+  public static PublicOrderResponse forOrderView(SalesOrder order, List<SalesOrderLine> lines) {
+    PublicOrderResponse out = new PublicOrderResponse();
+    out.orderNumber = order.getOrderNumber();
+    out.status = order.getStatus().name();
+    out.currency = order.getCurrency();
+    out.subtotal = order.getSubtotal();
+    out.taxTotal = order.getTaxTotal();
+    out.discountTotal = order.getDiscountTotal();
+    out.grandTotal = order.getGrandTotal();
+    out.placedAt = order.getPlacedAt();
+    out.expiresAt = order.getExpiresAt();
+    out.lines = lines.stream().map(l -> Line.from(l, l.getDescription())).toList();
     return out;
   }
 

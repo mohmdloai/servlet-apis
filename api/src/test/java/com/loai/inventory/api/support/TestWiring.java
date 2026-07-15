@@ -4,6 +4,7 @@ import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.NotificationService;
@@ -25,6 +26,7 @@ public final class TestWiring {
     return new MagicLinkService(
         dsl,
         new CustomerMagicTokenRepositoryFactoryImpl(),
+        new OrgRepositoryFactoryImpl(),
         "http://localhost:8080",
         Duration.ofDays(30));
   }
