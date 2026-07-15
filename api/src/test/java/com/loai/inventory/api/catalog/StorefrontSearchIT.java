@@ -210,7 +210,7 @@ class StorefrontSearchIT {
     for (String sort : List.of("newest", "price_asc", "price_desc")) {
       List<String> paged = new java.util.ArrayList<>();
       for (int page = 0; page < 4; page++) {
-        ListingPage p = service.listPublished(s.slug, null, null, null, null, sort, page, 1);
+        ListingPage p = service.listPublished(s.slug, null, null, null, null, sort, null, page, 1);
         assertEquals(4, p.total());
         assertEquals(1, p.items().size(), "sort=" + sort + " page=" + page);
         paged.add(p.items().get(0).slug());
@@ -245,7 +245,7 @@ class StorefrontSearchIT {
     categorize(draft, cams);
 
     ListingPage p =
-        service.listPublished(s.slug, "cams", "gopro", "100", "200", "price_asc", 0, 10);
+        service.listPublished(s.slug, "cams", "gopro", "100", "200", "price_asc", null, 0, 10);
     assertEquals(1, p.total());
     assertEquals(List.of("gopro-hero"), slugs(p));
   }
@@ -501,7 +501,7 @@ class StorefrontSearchIT {
 
   private ListingPage search(
       Seed s, String categorySlug, String q, String min, String max, String sort) {
-    return service.listPublished(s.slug, categorySlug, q, min, max, sort, 0, 20);
+    return service.listPublished(s.slug, categorySlug, q, min, max, sort, null, 0, 20);
   }
 
   private static List<String> slugs(ListingPage p) {

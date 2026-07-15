@@ -9,6 +9,10 @@ package com.loai.inventory.domain.model;
  * <ul>
  *   <li>{@link #NEWEST} — {@code published_at DESC} (the epic's recency field); the default.
  *   <li>{@link #PRICE_ASC} / {@link #PRICE_DESC} — {@code sales_price} ascending / descending.
+ *   <li>{@link #FEATURED} — {@code featured_sort ASC}, the merchant's curated order (slice C3).
+ *       This one is <b>internal-only</b>: it is never a wire value (no {@code ?sort=featured}) —
+ *       the service selects it as the default order when {@code ?featured=true} is present and no
+ *       explicit {@code ?sort=} overrides it. So a typo'd {@code ?sort=} is still a 400.
  * </ul>
  *
  * <p>Every order is tie-broken by a stable key ({@code slug ASC} — unique per org, never serialized
@@ -18,5 +22,6 @@ package com.loai.inventory.domain.model;
 public enum ListingSort {
   NEWEST,
   PRICE_ASC,
-  PRICE_DESC
+  PRICE_DESC,
+  FEATURED
 }

@@ -135,12 +135,13 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       String q,
       java.math.BigDecimal minPrice,
       java.math.BigDecimal maxPrice,
+      boolean featuredOnly,
       ListingSort sort,
       int offset,
       int limit) {
     SelectJoinStep<Record> step = dsl.select(PRODUCT_LISTING.fields()).from(PRODUCT_LISTING);
     return joinCategoryIfNeeded(step, categoryId)
-        .where(filterConditions(orgId, status, categoryId, q, minPrice, maxPrice))
+        .where(filterConditions(orgId, status, categoryId, q, minPrice, maxPrice, featuredOnly))
         .orderBy(orderFields(sort))
         .offset(offset)
         .limit(limit)
@@ -155,11 +156,13 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       UUID categoryId,
       String q,
       java.math.BigDecimal minPrice,
-      java.math.BigDecimal maxPrice) {
+      java.math.BigDecimal maxPrice,
+      boolean featuredOnly) {
     SelectJoinStep<Record1<UUID>> step = dsl.select(PRODUCT_LISTING.ID).from(PRODUCT_LISTING);
     return dsl.fetchCount(
         joinCategoryIfNeeded(step, categoryId)
-            .where(filterConditions(orgId, status, categoryId, q, minPrice, maxPrice)));
+            .where(
+                filterConditions(orgId, status, categoryId, q, minPrice, maxPrice, featuredOnly)));
   }
 
   /** The category narrow is a join only when requested — the unfiltered read stays join-free. */
@@ -185,11 +188,15 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       UUID categoryId,
       String q,
       java.math.BigDecimal minPrice,
-      java.math.BigDecimal maxPrice) {
+      java.math.BigDecimal maxPrice,
+      boolean featuredOnly) {
     Condition c =
         PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)));
     if (categoryId != null) {
       c = c.and(PRODUCT_LISTING_CATEGORY.CATEGORY_ID.eq(categoryId));
+    }
+    if (featuredOnly) {
+      c = c.and(PRODUCT_LISTING.FEATURED_SORT.isNotNull());
     }
     if (q != null) {
       String pattern = "%" + q + "%";
@@ -216,6 +223,8 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
           List.of(PRODUCT_LISTING.PUBLISHED_AT.desc().nullsLast(), PRODUCT_LISTING.SLUG.asc());
       case PRICE_ASC -> List.of(PRODUCT_LISTING.SALES_PRICE.asc(), PRODUCT_LISTING.SLUG.asc());
       case PRICE_DESC -> List.of(PRODUCT_LISTING.SALES_PRICE.desc(), PRODUCT_LISTING.SLUG.asc());
+      case FEATURED ->
+          List.of(PRODUCT_LISTING.FEATURED_SORT.asc().nullsLast(), PRODUCT_LISTING.SLUG.asc());
     };
   }
 
@@ -256,6 +265,47 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                     .ORG_ID
                     .eq(orgId)
                     .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)))));
+  }
+
+  // --- featured curation (slice C3) ---
+
+  @Override
+  public List<ProductListing> findFeatured(UUID orgId) {
+    return dsl.selectFrom(PRODUCT_LISTING)
+        .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.FEATURED_SORT.isNotNull()))
+        .orderBy(PRODUCT_LISTING.FEATURED_SORT.asc(), PRODUCT_LISTING.SLUG.asc())
+        .fetch()
+        .map(this::toListing);
+  }
+
+  @Override
+  public long countInOrg(UUID orgId, java.util.Collection<UUID> ids) {
+    if (ids.isEmpty()) {
+      return 0L;
+    }
+    return dsl.fetchCount(
+        dsl.selectOne()
+            .from(PRODUCT_LISTING)
+            .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.ID.in(ids))));
+  }
+
+  @Override
+  public void setFeatured(UUID orgId, List<UUID> orderedIds) {
+    // Clear the whole org's featured list first, then stamp featured_sort = index on the kept ids.
+    // Two statements in the caller's transaction → the set-replace is atomic and idempotent; the
+    // partial index keeps the clear cheap (only the ≤ 12 currently-featured rows carry a non-null).
+    dsl.update(PRODUCT_LISTING)
+        .setNull(PRODUCT_LISTING.FEATURED_SORT)
+        .set(PRODUCT_LISTING.UPDATED_AT, OffsetDateTime.now())
+        .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.FEATURED_SORT.isNotNull()))
+        .execute();
+    for (int i = 0; i < orderedIds.size(); i++) {
+      dsl.update(PRODUCT_LISTING)
+          .set(PRODUCT_LISTING.FEATURED_SORT, i)
+          .set(PRODUCT_LISTING.UPDATED_AT, OffsetDateTime.now())
+          .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.ID.eq(orderedIds.get(i))))
+          .execute();
+    }
   }
 
   @Override
