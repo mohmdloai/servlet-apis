@@ -12,6 +12,7 @@ import com.loai.inventory.common.storage.ObjectStorageFactory;
 import com.loai.inventory.domain.repository.AppUserMagicTokenRepositoryFactory;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
+import com.loai.inventory.domain.repository.CustomerAddressRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerMagicTokenRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
@@ -42,6 +43,7 @@ import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
+import com.loai.inventory.repository.CustomerAddressRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
@@ -170,6 +172,7 @@ public class AppConfig {
   public final StorefrontBannerRepositoryFactory storefrontBannerRepositoryFactory;
   public final StorefrontPageRepositoryFactory storefrontPageRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
+  public final CustomerAddressRepositoryFactory customerAddressRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
   public final InventoryLogRepositoryFactory inventoryLogRepositoryFactory;
   public final UserRepositoryFactory userRepositoryFactory;
@@ -287,6 +290,7 @@ public class AppConfig {
     this.storefrontBannerRepositoryFactory = new StorefrontBannerRepositoryFactoryImpl();
     this.storefrontPageRepositoryFactory = new StorefrontPageRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
+    this.customerAddressRepositoryFactory = new CustomerAddressRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
     this.inventoryLogRepositoryFactory = new InventoryLogRepositoryFactoryImpl();
     this.userRepositoryFactory = new UserRepositoryFactoryImpl();
@@ -320,7 +324,9 @@ public class AppConfig {
             dsl,
             customerRepositoryFactory,
             salesOrderRepositoryFactory,
-            salesInvoiceRepositoryFactory);
+            salesInvoiceRepositoryFactory,
+            customerAddressRepositoryFactory,
+            productListingRepositoryFactory);
     this.authService =
         new AuthService(
             userRepository,

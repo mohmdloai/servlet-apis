@@ -17,10 +17,12 @@ import com.loai.inventory.api.config.ObjectMapperProvider;
 import com.loai.inventory.api.dto.PortalInvoiceResponse;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
+import com.loai.inventory.repository.CustomerAddressRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
+import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
@@ -118,7 +120,9 @@ class PortalInvoicesIT {
             dsl,
             new CustomerRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl(),
-            new SalesInvoiceRepositoryFactoryImpl());
+            new SalesInvoiceRepositoryFactoryImpl(),
+            new CustomerAddressRepositoryFactoryImpl(),
+            new ProductListingRepositoryFactoryImpl());
 
     // The real renderer, exactly as the servlet's PDF route uses it: renderInvoice() reads only the
     // org profile + the invoice aggregate, so the credit-note / payment collaborators are unused
@@ -154,7 +158,7 @@ class PortalInvoicesIT {
             + " product, customer, org, invoice_number_counter RESTART IDENTITY CASCADE");
   }
 
-  // ── AC1: list is own-only, live-only, newest-first, paged ────────────────────
+  // AC1: list is own-only, live-only, newest-first, paged
 
   @Test
   void listReturnsOnlyOwnLiveInvoices_newestFirst_paged() {
@@ -198,7 +202,7 @@ class PortalInvoicesIT {
     assertTrue(page.items().isEmpty());
   }
 
-  // ── AC2 / AC4: single-invoice read is ownership-scoped, opaque 404 ───────────
+  // AC2 / AC4: single-invoice read is ownership-scoped, opaque 404
 
   @Test
   void getInvoice_ownedResolves_foreignUnknownOrVoidIsTheSame404() {
@@ -263,7 +267,7 @@ class PortalInvoicesIT {
     }
   }
 
-  // ── AC3: the PDF route renders for an owned invoice; the gate is getInvoice ──
+  // AC3: the PDF route renders for an owned invoice; the gate is getInvoice
 
   @Test
   void pdf_rendersForOwnedInvoice_withNumberDerivedFilename() {
@@ -296,7 +300,7 @@ class PortalInvoicesIT {
     assertThrows(NotFoundException.class, () -> portalService.getInvoice(org, custB, inv.id()));
   }
 
-  // ── helpers ──────────────────────────────────────────────────────────────────
+  // helpers
 
   private UUID createOrg() {
     UUID id = UUID.randomUUID();

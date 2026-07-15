@@ -5,16 +5,20 @@ import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.dto.PortalAddressRequest;
+import com.loai.inventory.api.dto.PortalAddressResponse;
 import com.loai.inventory.api.dto.PortalInvoiceResponse;
 import com.loai.inventory.api.dto.PortalInvoiceSummaryResponse;
 import com.loai.inventory.api.dto.PortalMeResponse;
 import com.loai.inventory.api.dto.PortalProfileUpdateRequest;
+import com.loai.inventory.api.dto.PortalReorderResponse;
 import com.loai.inventory.api.dto.PortalSessionResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
 import com.loai.inventory.api.filter.CustomerAuthFilter;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.AuthenticationException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.CustomerAddress;
 import com.loai.inventory.domain.model.CustomerPrincipal;
 import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.auth.CustomerAuthService;
@@ -46,6 +50,10 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code GET /invoices/{id}} — one owned invoice + lines (customer-safe); opaque 404
  *       otherwise
  *   <li>{@code GET /invoices/{id}/pdf} — the rendered A4 invoice PDF for an owned invoice
+ *   <li>{@code GET|POST /addresses} — list / add a saved address (slice P4)
+ *   <li>{@code PATCH|DELETE /addresses/{id}} — edit / remove an owned address
+ *   <li>{@code POST /addresses/{id}/default} — promote an owned address to the default
+ *   <li>{@code POST /orders/{orderNumber}/reorder} — resolve a past order into a buyable cart
  * </ul>
  *
  * All identity comes from the {@link CustomerPrincipal} the filter published — never from the URL
@@ -83,8 +91,37 @@ public class PortalServlet extends HttpServlet {
         return;
       }
       if (path.startsWith("/orders/")) {
-        String orderNumber = path.substring("/orders/".length());
-        requireGet(method, () -> handleGetOrder(req, resp, orderNumber));
+        String rest = path.substring("/orders/".length());
+        if (rest.endsWith("/reorder")) {
+          String orderNumber = rest.substring(0, rest.length() - "/reorder".length());
+          requirePost(method, () -> handleReorder(req, resp, orderNumber));
+        } else {
+          requireGet(method, () -> handleGetOrder(req, resp, rest));
+        }
+        return;
+      }
+      if ("/addresses".equals(path)) {
+        if ("GET".equals(method)) {
+          handleListAddresses(req, resp);
+        } else if ("POST".equals(method)) {
+          handleCreateAddress(req, resp);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+      if (path.startsWith("/addresses/")) {
+        String rest = path.substring("/addresses/".length());
+        if (rest.endsWith("/default")) {
+          String id = rest.substring(0, rest.length() - "/default".length());
+          requirePost(method, () -> handleSetDefaultAddress(req, resp, id));
+        } else if ("PATCH".equals(method)) {
+          handleUpdateAddress(req, resp, rest);
+        } else if ("DELETE".equals(method)) {
+          handleDeleteAddress(req, resp, rest);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
         return;
       }
       if ("/invoices".equals(path)) {
@@ -127,7 +164,7 @@ public class PortalServlet extends HttpServlet {
     }
   }
 
-  // ── auth ────────────────────────────────────────────────────────────────────
+  // auth
 
   private void handleRefresh(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     String rawRefresh = extractRefreshCookie(req);
@@ -162,7 +199,7 @@ public class PortalServlet extends HttpServlet {
     writeJson(resp, 200, items);
   }
 
-  // ── profile ──────────────────────────────────────────────────────────────────
+  // profile
 
   private void handleGetMe(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     CustomerPrincipal principal = requirePrincipal(req);
@@ -184,7 +221,7 @@ public class PortalServlet extends HttpServlet {
             portalService.updateProfile(principal.orgId(), principal.customerId(), update)));
   }
 
-  // ── orders (slice P2) ─────────────────────────────────────────────────────────
+  // orders (slice P2)
 
   private void handleListOrders(HttpServletRequest req, HttpServletResponse resp)
       throws IOException {
@@ -214,7 +251,7 @@ public class PortalServlet extends HttpServlet {
     writeJson(resp, 200, PublicOrderResponse.forOrderView(view.order(), view.lines()));
   }
 
-  // ── invoices (slice P3) ────────────────────────────────────────────────────────
+  // invoices (slice P3)
 
   private void handleListInvoices(HttpServletRequest req, HttpServletResponse resp)
       throws IOException {
@@ -260,7 +297,90 @@ public class PortalServlet extends HttpServlet {
     }
   }
 
-  // ── helpers ──────────────────────────────────────────────────────────────────
+  // saved addresses (slice P4)
+
+  private void handleListAddresses(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    List<PortalAddressResponse> data =
+        portalService.listAddresses(principal.orgId(), principal.customerId()).stream()
+            .map(PortalAddressResponse::from)
+            .toList();
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, data);
+  }
+
+  private void handleCreateAddress(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    CustomerAddress created =
+        portalService.createAddress(
+            principal.orgId(),
+            principal.customerId(),
+            toAddressInput(readBody(req, PortalAddressRequest.class)));
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 201, PortalAddressResponse.from(created));
+  }
+
+  private void handleUpdateAddress(HttpServletRequest req, HttpServletResponse resp, String idRaw)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    CustomerAddress updated =
+        portalService.updateAddress(
+            principal.orgId(),
+            principal.customerId(),
+            parseAddressId(idRaw),
+            toAddressInput(readBody(req, PortalAddressRequest.class)));
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, PortalAddressResponse.from(updated));
+  }
+
+  private void handleDeleteAddress(HttpServletRequest req, HttpServletResponse resp, String idRaw)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    portalService.deleteAddress(principal.orgId(), principal.customerId(), parseAddressId(idRaw));
+    resp.setStatus(204);
+  }
+
+  private void handleSetDefaultAddress(
+      HttpServletRequest req, HttpServletResponse resp, String idRaw) throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    CustomerAddress promoted =
+        portalService.setDefaultAddress(
+            principal.orgId(), principal.customerId(), parseAddressId(idRaw));
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, PortalAddressResponse.from(promoted));
+  }
+
+  private static CustomerPortalService.AddressInput toAddressInput(PortalAddressRequest body) {
+    return new CustomerPortalService.AddressInput(
+        body.getLabel(),
+        body.getRecipient(),
+        body.getPhone(),
+        body.getAddress(),
+        Boolean.TRUE.equals(body.getIsDefault()));
+  }
+
+  private UUID parseAddressId(String raw) {
+    try {
+      return UUID.fromString(raw);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid address id: " + raw);
+    }
+  }
+
+  // reorder (slice P4)
+
+  private void handleReorder(HttpServletRequest req, HttpServletResponse resp, String orderNumber)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    CustomerPortalService.ReorderResult result =
+        portalService.reorder(principal.orgId(), principal.customerId(), orderNumber);
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, PortalReorderResponse.from(result));
+  }
+
+  // helpers
 
   private int intParam(HttpServletRequest req, String name, int defaultValue) {
     String value = req.getParameter(name);

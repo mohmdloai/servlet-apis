@@ -16,7 +16,9 @@ import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
+import com.loai.inventory.repository.CustomerAddressRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
+import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.service.CustomerPortalService;
@@ -97,7 +99,9 @@ class PortalOrdersIT {
             dsl,
             new CustomerRepositoryFactoryImpl(),
             salesOrderRepositoryFactory,
-            new SalesInvoiceRepositoryFactoryImpl());
+            new SalesInvoiceRepositoryFactoryImpl(),
+            new CustomerAddressRepositoryFactoryImpl(),
+            new ProductListingRepositoryFactoryImpl());
   }
 
   @AfterAll
@@ -111,7 +115,7 @@ class PortalOrdersIT {
         "TRUNCATE sales_order_line, sales_order, product, customer, org RESTART IDENTITY CASCADE");
   }
 
-  // ── AC1: list is own-only, newest-first, paged ───────────────────────────────
+  // AC1: list is own-only, newest-first, paged
 
   @Test
   void listReturnsOnlyOwnOrders_newestFirst_paged() {
@@ -150,7 +154,7 @@ class PortalOrdersIT {
     assertTrue(page.items().isEmpty());
   }
 
-  // ── AC2 / AC4: single-order read is ownership-scoped, opaque 404 ──────────────
+  // AC2 / AC4: single-order read is ownership-scoped, opaque 404
 
   @Test
   void getOrder_ownedResolves_foreignOrUnknownIsTheSame404() {
@@ -189,7 +193,7 @@ class PortalOrdersIT {
     assertThrows(NotFoundException.class, () -> portalService.getOrder(orgB, cust, "SO-1001"));
   }
 
-  // ── AC3: no internal fields leak, shape identical to the public tracker ───────
+  // AC3: no internal fields leak, shape identical to the public tracker
 
   @Test
   void customerSafeBody_leaksNoInternalFields() throws Exception {
@@ -210,7 +214,7 @@ class PortalOrdersIT {
     }
   }
 
-  // ── helpers ──────────────────────────────────────────────────────────────────
+  // helpers
 
   private UUID createOrg() {
     UUID id = UUID.randomUUID();

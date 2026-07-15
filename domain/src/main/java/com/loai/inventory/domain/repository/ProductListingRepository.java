@@ -50,6 +50,27 @@ public interface ProductListingRepository {
   List<ListingAvailability> resolveAvailability(
       UUID orgId, Collection<String> slugs, ListingStatus status);
 
+  /**
+   * A past order line resolved back to a currently-buyable listing for reorder (slice P4, {@code
+   * portal_addresses_reorder.md}). Keyed by {@code productId} (the order line's only handle) → the
+   * public {@code slug} the storefront serves, the display {@code title}, the current {@code
+   * salesPrice}, and the advisory {@code available} qty ({@code stock_qty - reserved_qty};
+   * untracked/missing inventory → 0). The service turns {@code available} into the boolean {@code
+   * in_stock} and never lets {@code productId} cross the customer boundary.
+   */
+  record ReorderResolution(
+      UUID productId, String slug, String title, BigDecimal salesPrice, int available) {}
+
+  /**
+   * Resolve a set of {@code productId}s → their current PUBLISHED {@link ReorderResolution} in one
+   * query, LEFT JOINed to {@code inventory} for the availability signal, constrained to {@code
+   * status} (PUBLISHED) and {@code orgId}. A product with no listing in {@code status} is simply
+   * absent from the result — the caller reports it under {@code unavailable}, never a 404. Product
+   * ⇄ listing is 1:1 per org (unique index), so at most one row per id.
+   */
+  List<ReorderResolution> resolveForReorder(
+      UUID orgId, Collection<UUID> productIds, ListingStatus status);
+
   // --- listing CRUD ---
 
   Optional<ProductListing> findById(UUID orgId, UUID id);
