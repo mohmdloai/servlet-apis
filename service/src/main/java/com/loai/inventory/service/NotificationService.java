@@ -56,9 +56,9 @@ import org.slf4j.LoggerFactory;
  * </ul>
  *
  * <p>Two channels are wired: a {@code USER} recipient gets an {@code in_app} delivery; a {@code
- * CUSTOMER} recipient gets an {@code email} delivery (customers have no in-app feed — they are not
- * {@code app_user}s). Email is transmitted by {@link #dispatchPendingEmail} through an {@link
- * EmailSender} <em>after</em> the business txn commits (never inside it).
+ * CUSTOMER} recipient gets an {@code in_app} delivery (the portal feed — slice P5) <em>and</em> an
+ * {@code email} delivery (the offline reach). Email is transmitted by {@link #dispatchPendingEmail}
+ * through an {@link EmailSender} <em>after</em> the business txn commits (never inside it).
  */
 public class NotificationService {
 
@@ -235,11 +235,15 @@ public class NotificationService {
     return prefs.resolveEnabled(orgId, subjectType, subjectId, type, channel).orElse(true);
   }
 
-  /** USER → in_app; CUSTOMER → email (customers have no in-app feed — they are not app_users). */
+  /**
+   * USER → in_app; CUSTOMER → in_app + email (slice P5): the portal gives customers a logged-in
+   * feed, so the durable in-app row is the reliable channel and email stays the offline reach.
+   * Either leg can still be suppressed per-preference.
+   */
   private List<NotificationChannel> channelsFor(NotificationRecipient recipient) {
     return switch (recipient.type()) {
       case USER -> List.of(NotificationChannel.IN_APP);
-      case CUSTOMER -> List.of(NotificationChannel.EMAIL);
+      case CUSTOMER -> List.of(NotificationChannel.IN_APP, NotificationChannel.EMAIL);
     };
   }
 
@@ -284,6 +288,34 @@ public class NotificationService {
           }
         });
     return getUserPreferences(orgId, userId);
+  }
+
+  /** A customer's own preference rows (the portal read endpoint — slice P5). */
+  public List<NotificationPreference> getCustomerPreferences(UUID orgId, UUID customerId) {
+    return preferenceRepoFactory.create(rootDsl).findByCustomer(orgId, customerId);
+  }
+
+  /**
+   * Upsert (merge) the given preferences for a customer, then return the resulting set — the
+   * portal-plane twin of {@link #setUserPreferences}, writing the same rows the one-click
+   * unsubscribe link writes.
+   */
+  public List<NotificationPreference> setCustomerPreferences(
+      UUID orgId, UUID customerId, List<PreferenceInput> inputs) {
+    for (PreferenceInput in : inputs) {
+      if (in == null || in.channel() == null) {
+        throw new ValidationException("each preference needs a channel");
+      }
+      validatePreferenceType(in.type());
+    }
+    rootDsl.transaction(
+        cfg -> {
+          NotificationPreferenceRepository prefs = preferenceRepoFactory.create(DSL.using(cfg));
+          for (PreferenceInput in : inputs) {
+            prefs.upsertCustomer(orgId, customerId, in.type(), in.channel(), in.enabled());
+          }
+        });
+    return getCustomerPreferences(orgId, customerId);
   }
 
   /** Turn a customer's email off for the org (the one-click unsubscribe target). Idempotent. */
@@ -480,6 +512,47 @@ public class NotificationService {
               dismiss
                   ? repo.markInAppDismissed(orgId, userId, notificationId, now)
                   : repo.markInAppRead(orgId, userId, notificationId, now);
+          if (updated == 0) {
+            throw new NotFoundException("Notification", notificationId);
+          }
+        });
+  }
+
+  // Customer feed (own-only, the portal plane — slice P5)
+
+  public List<InAppFeedItem> getCustomerFeed(
+      UUID orgId, UUID customerId, boolean unreadOnly, int page, int size) {
+    int offset = Pagination.offset(page, size);
+    return notificationRepoFactory
+        .create(rootDsl)
+        .findCustomerInAppFeed(orgId, customerId, unreadOnly, offset, size);
+  }
+
+  public long countCustomerFeed(UUID orgId, UUID customerId, boolean unreadOnly) {
+    return notificationRepoFactory
+        .create(rootDsl)
+        .countCustomerInAppFeed(orgId, customerId, unreadOnly);
+  }
+
+  public void markCustomerRead(UUID orgId, UUID customerId, UUID notificationId) {
+    mutateOwnCustomer(orgId, customerId, notificationId, /* dismiss= */ false);
+  }
+
+  public void markCustomerDismissed(UUID orgId, UUID customerId, UUID notificationId) {
+    mutateOwnCustomer(orgId, customerId, notificationId, /* dismiss= */ true);
+  }
+
+  /** A foreign/unknown id is the same opaque 404 as the staff feed — never an ownership oracle. */
+  private void mutateOwnCustomer(
+      UUID orgId, UUID customerId, UUID notificationId, boolean dismiss) {
+    rootDsl.transaction(
+        cfg -> {
+          NotificationRepository repo = notificationRepoFactory.create(DSL.using(cfg));
+          OffsetDateTime now = now();
+          int updated =
+              dismiss
+                  ? repo.markCustomerInAppDismissed(orgId, customerId, notificationId, now)
+                  : repo.markCustomerInAppRead(orgId, customerId, notificationId, now);
           if (updated == 0) {
             throw new NotFoundException("Notification", notificationId);
           }

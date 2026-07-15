@@ -60,6 +60,17 @@ public final class NotificationPreferenceRepositoryImpl
   }
 
   @Override
+  public List<NotificationPreference> findByCustomer(UUID orgId, UUID customerId) {
+    return dsl.selectFrom(NOTIFICATION_PREFERENCE)
+        .where(NOTIFICATION_PREFERENCE.ORG_ID.eq(orgId))
+        .and(NOTIFICATION_PREFERENCE.SUBJECT_TYPE.eq(RecipientType.CUSTOMER.name()))
+        .and(NOTIFICATION_PREFERENCE.CUSTOMER_ID.eq(customerId))
+        .orderBy(NOTIFICATION_PREFERENCE.TYPE.asc(), NOTIFICATION_PREFERENCE.CHANNEL.asc())
+        .fetch()
+        .map(this::toPreference);
+  }
+
+  @Override
   public void upsertUser(
       UUID orgId, UUID userId, String type, NotificationChannel channel, boolean enabled) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
