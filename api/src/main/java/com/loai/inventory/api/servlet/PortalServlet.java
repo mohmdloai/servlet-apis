@@ -4,9 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PortalMeResponse;
 import com.loai.inventory.api.dto.PortalProfileUpdateRequest;
 import com.loai.inventory.api.dto.PortalSessionResponse;
+import com.loai.inventory.api.dto.PublicOrderResponse;
 import com.loai.inventory.api.filter.CustomerAuthFilter;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.AuthenticationException;
@@ -33,6 +35,8 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code POST /auth/logout} — kill this device; {@code POST /auth/logout-all} — every device
  *   <li>{@code GET /auth/sessions} — this customer's active devices
  *   <li>{@code GET|PATCH /me} — read / merge-update the caller's own profile
+ *   <li>{@code GET /orders} — the caller's own orders, newest first, paged (slice P2)
+ *   <li>{@code GET /orders/{orderNumber}} — one owned order (customer-safe); opaque 404 otherwise
  * </ul>
  *
  * All identity comes from the {@link CustomerPrincipal} the filter published — never from the URL
@@ -63,6 +67,15 @@ public class PortalServlet extends HttpServlet {
     String path = req.getPathInfo() == null ? "/" : req.getPathInfo();
     String method = req.getMethod();
     try {
+      if ("/orders".equals(path)) {
+        requireGet(method, () -> handleListOrders(req, resp));
+        return;
+      }
+      if (path.startsWith("/orders/")) {
+        String orderNumber = path.substring("/orders/".length());
+        requireGet(method, () -> handleGetOrder(req, resp, orderNumber));
+        return;
+      }
       switch (path) {
         case "/auth/refresh" -> requirePost(method, () -> handleRefresh(req, resp));
         case "/auth/logout" -> requirePost(method, () -> handleLogout(req, resp));
@@ -146,7 +159,49 @@ public class PortalServlet extends HttpServlet {
             portalService.updateProfile(principal.orgId(), principal.customerId(), update)));
   }
 
+  // ── orders (slice P2) ─────────────────────────────────────────────────────────
+
+  private void handleListOrders(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    // Clamp here too so the envelope echoes the page/size actually served.
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", CustomerPortalService.DEFAULT_PAGE_SIZE), 1),
+            CustomerPortalService.MAX_PAGE_SIZE);
+    CustomerPortalService.OrderPage result =
+        portalService.listOrders(principal.orgId(), principal.customerId(), page, size);
+    List<PublicOrderResponse> data =
+        result.items().stream()
+            .map(v -> PublicOrderResponse.forOrderView(v.order(), v.lines()))
+            .toList();
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+  }
+
+  private void handleGetOrder(HttpServletRequest req, HttpServletResponse resp, String orderNumber)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    CustomerPortalService.OrderView view =
+        portalService.getOrder(principal.orgId(), principal.customerId(), orderNumber);
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, PublicOrderResponse.forOrderView(view.order(), view.lines()));
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────────────
+
+  private int intParam(HttpServletRequest req, String name, int defaultValue) {
+    String value = req.getParameter(name);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new ValidationException("Parameter '" + name + "' must be an integer");
+    }
+  }
 
   private void writeCookies(HttpServletResponse resp, CustomerAuthService.SessionResult result) {
     CustomerAuthCookies.writeAccess(

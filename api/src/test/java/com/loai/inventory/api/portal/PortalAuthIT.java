@@ -112,7 +112,11 @@ class PortalAuthIT {
     customerJwtUtil = new JwtUtil(CUSTOMER_SECRET, ACCESS_TTL_MILLIS, "customer");
     otpStore = new CustomerOtpStore(jedisPool);
     sessionStore = new CustomerSessionStore(jedisPool, 30 * 24 * 3600);
-    portalService = new CustomerPortalService(dsl, new CustomerRepositoryFactoryImpl());
+    portalService =
+        new CustomerPortalService(
+            dsl,
+            new CustomerRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl());
 
     emailSender = new CapturingEmailSender();
     authService =

@@ -168,6 +168,24 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
     return dsl.fetchCount(dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status)));
   }
 
+  @Override
+  public List<SalesOrder> findByCustomerId(UUID orgId, UUID customerId, int offset, int limit) {
+    return dsl.selectFrom(SALES_ORDER)
+        .where(SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.CUSTOMER_ID.eq(customerId)))
+        .orderBy(SALES_ORDER.PLACED_AT.desc(), SALES_ORDER.ID.desc())
+        .offset(offset)
+        .limit(limit)
+        .fetch()
+        .map(this::toSalesOrder);
+  }
+
+  @Override
+  public long countByCustomerId(UUID orgId, UUID customerId) {
+    return dsl.fetchCount(
+        dsl.selectFrom(SALES_ORDER)
+            .where(SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.CUSTOMER_ID.eq(customerId))));
+  }
+
   private static org.jooq.Condition listConditions(UUID orgId, OrderStatus status) {
     org.jooq.Condition c = SALES_ORDER.ORG_ID.eq(orgId);
     if (status != null) {
