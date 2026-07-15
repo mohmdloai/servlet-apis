@@ -319,14 +319,6 @@ public class AppConfig {
     this.customerOtpStore = new CustomerOtpStore(jedisPool);
     this.customerSessionStore =
         new CustomerSessionStore(jedisPool, customerRefreshTtlDays * 24 * 3600);
-    this.customerPortalService =
-        new CustomerPortalService(
-            dsl,
-            customerRepositoryFactory,
-            salesOrderRepositoryFactory,
-            salesInvoiceRepositoryFactory,
-            customerAddressRepositoryFactory,
-            productListingRepositoryFactory);
     this.authService =
         new AuthService(
             userRepository,
@@ -540,6 +532,17 @@ public class AppConfig {
             objectStorage,
             salesOrderService,
             new PresignedOgImageSource(objectStorage));
+    // After salesOrderService — the P6 authenticated checkout delegates placement to it.
+    this.customerPortalService =
+        new CustomerPortalService(
+            dsl,
+            customerRepositoryFactory,
+            salesOrderRepositoryFactory,
+            salesInvoiceRepositoryFactory,
+            customerAddressRepositoryFactory,
+            productListingRepositoryFactory,
+            orgRepositoryFactory,
+            salesOrderService);
     this.creditNoteService =
         new CreditNoteService(
             dsl,

@@ -123,6 +123,19 @@ public class SalesOrderService {
    */
   private record ResolvedLine(UUID productId, int quantity, BigDecimal unitPriceOverride) {}
 
+  /**
+   * Delivery contact for a known-customer (portal) placement — slice P6, {@code
+   * stories/portal_checkout.md}. Frozen onto the customer CRM row exactly as the anonymous form's
+   * upsert would (coalesce semantics: a null field leaves the stored value untouched). The identity
+   * itself is never taken from here — the customer is the session.
+   */
+  public record DeliveryInput(String recipient, String phone, String address) {}
+
+  /** Resolves the order's customer inside the placement txn (anon email-upsert vs known id). */
+  private interface CustomerResolver {
+    Customer resolve(SalesOrderRepository repo);
+  }
+
   /** Internal placement outcome carried out of the shared reservation txn. */
   private record PlacementResult(
       SalesOrder order,
@@ -196,6 +209,46 @@ public class SalesOrderService {
   }
 
   /**
+   * Known-customer storefront placement — the authenticated portal checkout's placement variant
+   * (slice P6, {@code stories/portal_checkout.md}). Identical to {@link #placeStorefrontOrder}
+   * (same reservation, per-org TTL, {@code ORDER_PLACED} notifications, order-view magic link,
+   * idempotent replay) except the customer is loaded by the session's {@code (orgId, customerId)}
+   * and never resolved from a body email — the order is theirs by construction. The {@code
+   * delivery} contact is frozen onto the CRM row through the same coalesce upsert the anonymous
+   * form uses, keyed by the loaded row's own email.
+   *
+   * <p>Runs inside the caller's transaction ({@code txDsl}) so the caller can compose same-txn
+   * side-effects (the portal's optional save-to-address-book) that roll back with a failed
+   * placement — the same composition pattern as {@link FulfillmentService#createDelivered}.
+   */
+  public StorefrontPlaced placeStorefrontOrderForCustomer(
+      DSLContext txDsl,
+      UUID orgId,
+      UUID customerId,
+      DeliveryInput delivery,
+      List<StorefrontLineInput> lines,
+      String idempotencyKey,
+      String notes,
+      ActorContext actor) {
+
+    validateLines(toOrderLineInputs(lines));
+    List<ResolvedLine> resolved =
+        lines.stream()
+            .map(l -> new ResolvedLine(l.productId(), l.quantity(), l.unitPrice()))
+            .toList();
+    PlacementResult r =
+        placeReservedInTx(
+            txDsl,
+            orgId,
+            repo -> resolveKnownCustomer(repo, orgId, customerId, delivery),
+            resolved,
+            idempotencyKey,
+            notes,
+            actor);
+    return new StorefrontPlaced(r.order(), r.lines(), r.customer(), r.trackUrl(), r.created());
+  }
+
+  /**
    * The shared placement + reservation transaction behind both {@link #placeOnlineOrder} and {@link
    * #placeStorefrontOrder}: idempotency short-circuit, build DRAFT → PENDING_PAYMENT with the org's
    * TTL, insert, reserve stock, notify staff, and mint the customer's order-view magic link — all
@@ -210,101 +263,116 @@ public class SalesOrderService {
       ActorContext actor) {
 
     return rootDsl.transactionResult(
-        cfg -> {
-          DSLContext txDsl = DSL.using(cfg);
-          SalesOrderRepository repo = repoFactory.create(txDsl);
-
-          // 1. Idempotency short-circuit — a duplicate key replays the prior order (200), no second
-          // reservation, no raw token to reconstruct (trackUrl null).
-          if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            var existing = repo.findByIdempotencyKey(orgId, idempotencyKey);
-            if (existing.isPresent()) {
-              SalesOrder prior = existing.get();
-              List<SalesOrderLine> priorLines = repo.findLinesByOrderId(prior.getId());
-              Customer priorCustomer = loadCustomerOrThrow(repo, orgId, prior.getCustomerId());
-              log.info(
-                  "Idempotent replay: returning existing order id={} number={}",
-                  prior.getId(),
-                  prior.getOrderNumber());
-              return new PlacementResult(prior, priorLines, priorCustomer, null, false);
-            }
-          }
-
-          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-          BuiltOrder built =
-              buildDraftOrder(
-                  repo,
-                  orgId,
-                  OrderChannel.ONLINE,
-                  customer,
-                  lines,
-                  idempotencyKey,
-                  notes,
-                  now,
-                  true);
-          SalesOrder order = built.order();
-          List<SalesOrderLine> orderLines = built.lines();
-
-          // Online: DRAFT → PENDING_PAYMENT with the org's payment-hold window (reservation.md
-          // §Default TTL, "Configurable per-org" — V47, default 1440 min), read inside this txn so
-          // the stamped expires_at always reflects the org's current setting. The TTL sweeper keys
-          // off expires_at alone.
-          Org org =
-              orgRepoFactory
-                  .create(txDsl)
-                  .findById(orgId)
-                  .orElseThrow(() -> new NotFoundException("Org", orgId));
-          OffsetDateTime expiresAt = now.plus(Duration.ofMinutes(org.getOrderTtlMinutes()));
-          order.markPendingPayment(now, expiresAt);
-          repo.insert(order, orderLines);
-
-          // Throws InsufficientStockException → rolls back the whole placement.
-          reservationService.reserveForOrder(txDsl, orgId, order, orderLines, actor);
-
-          // Notify org staff — inside the placement txn, so a rolled-back order sends nothing.
-          notificationService.notifyOrgStaff(
-              txDsl,
-              orgId,
-              NotificationType.ORDER_PLACED,
-              Map.of("order_number", order.getOrderNumber()),
-              "sales_order",
-              order.getId(),
-              "/orgs/" + orgId + "/sales-orders/" + order.getId());
-
-          // Notify the customer by email, carrying an order-scoped magic link (view your order, no
-          // login). Both the token and the notification are written in this txn, so a rolled-back
-          // order leaves neither. Online/storefront placement always resolves a customer (email
-          // required). The same raw link is returned as the response's track_url.
-          Customer resolvedCustomer = built.customer();
-          String trackUrl = null;
-          if (resolvedCustomer != null) {
-            MagicLinkService.OrderViewLink viewLink =
-                magicLinkService.issueOrderViewLink(
-                    txDsl, orgId, resolvedCustomer.getId(), order.getId(), now);
-            trackUrl = viewLink.relative();
-            notificationService.notify(
-                txDsl,
+        cfg ->
+            placeReservedInTx(
+                DSL.using(cfg),
                 orgId,
-                com.loai.inventory.domain.model.NotificationRecipient.customer(
-                    resolvedCustomer.getId()),
-                NotificationType.ORDER_PLACED,
-                Map.of("order_number", order.getOrderNumber()),
-                "sales_order",
-                order.getId(),
-                viewLink.absolute());
-          }
+                repo -> resolveCustomer(repo, orgId, customer, true),
+                lines,
+                idempotencyKey,
+                notes,
+                actor));
+  }
 
-          log.info(
-              "Placed online order id={} orgId={} number={} customerId={} grandTotal={} lines={}",
-              order.getId(),
-              orgId,
-              order.getOrderNumber(),
-              built.customer() == null ? null : built.customer().getId(),
-              order.getGrandTotal(),
-              orderLines.size());
+  /** The body of {@link #placeReserved}, runnable inside a caller-owned transaction. */
+  private PlacementResult placeReservedInTx(
+      DSLContext txDsl,
+      UUID orgId,
+      CustomerResolver customerResolver,
+      List<ResolvedLine> lines,
+      String idempotencyKey,
+      String notes,
+      ActorContext actor) {
+    SalesOrderRepository repo = repoFactory.create(txDsl);
 
-          return new PlacementResult(order, orderLines, built.customer(), trackUrl, true);
-        });
+    // 1. Idempotency short-circuit — a duplicate key replays the prior order (200), no second
+    // reservation, no raw token to reconstruct (trackUrl null).
+    if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+      var existing = repo.findByIdempotencyKey(orgId, idempotencyKey);
+      if (existing.isPresent()) {
+        SalesOrder prior = existing.get();
+        List<SalesOrderLine> priorLines = repo.findLinesByOrderId(prior.getId());
+        Customer priorCustomer = loadCustomerOrThrow(repo, orgId, prior.getCustomerId());
+        log.info(
+            "Idempotent replay: returning existing order id={} number={}",
+            prior.getId(),
+            prior.getOrderNumber());
+        return new PlacementResult(prior, priorLines, priorCustomer, null, false);
+      }
+    }
+
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    BuiltOrder built =
+        buildDraftOrder(
+            repo,
+            orgId,
+            OrderChannel.ONLINE,
+            customerResolver.resolve(repo),
+            lines,
+            idempotencyKey,
+            notes,
+            now);
+    SalesOrder order = built.order();
+    List<SalesOrderLine> orderLines = built.lines();
+
+    // Online: DRAFT → PENDING_PAYMENT with the org's payment-hold window (reservation.md
+    // §Default TTL, "Configurable per-org" — V47, default 1440 min), read inside this txn so
+    // the stamped expires_at always reflects the org's current setting. The TTL sweeper keys
+    // off expires_at alone.
+    Org org =
+        orgRepoFactory
+            .create(txDsl)
+            .findById(orgId)
+            .orElseThrow(() -> new NotFoundException("Org", orgId));
+    OffsetDateTime expiresAt = now.plus(Duration.ofMinutes(org.getOrderTtlMinutes()));
+    order.markPendingPayment(now, expiresAt);
+    repo.insert(order, orderLines);
+
+    // Throws InsufficientStockException → rolls back the whole placement.
+    reservationService.reserveForOrder(txDsl, orgId, order, orderLines, actor);
+
+    // Notify org staff — inside the placement txn, so a rolled-back order sends nothing.
+    notificationService.notifyOrgStaff(
+        txDsl,
+        orgId,
+        NotificationType.ORDER_PLACED,
+        Map.of("order_number", order.getOrderNumber()),
+        "sales_order",
+        order.getId(),
+        "/orgs/" + orgId + "/sales-orders/" + order.getId());
+
+    // Notify the customer by email, carrying an order-scoped magic link (view your order, no
+    // login). Both the token and the notification are written in this txn, so a rolled-back
+    // order leaves neither. Online/storefront placement always resolves a customer (email
+    // required). The same raw link is returned as the response's track_url.
+    Customer resolvedCustomer = built.customer();
+    String trackUrl = null;
+    if (resolvedCustomer != null) {
+      MagicLinkService.OrderViewLink viewLink =
+          magicLinkService.issueOrderViewLink(
+              txDsl, orgId, resolvedCustomer.getId(), order.getId(), now);
+      trackUrl = viewLink.relative();
+      notificationService.notify(
+          txDsl,
+          orgId,
+          com.loai.inventory.domain.model.NotificationRecipient.customer(resolvedCustomer.getId()),
+          NotificationType.ORDER_PLACED,
+          Map.of("order_number", order.getOrderNumber()),
+          "sales_order",
+          order.getId(),
+          viewLink.absolute());
+    }
+
+    log.info(
+        "Placed online order id={} orgId={} number={} customerId={} grandTotal={} lines={}",
+        order.getId(),
+        orgId,
+        order.getOrderNumber(),
+        built.customer() == null ? null : built.customer().getId(),
+        order.getGrandTotal(),
+        orderLines.size());
+
+    return new PlacementResult(order, orderLines, built.customer(), trackUrl, true);
   }
 
   private static List<OrderLineInput> toOrderLineInputs(List<StorefrontLineInput> lines) {
@@ -368,14 +436,13 @@ public class SalesOrderService {
                   repo,
                   orgId,
                   OrderChannel.IN_STORE,
-                  customer,
+                  resolveCustomer(repo, orgId, customer, false),
                   lines.stream()
                       .map(l -> new ResolvedLine(l.productId(), l.quantity(), null))
                       .toList(),
                   idempotencyKey,
                   notes,
-                  now,
-                  false);
+                  now);
           SalesOrder order = built.order();
           List<SalesOrderLine> orderLines = built.lines();
           repo.insert(order, orderLines);
@@ -591,24 +658,20 @@ public class SalesOrderService {
   private record BuiltOrder(SalesOrder order, List<SalesOrderLine> lines, Customer customer) {}
 
   /**
-   * Build (but do not persist) a DRAFT {@link SalesOrder} + its lines: resolve the customer,
-   * snapshot each product, compute line + order totals and claim the per-org per-year order number.
-   * The caller drives the channel-specific transitions and the insert. {@code customerRequired} is
-   * true for online (an email is mandatory) and false for in-store walk-ins (no email → no customer
-   * row).
+   * Build (but do not persist) a DRAFT {@link SalesOrder} + its lines: snapshot each product,
+   * compute line + order totals and claim the per-org per-year order number. The caller resolves
+   * the customer first ({@link #resolveCustomer} or {@link #resolveKnownCustomer}; null for an
+   * in-store walk-in) and drives the channel-specific transitions and the insert.
    */
   private BuiltOrder buildDraftOrder(
       SalesOrderRepository repo,
       UUID orgId,
       OrderChannel channel,
-      CustomerInput customer,
+      Customer resolvedCustomer,
       List<ResolvedLine> lines,
       String idempotencyKey,
       String notes,
-      OffsetDateTime now,
-      boolean customerRequired) {
-
-    Customer resolvedCustomer = resolveCustomer(repo, orgId, customer, customerRequired);
+      OffsetDateTime now) {
 
     // Snapshot product data per line; fail if any product is missing for this org.
     List<UUID> productIds = lines.stream().map(ResolvedLine::productId).toList();
@@ -692,6 +755,29 @@ public class SalesOrderService {
         trimOrNull(customer.name()),
         trimOrNull(customer.phone()),
         trimOrNull(customer.address()));
+  }
+
+  /**
+   * Resolve a portal placement's customer by the session's {@code (orgId, customerId)} — identity
+   * is fixed, no body email is ever read (slice P6). The delivery contact is then frozen onto the
+   * CRM row through the same coalesce upsert the anonymous form uses, keyed by the loaded row's own
+   * verified email — a null delivery field leaves the stored value untouched.
+   */
+  private Customer resolveKnownCustomer(
+      SalesOrderRepository repo, UUID orgId, UUID customerId, DeliveryInput delivery) {
+    Customer existing =
+        repo.findCustomerById(orgId, customerId)
+            .orElseThrow(() -> new NotFoundException("Customer", customerId));
+    if (delivery == null || existing.getEmail() == null) {
+      // No contact to freeze (or a CRM row without an email — nothing to key the upsert on).
+      return existing;
+    }
+    return repo.upsertCustomerByEmail(
+        orgId,
+        existing.getEmail(),
+        trimOrNull(delivery.recipient()),
+        trimOrNull(delivery.phone()),
+        trimOrNull(delivery.address()));
   }
 
   // Validation

@@ -31,6 +31,9 @@ import redis.clients.jedis.JedisPool;
  *       (customer upsert + stock reservation + magic link + email).
  *   <li>every other {@code /api/public/*} request → {@code rl:pub-read:} (generous, {@code
  *       PUBLIC_READ_LIMIT}, default 120/min).
+ *   <li>{@code POST /api/portal/checkout} → {@code rl:portal-checkout:} (strict, mirrors {@code
+ *       rl:pub-checkout:} at {@code PUBLIC_CHECKOUT_LIMIT} — slice P6); other {@code /api/portal/*}
+ *       requests keep the generous {@code rl:portal-read:} bucket.
  * </ul>
  *
  * <p>The buckets use distinct key prefixes, so the read and checkout counters are fully
@@ -133,6 +136,11 @@ public class RateLimitFilter implements Filter {
     } else if (path.equals("/api/portal/auth/refresh")) {
       keyPrefix = "rl:portal-refresh:";
       limit = portalRefreshLimit;
+    } else if (path.equals("/api/portal/checkout") && "POST".equals(req.getMethod())) {
+      // The authenticated checkout mirrors the strict anonymous bucket (slice P6) — an order
+      // placement is the same expensive write whether or not the caller is logged in.
+      keyPrefix = "rl:portal-checkout:";
+      limit = publicCheckoutLimit;
     } else if (path.startsWith("/api/portal/")) {
       keyPrefix = "rl:portal-read:";
       limit = publicReadLimit;

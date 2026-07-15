@@ -80,7 +80,9 @@ class PortalAddressesIT {
             new SalesOrderRepositoryFactoryImpl(),
             new SalesInvoiceRepositoryFactoryImpl(),
             new CustomerAddressRepositoryFactoryImpl(),
-            new ProductListingRepositoryFactoryImpl());
+            new ProductListingRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            null);
   }
 
   @AfterAll

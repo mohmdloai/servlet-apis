@@ -1,10 +1,13 @@
 package com.loai.inventory.service;
 
+import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.CustomerAddress;
 import com.loai.inventory.domain.model.ListingStatus;
+import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -13,7 +16,9 @@ import com.loai.inventory.domain.repository.CustomerAddressRepository;
 import com.loai.inventory.domain.repository.CustomerAddressRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepository;
+import com.loai.inventory.domain.repository.ProductListingRepository.CheckoutLineResolution;
 import com.loai.inventory.domain.repository.ProductListingRepository.ReorderResolution;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesInvoiceRepository;
@@ -22,6 +27,8 @@ import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -59,12 +66,20 @@ public class CustomerPortalService {
 
   public static final int MAX_PAGE_SIZE = 100;
 
+  /** Attributes portal-checkout inventory_log rows to the customer portal. */
+  private static final ActorContext PORTAL_ACTOR = ActorContext.system("portal");
+
+  /** Storefront locale to fall back to when an org has no {@code default_locale} set. */
+  private static final String FALLBACK_LOCALE = "en";
+
   private final DSLContext rootDsl;
   private final CustomerRepositoryFactory customerRepositoryFactory;
   private final SalesOrderRepositoryFactory salesOrderRepositoryFactory;
   private final SalesInvoiceRepositoryFactory salesInvoiceRepositoryFactory;
   private final CustomerAddressRepositoryFactory customerAddressRepositoryFactory;
   private final ProductListingRepositoryFactory productListingRepositoryFactory;
+  private final OrgRepositoryFactory orgRepositoryFactory;
+  private final SalesOrderService salesOrderService;
 
   public CustomerPortalService(
       DSLContext rootDsl,
@@ -72,13 +87,17 @@ public class CustomerPortalService {
       SalesOrderRepositoryFactory salesOrderRepositoryFactory,
       SalesInvoiceRepositoryFactory salesInvoiceRepositoryFactory,
       CustomerAddressRepositoryFactory customerAddressRepositoryFactory,
-      ProductListingRepositoryFactory productListingRepositoryFactory) {
+      ProductListingRepositoryFactory productListingRepositoryFactory,
+      OrgRepositoryFactory orgRepositoryFactory,
+      SalesOrderService salesOrderService) {
     this.rootDsl = rootDsl;
     this.customerRepositoryFactory = customerRepositoryFactory;
     this.salesOrderRepositoryFactory = salesOrderRepositoryFactory;
     this.salesInvoiceRepositoryFactory = salesInvoiceRepositoryFactory;
     this.customerAddressRepositoryFactory = customerAddressRepositoryFactory;
     this.productListingRepositoryFactory = productListingRepositoryFactory;
+    this.orgRepositoryFactory = orgRepositoryFactory;
+    this.salesOrderService = salesOrderService;
   }
 
   /** One order + its lines — the shape the servlet maps to {@code PublicOrderResponse}. */
@@ -182,23 +201,27 @@ public class CustomerPortalService {
   public CustomerAddress createAddress(UUID orgId, UUID customerId, AddressInput input) {
     validateAddress(input);
     return rootDsl.transactionResult(
-        cfg -> {
-          CustomerAddressRepository repo = customerAddressRepositoryFactory.create(DSL.using(cfg));
-          boolean makeDefault =
-              input.makeDefault() || repo.countByCustomerId(orgId, customerId) == 0;
-          if (makeDefault) {
-            repo.clearDefault(orgId, customerId);
-          }
-          CustomerAddress a = new CustomerAddress();
-          a.setOrgId(orgId);
-          a.setCustomerId(customerId);
-          a.setLabel(trimToNull(input.label()));
-          a.setRecipient(trimToNull(input.recipient()));
-          a.setPhone(trimToNull(input.phone()));
-          a.setAddress(trimToNull(input.address()));
-          a.setDefault(makeDefault);
-          return repo.insert(a);
-        });
+        cfg ->
+            insertAddress(
+                customerAddressRepositoryFactory.create(DSL.using(cfg)), orgId, customerId, input));
+  }
+
+  /** The in-txn address insert shared by {@link #createAddress} and {@link #checkout}. */
+  private static CustomerAddress insertAddress(
+      CustomerAddressRepository repo, UUID orgId, UUID customerId, AddressInput input) {
+    boolean makeDefault = input.makeDefault() || repo.countByCustomerId(orgId, customerId) == 0;
+    if (makeDefault) {
+      repo.clearDefault(orgId, customerId);
+    }
+    CustomerAddress a = new CustomerAddress();
+    a.setOrgId(orgId);
+    a.setCustomerId(customerId);
+    a.setLabel(trimToNull(input.label()));
+    a.setRecipient(trimToNull(input.recipient()));
+    a.setPhone(trimToNull(input.phone()));
+    a.setAddress(trimToNull(input.address()));
+    a.setDefault(makeDefault);
+    return repo.insert(a);
   }
 
   /**
@@ -320,6 +343,160 @@ public class CustomerPortalService {
       }
     }
     return new ReorderResult(items, unavailable);
+  }
+
+  // checkout (slice P6)
+
+  /** One cart line at the authenticated checkout: a public listing slug + quantity. */
+  public record CheckoutLine(String listingSlug, int quantity) {}
+
+  /**
+   * The authenticated checkout body. The customer is the session — no identity fields here. Exactly
+   * one of {@code addressId} (a saved P4 book row, ownership-checked) or {@code address} (typed)
+   * supplies the delivery contact; {@code saveAddress} persists a typed one to the book in the same
+   * transaction as the placement.
+   */
+  public record CheckoutInput(
+      List<CheckoutLine> lines,
+      String notes,
+      UUID addressId,
+      AddressInput address,
+      boolean saveAddress) {}
+
+  /**
+   * Place an order as the logged-in customer ({@code POST /api/portal/checkout} — slice P6, {@code
+   * stories/portal_checkout.md}). The order is bound to the session's {@code (orgId, customerId)} —
+   * never a body email — via {@link SalesOrderService#placeStorefrontOrderForCustomer}; slug →
+   * {@code product_id} + {@code sales_price} resolution, reservation, per-org TTL, {@code
+   * ORDER_PLACED} notifications and the emailed order-view magic link are all inherited from the
+   * anonymous checkout core unchanged. The delivery contact comes from an owned saved address
+   * (foreign/unknown id → the same opaque 404 as P4) or a typed one ({@code saveAddress} adds it to
+   * the book inside the placement txn, so a failed placement saves nothing; an idempotent replay
+   * doesn't re-add it). Returns the same customer-safe shape as the anonymous checkout, with {@code
+   * trackUrl} pointing at the portal order page (reconstructable even on replay — no magic token
+   * needed, the session is the capability).
+   *
+   * @throws StorefrontService.StorefrontOutOfStockException on a reservation shortage (slug-keyed)
+   */
+  public StorefrontService.CheckoutResult checkout(
+      UUID orgId, UUID customerId, CheckoutInput input, String idempotencyKey) {
+    if (input == null || input.lines() == null || input.lines().isEmpty()) {
+      throw new ValidationException("lines must not be empty");
+    }
+    boolean hasSaved = input.addressId() != null;
+    boolean hasTyped = input.address() != null;
+    if (hasSaved == hasTyped) {
+      throw new ValidationException("exactly one of address_id or address is required");
+    }
+    if (input.saveAddress() && !hasTyped) {
+      throw new ValidationException("save_address requires a typed address");
+    }
+    SalesOrderService.DeliveryInput delivery;
+    if (hasSaved) {
+      CustomerAddress saved =
+          customerAddressRepositoryFactory
+              .create(rootDsl)
+              .findById(orgId, customerId, input.addressId())
+              .orElseThrow(() -> new NotFoundException("Address not found: " + input.addressId()));
+      delivery =
+          new SalesOrderService.DeliveryInput(
+              saved.getRecipient(), saved.getPhone(), saved.getAddress());
+    } else {
+      validateAddress(input.address());
+      delivery =
+          new SalesOrderService.DeliveryInput(
+              input.address().recipient(), input.address().phone(), input.address().address());
+    }
+
+    Org org =
+        orgRepositoryFactory
+            .create(rootDsl)
+            .findById(orgId)
+            .orElseThrow(() -> new NotFoundException("Org", orgId));
+
+    // Resolve every cart slug → product_id + published sales_price, PUBLISHED-only, one query —
+    // the same server-side resolution as the anonymous checkout (an unknown or unpublished slug is
+    // an opaque 404, never saying which).
+    LinkedHashSet<String> requestedSlugs = new LinkedHashSet<>();
+    for (CheckoutLine line : input.lines()) {
+      requestedSlugs.add(line.listingSlug());
+    }
+    ProductListingRepository listings = productListingRepositoryFactory.create(rootDsl);
+    Map<String, CheckoutLineResolution> bySlug = new HashMap<>();
+    for (CheckoutLineResolution r :
+        listings.resolveForCheckout(orgId, requestedSlugs, ListingStatus.PUBLISHED)) {
+      bySlug.put(r.slug(), r);
+    }
+    List<SalesOrderService.StorefrontLineInput> orderLines = new ArrayList<>(input.lines().size());
+    Map<UUID, String> titleByProduct = new HashMap<>();
+    Map<UUID, String> slugByProduct = new HashMap<>();
+    for (CheckoutLine line : input.lines()) {
+      CheckoutLineResolution res = bySlug.get(line.listingSlug());
+      if (res == null) {
+        throw new NotFoundException("Listing not available");
+      }
+      orderLines.add(
+          new SalesOrderService.StorefrontLineInput(
+              res.productId(), line.quantity(), res.salesPrice()));
+      titleByProduct.put(res.productId(), res.title());
+      slugByProduct.put(res.productId(), res.slug());
+    }
+
+    try {
+      SalesOrderService.StorefrontPlaced placed =
+          rootDsl.transactionResult(
+              cfg -> {
+                DSLContext txDsl = DSL.using(cfg);
+                SalesOrderService.StorefrontPlaced p =
+                    salesOrderService.placeStorefrontOrderForCustomer(
+                        txDsl,
+                        orgId,
+                        customerId,
+                        delivery,
+                        orderLines,
+                        idempotencyKey,
+                        input.notes(),
+                        PORTAL_ACTOR);
+                // Save-to-book rides the placement txn: a shortage rolls it back with the order,
+                // and an idempotent replay (created=false) never re-adds the row.
+                if (input.saveAddress() && p.created()) {
+                  insertAddress(
+                      customerAddressRepositoryFactory.create(txDsl),
+                      orgId,
+                      customerId,
+                      input.address());
+                }
+                return p;
+              });
+      String locale =
+          org.getDefaultLocale() == null || org.getDefaultLocale().isBlank()
+              ? FALLBACK_LOCALE
+              : org.getDefaultLocale();
+      // The portal order page, not the anonymous magic link — the session is the capability, so
+      // the URL is reconstructable even on an idempotent replay.
+      String trackUrl =
+          "/" + locale + "/" + org.getSlug() + "/account/orders/" + placed.order().getOrderNumber();
+      return new StorefrontService.CheckoutResult(
+          placed.order(),
+          placed.lines(),
+          org.getPaymentInstructions(),
+          trackUrl,
+          placed.created(),
+          titleByProduct);
+    } catch (InsufficientStockException e) {
+      // Re-key each product_id shortage to its listing slug + title — no internal id leaves here.
+      List<StorefrontService.StorefrontShortage> shortages =
+          e.getShortages().stream()
+              .map(
+                  s ->
+                      new StorefrontService.StorefrontShortage(
+                          slugByProduct.get(s.productId()),
+                          titleByProduct.get(s.productId()),
+                          s.requested(),
+                          s.available()))
+              .toList();
+      throw new StorefrontService.StorefrontOutOfStockException(shortages);
+    }
   }
 
   /** The patch body — any {@code null} field is left unchanged (merge). Email is not accepted. */
