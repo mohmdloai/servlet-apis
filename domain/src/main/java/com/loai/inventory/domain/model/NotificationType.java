@@ -15,5 +15,14 @@ public enum NotificationType {
    * the in-store sale (the receipt is the notification) nor on UNDERPAID (a partial ack is a
    * separate future event). See {@code stories/notify_order_paid.md}.
    */
-  ORDER_PAID
+  ORDER_PAID,
+
+  /**
+   * The merchant answered the customer's listing question (slice R2, {@code
+   * stories/storefront_comments.md}) — the answer published the Q&amp;A pair and this closes the
+   * loop back to the asker. Customer recipient (feed + email); raised inside the reply txn, first
+   * reply only (editing an answer never re-notifies). Payload carries {@code listing_slug} so the
+   * portal feed can deep-link to the listing's Q&amp;A anchor.
+   */
+  COMMENT_REPLIED
 }

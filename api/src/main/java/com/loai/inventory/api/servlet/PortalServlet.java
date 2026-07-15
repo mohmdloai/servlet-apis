@@ -10,6 +10,8 @@ import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PortalAddressRequest;
 import com.loai.inventory.api.dto.PortalAddressResponse;
 import com.loai.inventory.api.dto.PortalCheckoutRequest;
+import com.loai.inventory.api.dto.PortalCommentRequest;
+import com.loai.inventory.api.dto.PortalCommentResponse;
 import com.loai.inventory.api.dto.PortalInvoiceResponse;
 import com.loai.inventory.api.dto.PortalInvoiceSummaryResponse;
 import com.loai.inventory.api.dto.PortalMeResponse;
@@ -31,6 +33,7 @@ import com.loai.inventory.domain.model.InAppFeedItem;
 import com.loai.inventory.domain.model.NotificationChannel;
 import com.loai.inventory.domain.model.NotificationPreference;
 import com.loai.inventory.service.CustomerPortalService;
+import com.loai.inventory.service.ListingCommentService;
 import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.NotificationService;
 import com.loai.inventory.service.StorefrontService;
@@ -91,6 +94,7 @@ public class PortalServlet extends HttpServlet {
   private DocumentRenderService renderService;
   private NotificationService notificationService;
   private ListingReviewService reviewService;
+  private ListingCommentService commentService;
   private ObjectMapper mapper;
   private boolean secureCookies;
   private int refreshMaxAge;
@@ -103,6 +107,7 @@ public class PortalServlet extends HttpServlet {
     this.renderService = config.documentRenderService;
     this.notificationService = config.notificationService;
     this.reviewService = config.listingReviewService;
+    this.commentService = config.listingCommentService;
     this.mapper = config.objectMapper;
     this.secureCookies = config.secureCookies;
     this.refreshMaxAge = config.customerRefreshMaxAgeSeconds;
@@ -169,6 +174,25 @@ public class PortalServlet extends HttpServlet {
         String rest = path.substring("/reviews/".length());
         if ("DELETE".equals(method)) {
           handleDeleteReview(req, resp, rest);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+      if ("/comments".equals(path)) {
+        if ("POST".equals(method)) {
+          handleSubmitComment(req, resp);
+        } else if ("GET".equals(method)) {
+          handleMyComments(req, resp);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+      if (path.startsWith("/comments/")) {
+        String rest = path.substring("/comments/".length());
+        if ("DELETE".equals(method)) {
+          handleDeleteComment(req, resp, rest);
         } else {
           writeError(resp, 405, "Method not allowed");
         }
@@ -504,6 +528,46 @@ public class PortalServlet extends HttpServlet {
     resp.setStatus(204);
   }
 
+  // comments (slice R2)
+
+  private void handleSubmitComment(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    PortalCommentRequest body = readBody(req, PortalCommentRequest.class);
+    ListingCommentService.Submitted result =
+        commentService.submit(
+            principal.orgId(), principal.customerId(), body.getListingSlug(), body.getBody());
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(
+        resp,
+        201,
+        PortalCommentResponse.from(result.comment(), result.listingSlug(), result.listingTitle()));
+  }
+
+  private void handleMyComments(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    List<PortalCommentResponse> data =
+        commentService.myComments(principal.orgId(), principal.customerId()).stream()
+            .map(m -> PortalCommentResponse.from(m.comment(), m.listingSlug(), m.listingTitle()))
+            .toList();
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, data);
+  }
+
+  private void handleDeleteComment(HttpServletRequest req, HttpServletResponse resp, String idRaw)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    UUID commentId;
+    try {
+      commentId = UUID.fromString(idRaw);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid comment id: " + idRaw);
+    }
+    commentService.deleteOwn(principal.orgId(), principal.customerId(), commentId);
+    resp.setStatus(204);
+  }
+
   // notifications (slice P5)
 
   private void handleListNotifications(HttpServletRequest req, HttpServletResponse resp)
@@ -523,7 +587,14 @@ public class PortalServlet extends HttpServlet {
         notificationService.countCustomerFeed(
             principal.orgId(), principal.customerId(), unreadOnly);
     List<PortalNotificationResponse> data =
-        feed.stream().map(i -> PortalNotificationResponse.from(i, extractOrderNumber(i))).toList();
+        feed.stream()
+            .map(
+                i ->
+                    PortalNotificationResponse.from(
+                        i,
+                        extractPayloadString(i, "order_number"),
+                        extractPayloadString(i, "listing_slug")))
+            .toList();
     resp.setHeader("Cache-Control", "private, no-store");
     writeJson(resp, 200, new PageResponse<>(data, total, page, size));
   }
@@ -614,16 +685,17 @@ public class PortalServlet extends HttpServlet {
   }
 
   /**
-   * The order number a feed item points at, from the notification payload (both customer-facing
-   * types carry {@code order_number}). Null when absent — the row just renders without a deep-link.
+   * A textual deep-link handle from the notification payload ({@code order_number} on order events,
+   * {@code listing_slug} on {@code COMMENT_REPLIED} — slice R2). Null when absent — the row just
+   * renders without a deep-link.
    */
-  private String extractOrderNumber(InAppFeedItem item) {
+  private String extractPayloadString(InAppFeedItem item, String key) {
     String payload = item.notification().getPayloadJson();
     if (payload == null) {
       return null;
     }
     try {
-      com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(payload).get("order_number");
+      com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(payload).get(key);
       return node != null && node.isTextual() ? node.asText() : null;
     } catch (IOException e) {
       return null;

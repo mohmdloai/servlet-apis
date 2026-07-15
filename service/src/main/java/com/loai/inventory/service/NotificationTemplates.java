@@ -37,6 +37,14 @@ final class NotificationTemplates {
                 + orderNumber
                 + ". Your order is confirmed.");
       }
+      case COMMENT_REPLIED -> {
+        String listingTitle = str(payload, "listing_title");
+        yield new Rendered(
+            "The store answered your question",
+            "The store replied to your question on \""
+                + listingTitle
+                + "\". Open the product page to read the answer.");
+      }
     };
   }
 

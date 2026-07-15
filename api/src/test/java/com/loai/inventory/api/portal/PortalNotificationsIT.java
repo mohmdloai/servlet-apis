@@ -285,7 +285,8 @@ class PortalNotificationsIT {
         "the same customer id under a foreign org resolves nothing");
 
     InAppFeedItem item = service.getCustomerFeed(orgA, custA, false, 0, 1).get(0);
-    String json = mapper.writeValueAsString(PortalNotificationResponse.from(item, "SO-2026-00001"));
+    String json =
+        mapper.writeValueAsString(PortalNotificationResponse.from(item, "SO-2026-00001", null));
     assertTrue(json.contains("\"order_number\":\"SO-2026-00001\""), "the deep-link handle");
     for (String forbidden :
         List.of("source_id", "source_type", "link_target", "org_id", "customer_id", "recipient")) {

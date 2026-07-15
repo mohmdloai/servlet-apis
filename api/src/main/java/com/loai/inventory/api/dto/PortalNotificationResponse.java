@@ -19,15 +19,19 @@ public class PortalNotificationResponse {
   private String title;
   private String body;
   private String orderNumber;
+  private String listingSlug;
   private OffsetDateTime createdAt;
   private OffsetDateTime readAt;
 
   private PortalNotificationResponse() {}
 
   /**
-   * {@code orderNumber} is pre-extracted from the notification payload by the caller (nullable).
+   * {@code orderNumber} and {@code listingSlug} are pre-extracted from the notification payload by
+   * the caller (both nullable — order events carry the former, {@code COMMENT_REPLIED} the latter,
+   * slice R2; the feed deep-links accordingly).
    */
-  public static PortalNotificationResponse from(InAppFeedItem item, String orderNumber) {
+  public static PortalNotificationResponse from(
+      InAppFeedItem item, String orderNumber, String listingSlug) {
     Notification n = item.notification();
     PortalNotificationResponse r = new PortalNotificationResponse();
     r.id = n.getId();
@@ -35,6 +39,7 @@ public class PortalNotificationResponse {
     r.title = n.getTitle();
     r.body = n.getBody();
     r.orderNumber = orderNumber;
+    r.listingSlug = listingSlug;
     r.createdAt = n.getCreatedAt();
     r.readAt = item.readAt();
     return r;
@@ -58,6 +63,10 @@ public class PortalNotificationResponse {
 
   public String getOrderNumber() {
     return orderNumber;
+  }
+
+  public String getListingSlug() {
+    return listingSlug;
   }
 
   public OffsetDateTime getCreatedAt() {

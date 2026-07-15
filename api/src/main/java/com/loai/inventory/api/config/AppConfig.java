@@ -20,6 +20,7 @@ import com.loai.inventory.domain.repository.ImpersonationEventRepository;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
+import com.loai.inventory.domain.repository.ListingCommentRepositoryFactory;
 import com.loai.inventory.domain.repository.ListingReviewRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationPreferenceRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
@@ -52,6 +53,7 @@ import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.ListingCommentRepositoryFactoryImpl;
 import com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
@@ -81,6 +83,7 @@ import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceService;
+import com.loai.inventory.service.ListingCommentService;
 import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.MemberService;
@@ -177,6 +180,7 @@ public class AppConfig {
   public final CustomerRepositoryFactory customerRepositoryFactory;
   public final CustomerAddressRepositoryFactory customerAddressRepositoryFactory;
   public final ListingReviewRepositoryFactory listingReviewRepositoryFactory;
+  public final ListingCommentRepositoryFactory listingCommentRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
   public final InventoryLogRepositoryFactory inventoryLogRepositoryFactory;
   public final UserRepositoryFactory userRepositoryFactory;
@@ -220,6 +224,7 @@ public class AppConfig {
   public final CustomerAuthService customerAuthService;
   public final CustomerPortalService customerPortalService;
   public final ListingReviewService listingReviewService;
+  public final ListingCommentService listingCommentService;
   public final ProductListingService productListingService;
   public final StorefrontBannerService storefrontBannerService;
   public final StorefrontPageService storefrontPageService;
@@ -297,6 +302,7 @@ public class AppConfig {
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
     this.customerAddressRepositoryFactory = new CustomerAddressRepositoryFactoryImpl();
     this.listingReviewRepositoryFactory = new ListingReviewRepositoryFactoryImpl();
+    this.listingCommentRepositoryFactory = new ListingCommentRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
     this.inventoryLogRepositoryFactory = new InventoryLogRepositoryFactoryImpl();
     this.userRepositoryFactory = new UserRepositoryFactoryImpl();
@@ -559,6 +565,15 @@ public class AppConfig {
             productListingRepositoryFactory,
             customerRepositoryFactory,
             orgRepositoryFactory);
+    // Comments (slice R2): asks + the answer worklist; the reply notifies through P5 in-txn.
+    this.listingCommentService =
+        new ListingCommentService(
+            dsl,
+            listingCommentRepositoryFactory,
+            productListingRepositoryFactory,
+            customerRepositoryFactory,
+            orgRepositoryFactory,
+            notificationService);
     this.creditNoteService =
         new CreditNoteService(
             dsl,

@@ -13,6 +13,7 @@ import com.loai.inventory.api.dto.PublicBannerResponse;
 import com.loai.inventory.api.dto.PublicCategoryResponse;
 import com.loai.inventory.api.dto.PublicCheckoutError;
 import com.loai.inventory.api.dto.PublicCheckoutRequest;
+import com.loai.inventory.api.dto.PublicCommentResponse;
 import com.loai.inventory.api.dto.PublicListingResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
 import com.loai.inventory.api.dto.PublicPageResponse;
@@ -22,6 +23,7 @@ import com.loai.inventory.api.dto.StorefrontProfileResponse;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.service.ListingCommentService;
 import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.StorefrontPageService;
@@ -86,6 +88,7 @@ public class PublicStorefrontServlet extends HttpServlet {
   private StorefrontPageService pageService;
   private CustomerAuthService customerAuthService;
   private ListingReviewService reviewService;
+  private ListingCommentService commentService;
   private ObjectMapper mapper;
   private boolean secureCookies;
   private int customerRefreshMaxAge;
@@ -98,6 +101,7 @@ public class PublicStorefrontServlet extends HttpServlet {
     this.pageService = config.storefrontPageService;
     this.customerAuthService = config.customerAuthService;
     this.reviewService = config.listingReviewService;
+    this.commentService = config.listingCommentService;
     this.mapper = config.objectMapper;
     this.secureCookies = config.secureCookies;
     this.customerRefreshMaxAge = config.customerRefreshMaxAgeSeconds;
@@ -217,6 +221,14 @@ public class PublicStorefrontServlet extends HttpServlet {
       int size = intParam(req, "size", ListingReviewService.DEFAULT_PAGE_SIZE);
       ListingReviewService.PublicPage p = reviewService.publicPage(orgSlug, parts[2], page, size);
       List<PublicReviewResponse> data = p.items().stream().map(PublicReviewResponse::from).toList();
+      writeJson(resp, 200, new PageResponse<>(data, p.total(), p.page(), p.size()), CACHE_LISTINGS);
+    } else if (parts.length == 4 && "comments".equals(parts[3])) {
+      // Slice R2: the listing's ANSWERED Q&A pairs — same PUBLISHED-only resolution as reviews.
+      int page = intParam(req, "page", 0);
+      int size = intParam(req, "size", ListingCommentService.DEFAULT_PAGE_SIZE);
+      ListingCommentService.PublicPage p = commentService.publicPage(orgSlug, parts[2], page, size);
+      List<PublicCommentResponse> data =
+          p.items().stream().map(PublicCommentResponse::from).toList();
       writeJson(resp, 200, new PageResponse<>(data, p.total(), p.page(), p.size()), CACHE_LISTINGS);
     } else {
       throw new ValidationException("Unknown route");
