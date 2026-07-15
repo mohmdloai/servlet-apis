@@ -261,6 +261,69 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .execute();
   }
 
+  // Customer feed (the portal plane — slice P5)
+
+  @Override
+  public List<InAppFeedItem> findCustomerInAppFeed(
+      UUID orgId, UUID customerId, boolean unreadOnly, int offset, int limit) {
+    return dsl.select(NOTIFICATION.fields())
+        .select(
+            NOTIFICATION_DELIVERY_IN_APP.READ_AT,
+            NOTIFICATION_DELIVERY_IN_APP.DISMISSED_AT,
+            NOTIFICATION_DELIVERY_IN_APP.LINK_TARGET)
+        .from(NOTIFICATION)
+        .join(NOTIFICATION_DELIVERY)
+        .on(NOTIFICATION_DELIVERY.NOTIFICATION_ID.eq(NOTIFICATION.ID))
+        .and(NOTIFICATION_DELIVERY.CHANNEL.eq(NotificationChannel.IN_APP.dbValue()))
+        .join(NOTIFICATION_DELIVERY_IN_APP)
+        .on(NOTIFICATION_DELIVERY_IN_APP.DELIVERY_ID.eq(NOTIFICATION_DELIVERY.ID))
+        .where(customerFeedCondition(orgId, customerId, unreadOnly))
+        .orderBy(NOTIFICATION.CREATED_AT.desc())
+        .offset(offset)
+        .limit(limit)
+        .fetch(this::toFeedItem);
+  }
+
+  @Override
+  public long countCustomerInAppFeed(UUID orgId, UUID customerId, boolean unreadOnly) {
+    return dsl.fetchCount(
+        dsl.selectOne()
+            .from(NOTIFICATION)
+            .join(NOTIFICATION_DELIVERY)
+            .on(NOTIFICATION_DELIVERY.NOTIFICATION_ID.eq(NOTIFICATION.ID))
+            .and(NOTIFICATION_DELIVERY.CHANNEL.eq(NotificationChannel.IN_APP.dbValue()))
+            .join(NOTIFICATION_DELIVERY_IN_APP)
+            .on(NOTIFICATION_DELIVERY_IN_APP.DELIVERY_ID.eq(NOTIFICATION_DELIVERY.ID))
+            .where(customerFeedCondition(orgId, customerId, unreadOnly)));
+  }
+
+  @Override
+  public int markCustomerInAppRead(
+      UUID orgId, UUID customerId, UUID notificationId, OffsetDateTime now) {
+    // Same COALESCE idempotency as the staff feed: 0 rows = strictly not owned / not found → 404.
+    return dsl.update(NOTIFICATION_DELIVERY_IN_APP)
+        .set(
+            NOTIFICATION_DELIVERY_IN_APP.READ_AT,
+            DSL.coalesce(NOTIFICATION_DELIVERY_IN_APP.READ_AT, now))
+        .where(
+            NOTIFICATION_DELIVERY_IN_APP.DELIVERY_ID.in(
+                ownCustomerInAppDeliveryIds(orgId, customerId, notificationId)))
+        .execute();
+  }
+
+  @Override
+  public int markCustomerInAppDismissed(
+      UUID orgId, UUID customerId, UUID notificationId, OffsetDateTime now) {
+    return dsl.update(NOTIFICATION_DELIVERY_IN_APP)
+        .set(
+            NOTIFICATION_DELIVERY_IN_APP.DISMISSED_AT,
+            DSL.coalesce(NOTIFICATION_DELIVERY_IN_APP.DISMISSED_AT, now))
+        .where(
+            NOTIFICATION_DELIVERY_IN_APP.DELIVERY_ID.in(
+                ownCustomerInAppDeliveryIds(orgId, customerId, notificationId)))
+        .execute();
+  }
+
   // ── helpers ───────────────────────────────────────────────────────────────
 
   /**
@@ -290,6 +353,35 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
       c = c.and(NOTIFICATION_DELIVERY_IN_APP.READ_AT.isNull());
     }
     return c;
+  }
+
+  /** The customer twin of {@link #feedCondition} — keyed on {@code recipient_customer_id}. */
+  private Condition customerFeedCondition(UUID orgId, UUID customerId, boolean unreadOnly) {
+    Condition c =
+        NOTIFICATION
+            .ORG_ID
+            .eq(orgId)
+            .and(NOTIFICATION.RECIPIENT_TYPE.eq(RecipientType.CUSTOMER.name()))
+            .and(NOTIFICATION.RECIPIENT_CUSTOMER_ID.eq(customerId))
+            .and(NOTIFICATION_DELIVERY_IN_APP.DISMISSED_AT.isNull());
+    if (unreadOnly) {
+      c = c.and(NOTIFICATION_DELIVERY_IN_APP.READ_AT.isNull());
+    }
+    return c;
+  }
+
+  /** The customer twin of {@link #ownInAppDeliveryIds} (own-only gate for read/dismiss). */
+  private org.jooq.Select<org.jooq.Record1<UUID>> ownCustomerInAppDeliveryIds(
+      UUID orgId, UUID customerId, UUID notificationId) {
+    return dsl.select(NOTIFICATION_DELIVERY.ID)
+        .from(NOTIFICATION_DELIVERY)
+        .join(NOTIFICATION)
+        .on(NOTIFICATION.ID.eq(NOTIFICATION_DELIVERY.NOTIFICATION_ID))
+        .where(NOTIFICATION_DELIVERY.CHANNEL.eq(NotificationChannel.IN_APP.dbValue()))
+        .and(NOTIFICATION.ID.eq(notificationId))
+        .and(NOTIFICATION.ORG_ID.eq(orgId))
+        .and(NOTIFICATION.RECIPIENT_TYPE.eq(RecipientType.CUSTOMER.name()))
+        .and(NOTIFICATION.RECIPIENT_CUSTOMER_ID.eq(customerId));
   }
 
   private InAppFeedItem toFeedItem(Record r) {

@@ -29,6 +29,9 @@ public interface NotificationPreferenceRepository {
   /** Every preference row for one staff user, for the read endpoint. */
   List<NotificationPreference> findByUser(UUID orgId, UUID userId);
 
+  /** Every preference row for one customer, for the portal read endpoint (slice P5). */
+  List<NotificationPreference> findByCustomer(UUID orgId, UUID customerId);
+
   /** Upsert one USER preference (conflict on {@code (org_id, user_id, type, channel)}). */
   void upsertUser(
       UUID orgId, UUID userId, String type, NotificationChannel channel, boolean enabled);

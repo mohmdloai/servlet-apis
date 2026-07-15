@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.NotificationPreferenceResponse;
+import com.loai.inventory.api.dto.NotificationPreferencesRequest;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PortalAddressRequest;
 import com.loai.inventory.api.dto.PortalAddressResponse;
@@ -11,6 +13,7 @@ import com.loai.inventory.api.dto.PortalCheckoutRequest;
 import com.loai.inventory.api.dto.PortalInvoiceResponse;
 import com.loai.inventory.api.dto.PortalInvoiceSummaryResponse;
 import com.loai.inventory.api.dto.PortalMeResponse;
+import com.loai.inventory.api.dto.PortalNotificationResponse;
 import com.loai.inventory.api.dto.PortalProfileUpdateRequest;
 import com.loai.inventory.api.dto.PortalReorderResponse;
 import com.loai.inventory.api.dto.PortalSessionResponse;
@@ -22,7 +25,11 @@ import com.loai.inventory.common.exception.AuthenticationException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.CustomerAddress;
 import com.loai.inventory.domain.model.CustomerPrincipal;
+import com.loai.inventory.domain.model.InAppFeedItem;
+import com.loai.inventory.domain.model.NotificationChannel;
+import com.loai.inventory.domain.model.NotificationPreference;
 import com.loai.inventory.service.CustomerPortalService;
+import com.loai.inventory.service.NotificationService;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.auth.CustomerAuthService;
 import com.loai.inventory.service.document.DocumentRenderService;
@@ -61,6 +68,12 @@ import org.slf4j.LoggerFactory;
  *       session, delivery from an owned {@code address_id} or a typed address; {@code
  *       Idempotency-Key} required; 409 slug-keyed shortages; {@code track_url} → the portal order
  *       page
+ *   <li>{@code GET /notifications} — the caller's own in-app feed, newest first, paged ({@code
+ *       ?unread=true} narrows); {@code GET /notifications/unread-count} — the badge (slice P5)
+ *   <li>{@code POST /notifications/{id}/read} · {@code /{id}/dismiss} — mark the caller's own entry
+ *       (idempotent; foreign/unknown id → opaque 404)
+ *   <li>{@code GET|PUT /notification-preferences} — the caller's own opt-out settings (the same
+ *       rows the emailed one-click unsubscribe writes)
  * </ul>
  *
  * All identity comes from the {@link CustomerPrincipal} the filter published — never from the URL
@@ -73,6 +86,7 @@ public class PortalServlet extends HttpServlet {
   private CustomerAuthService authService;
   private CustomerPortalService portalService;
   private DocumentRenderService renderService;
+  private NotificationService notificationService;
   private ObjectMapper mapper;
   private boolean secureCookies;
   private int refreshMaxAge;
@@ -83,6 +97,7 @@ public class PortalServlet extends HttpServlet {
     this.authService = config.customerAuthService;
     this.portalService = config.customerPortalService;
     this.renderService = config.documentRenderService;
+    this.notificationService = config.notificationService;
     this.mapper = config.objectMapper;
     this.secureCookies = config.secureCookies;
     this.refreshMaxAge = config.customerRefreshMaxAgeSeconds;
@@ -130,6 +145,29 @@ public class PortalServlet extends HttpServlet {
           handleUpdateAddress(req, resp, rest);
         } else if ("DELETE".equals(method)) {
           handleDeleteAddress(req, resp, rest);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+      if ("/notifications".equals(path)) {
+        requireGet(method, () -> handleListNotifications(req, resp));
+        return;
+      }
+      if ("/notifications/unread-count".equals(path)) {
+        requireGet(method, () -> handleUnreadCount(req, resp));
+        return;
+      }
+      if (path.startsWith("/notifications/")) {
+        String rest = path.substring("/notifications/".length());
+        requirePost(method, () -> handleNotificationAction(req, resp, rest));
+        return;
+      }
+      if ("/notification-preferences".equals(path)) {
+        if ("GET".equals(method)) {
+          handleGetNotificationPreferences(req, resp);
+        } else if ("PUT".equals(method)) {
+          handlePutNotificationPreferences(req, resp);
         } else {
           writeError(resp, 405, "Method not allowed");
         }
@@ -393,6 +431,132 @@ public class PortalServlet extends HttpServlet {
         portalService.reorder(principal.orgId(), principal.customerId(), orderNumber);
     resp.setHeader("Cache-Control", "private, no-store");
     writeJson(resp, 200, PortalReorderResponse.from(result));
+  }
+
+  // notifications (slice P5)
+
+  private void handleListNotifications(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    // Clamp here too so the envelope echoes the page/size actually served.
+    int page = Math.max(intParam(req, "page", 0), 0);
+    int size =
+        Math.min(
+            Math.max(intParam(req, "size", CustomerPortalService.DEFAULT_PAGE_SIZE), 1),
+            CustomerPortalService.MAX_PAGE_SIZE);
+    boolean unreadOnly = "true".equalsIgnoreCase(req.getParameter("unread"));
+    List<InAppFeedItem> feed =
+        notificationService.getCustomerFeed(
+            principal.orgId(), principal.customerId(), unreadOnly, page, size);
+    long total =
+        notificationService.countCustomerFeed(
+            principal.orgId(), principal.customerId(), unreadOnly);
+    List<PortalNotificationResponse> data =
+        feed.stream().map(i -> PortalNotificationResponse.from(i, extractOrderNumber(i))).toList();
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, new PageResponse<>(data, total, page, size));
+  }
+
+  private void handleUnreadCount(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    long count =
+        notificationService.countCustomerFeed(
+            principal.orgId(), principal.customerId(), /* unreadOnly= */ true);
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, Map.of("count", count));
+  }
+
+  private void handleNotificationAction(
+      HttpServletRequest req, HttpServletResponse resp, String rest) throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    String[] parts = rest.split("/");
+    if (parts.length != 2) {
+      throw new ValidationException("Expected /notifications/{id}/read or /{id}/dismiss");
+    }
+    UUID notificationId;
+    try {
+      notificationId = UUID.fromString(parts[0]);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid notification id: " + parts[0]);
+    }
+    switch (parts[1]) {
+      case "read" ->
+          notificationService.markCustomerRead(
+              principal.orgId(), principal.customerId(), notificationId);
+      case "dismiss" ->
+          notificationService.markCustomerDismissed(
+              principal.orgId(), principal.customerId(), notificationId);
+      default -> throw new ValidationException("Unknown action: " + parts[1]);
+    }
+    resp.setStatus(204);
+  }
+
+  private void handleGetNotificationPreferences(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    writePreferences(
+        resp,
+        notificationService.getCustomerPreferences(principal.orgId(), principal.customerId()));
+  }
+
+  private void handlePutNotificationPreferences(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    NotificationPreferencesRequest body = readBody(req, NotificationPreferencesRequest.class);
+    if (body == null || body.getPreferences() == null || body.getPreferences().isEmpty()) {
+      throw new ValidationException("preferences must not be empty");
+    }
+    List<NotificationService.PreferenceInput> inputs =
+        new java.util.ArrayList<>(body.getPreferences().size());
+    for (NotificationPreferencesRequest.Item item : body.getPreferences()) {
+      if (item == null || item.getEnabled() == null) {
+        throw new ValidationException("each preference needs type, channel, enabled");
+      }
+      inputs.add(
+          new NotificationService.PreferenceInput(
+              item.getType(), parseChannel(item.getChannel()), item.getEnabled()));
+    }
+    writePreferences(
+        resp,
+        notificationService.setCustomerPreferences(
+            principal.orgId(), principal.customerId(), inputs));
+  }
+
+  private void writePreferences(HttpServletResponse resp, List<NotificationPreference> prefs)
+      throws IOException {
+    List<NotificationPreferenceResponse> data =
+        prefs.stream().map(NotificationPreferenceResponse::from).toList();
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, Map.of("preferences", data));
+  }
+
+  private static NotificationChannel parseChannel(String raw) {
+    if (raw == null || raw.isBlank()) {
+      throw new ValidationException("channel is required");
+    }
+    try {
+      return NotificationChannel.fromDbValue(raw);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("unknown channel: " + raw);
+    }
+  }
+
+  /**
+   * The order number a feed item points at, from the notification payload (both customer-facing
+   * types carry {@code order_number}). Null when absent — the row just renders without a deep-link.
+   */
+  private String extractOrderNumber(InAppFeedItem item) {
+    String payload = item.notification().getPayloadJson();
+    if (payload == null) {
+      return null;
+    }
+    try {
+      com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(payload).get("order_number");
+      return node != null && node.isTextual() ? node.asText() : null;
+    } catch (IOException e) {
+      return null;
+    }
   }
 
   // checkout (slice P6)

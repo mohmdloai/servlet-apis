@@ -192,6 +192,8 @@ class NotificationAdversarialIT {
     assertEquals(0, t1.retried());
     assertEquals("FAILED", deliveryStatus(delivery), "bounded — terminal within budget");
     assertEquals(1, attempts(delivery), "the attempt was recorded");
+    // The P5 in_app feed leg is also pending — drain it before the parent can finalize.
+    service.dispatchPendingInApp(100);
     assertEquals("DISPATCHED", notificationStatus(nid));
 
     NotificationService.DeliverySummary t2 = service.dispatchPendingEmail(100);
@@ -285,6 +287,8 @@ class NotificationAdversarialIT {
     assertEquals("SENT", deliveryStatus(delivery));
     assertEquals(1, attempts(delivery), "sent exactly once");
     assertEquals(1, sender.captured.size(), "provider hit exactly once — no double-send");
+    // The P5 in_app feed leg is also pending — drain it before the parent can finalize.
+    service.dispatchPendingInApp(100);
     assertEquals("DISPATCHED", notificationStatus(nid));
   }
 

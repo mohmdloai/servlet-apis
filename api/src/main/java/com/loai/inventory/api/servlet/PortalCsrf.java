@@ -12,7 +12,7 @@ import java.util.Set;
  *       {@code X-Portal-Request: 1}. A cross-site HTML {@code <form>} cannot set a custom header,
  *       so this alone defeats form-based CSRF; a non-simple {@code fetch} triggers a CORS preflight
  *       the browser blocks for a disallowed origin.
- *   <li><b>Origin allowlist</b> — mutations (POST/PATCH/DELETE) additionally require the {@code
+ *   <li><b>Origin allowlist</b> — mutations (POST/PUT/PATCH/DELETE) additionally require the {@code
  *       Origin}/{@code Referer}, when present, to be one of {@code CORS_ALLOWED_ORIGINS}.
  * </ul>
  *
@@ -53,6 +53,10 @@ public final class PortalCsrf {
 
   /** Whether an HTTP method mutates state (and so gets the extra Origin check). */
   public static boolean isMutation(String method) {
-    return "POST".equals(method) || "PATCH".equals(method) || "DELETE".equals(method);
+    // PUT joined with slice P5 (PUT /api/portal/notification-preferences).
+    return "POST".equals(method)
+        || "PUT".equals(method)
+        || "PATCH".equals(method)
+        || "DELETE".equals(method);
   }
 }

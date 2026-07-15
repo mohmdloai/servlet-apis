@@ -79,4 +79,17 @@ public interface NotificationRepository {
    * Marks the caller's in-app delivery for {@code notificationId} dismissed; returns rows updated.
    */
   int markInAppDismissed(UUID orgId, UUID userId, UUID notificationId, OffsetDateTime now);
+
+  // Customer feed (own-only, the portal plane — slice P5)
+  List<InAppFeedItem> findCustomerInAppFeed(
+      UUID orgId, UUID customerId, boolean unreadOnly, int offset, int limit);
+
+  long countCustomerInAppFeed(UUID orgId, UUID customerId, boolean unreadOnly);
+
+  /** Marks the customer's own in-app delivery read; returns rows updated (0 = not owned → 404). */
+  int markCustomerInAppRead(UUID orgId, UUID customerId, UUID notificationId, OffsetDateTime now);
+
+  /** Marks the customer's own in-app delivery dismissed; returns rows updated. */
+  int markCustomerInAppDismissed(
+      UUID orgId, UUID customerId, UUID notificationId, OffsetDateTime now);
 }

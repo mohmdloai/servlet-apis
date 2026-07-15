@@ -244,6 +244,8 @@ class OrderPaidNotificationIT {
     NotificationService.DeliverySummary summary = notificationService.dispatchPendingEmail(100);
 
     assertEquals(1, summary.sent());
+    // The P5 in_app feed leg must also drain before the parent finalizes.
+    notificationService.dispatchPendingInApp(100);
     assertEquals("DISPATCHED", notificationStatus(paid.get(0)));
     assertEquals(1, emailSender.captured.size());
     EmailMessage msg = emailSender.captured.get(0);
@@ -367,9 +369,11 @@ class OrderPaidNotificationIT {
   @Test
   void exactPreferenceDisabled_recordedDispatched_zeroDeliveries() {
     Seed s = seed("500.00");
-    new NotificationPreferenceRepositoryFactoryImpl()
-        .create(dsl)
-        .upsertCustomer(s.orgId(), s.customerId(), "ORDER_PAID", NotificationChannel.EMAIL, false);
+    // Since P5 a customer has two legs — suppress both to pin the fully-suppressed invariant.
+    var prefs = new NotificationPreferenceRepositoryFactoryImpl().create(dsl);
+    prefs.upsertCustomer(s.orgId(), s.customerId(), "ORDER_PAID", NotificationChannel.EMAIL, false);
+    prefs.upsertCustomer(
+        s.orgId(), s.customerId(), "ORDER_PAID", NotificationChannel.IN_APP, false);
 
     verify(s, "500.00", s.orderNumber(), "MATCHED");
 
@@ -388,8 +392,12 @@ class OrderPaidNotificationIT {
 
     List<UUID> paid = orderPaidNotificationIds(s.orgId());
     assertEquals(1, paid.size());
+    // The unsubscribe kills only the email leg — the P5 in_app feed row still lands (and keeps
+    // the parent PENDING until the in-app sweep drains it).
+    assertEquals(0, emailDeliveryCount(paid.get(0)), "email suppressed");
+    assertEquals(1, deliveryCount(paid.get(0)), "the in_app feed leg survives the unsubscribe");
+    notificationService.dispatchPendingInApp(100);
     assertEquals("DISPATCHED", notificationStatus(paid.get(0)));
-    assertEquals(0, deliveryCount(paid.get(0)));
   }
 
   // helpers
@@ -469,6 +477,14 @@ class OrderPaidNotificationIT {
     return dsl.fetchCount(
         dsl.selectFrom(NOTIFICATION_DELIVERY)
             .where(NOTIFICATION_DELIVERY.NOTIFICATION_ID.eq(notificationId)));
+  }
+
+  /** Email-channel deliveries only — CUSTOMER recipients also get a P5 in_app feed leg. */
+  private int emailDeliveryCount(UUID notificationId) {
+    return dsl.fetchCount(
+        dsl.selectFrom(NOTIFICATION_DELIVERY)
+            .where(NOTIFICATION_DELIVERY.NOTIFICATION_ID.eq(notificationId))
+            .and(NOTIFICATION_DELIVERY.CHANNEL.eq(NotificationChannel.EMAIL.dbValue())));
   }
 
   private int viewOrderTokenCount(UUID orgId, UUID orderId) {

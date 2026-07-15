@@ -245,8 +245,9 @@ class NotificationPreferenceIT {
     UUID customer = createCustomer(org, "nadia@acme.test");
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
-    // Before unsubscribe: a customer notification produces one email delivery.
-    assertEquals(1, deliveryCount(notifyCustomer(org, customer)));
+    // Before unsubscribe: a customer notification produces one email delivery (plus the P5
+    // in_app feed leg — count the email channel specifically).
+    assertEquals(1, emailDeliveryCount(notifyCustomer(org, customer)));
 
     String url = magicLink.issueUnsubscribeLink(dsl, org, customer, now);
     String token = url.substring(url.lastIndexOf('/') + 1);
@@ -258,7 +259,11 @@ class NotificationPreferenceIT {
     service.unsubscribeCustomerEmail(resolved.get().orgId(), resolved.get().customerId());
 
     UUID nid = notifyCustomer(org, customer);
-    assertEquals(0, deliveryCount(nid), "unsubscribed → no email delivery");
+    assertEquals(0, emailDeliveryCount(nid), "unsubscribed → no email delivery");
+    // The P5 in_app feed leg survives an EMAIL unsubscribe (the whole point of the dual channel),
+    // so the parent finalizes only after the in-app sweep drains it.
+    assertEquals(1, deliveryCount(nid), "the in_app feed leg is untouched");
+    service.dispatchPendingInApp(100);
     assertEquals("DISPATCHED", notificationStatus(nid));
   }
 
@@ -373,7 +378,7 @@ class NotificationPreferenceIT {
 
     assertEquals(
         1,
-        deliveryCount(notifyCustomer(org, shared)),
+        emailDeliveryCount(notifyCustomer(org, shared)),
         "USER opt-out must not suppress the CUSTOMER's email");
   }
 
@@ -458,6 +463,14 @@ class NotificationPreferenceIT {
     return dsl.fetchCount(
         dsl.selectFrom(NOTIFICATION_DELIVERY)
             .where(NOTIFICATION_DELIVERY.NOTIFICATION_ID.eq(notificationId)));
+  }
+
+  /** Email-channel deliveries only — CUSTOMER recipients also get a P5 in_app feed leg. */
+  private int emailDeliveryCount(UUID notificationId) {
+    return dsl.fetchCount(
+        dsl.selectFrom(NOTIFICATION_DELIVERY)
+            .where(NOTIFICATION_DELIVERY.NOTIFICATION_ID.eq(notificationId))
+            .and(NOTIFICATION_DELIVERY.CHANNEL.eq(NotificationChannel.EMAIL.dbValue())));
   }
 
   private String notificationStatus(UUID id) {

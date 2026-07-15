@@ -136,6 +136,9 @@ class CustomerEmailDeliveryIT {
     UUID deliveryId = emailDeliveryId(nid);
     assertEquals("SENT", deliveryStatus(deliveryId));
     assertNotNull(sentAt(deliveryId));
+    // Since P5 a CUSTOMER also gets an in_app leg — the parent finalizes once BOTH are terminal.
+    assertEquals("PENDING", notificationStatus(nid));
+    service.dispatchPendingInApp(100);
     assertEquals("DISPATCHED", notificationStatus(nid));
 
     assertEquals(1, sender.captured.size());
@@ -165,6 +168,8 @@ class CustomerEmailDeliveryIT {
     assertEquals("FAILED", deliveryStatus(deliveryId));
     assertEquals(1, attempts(deliveryId));
     assertNotNull(lastError(deliveryId));
+    // FAILED is terminal for the email leg; the P5 in_app leg must also drain before dispatch.
+    service.dispatchPendingInApp(100);
     assertEquals("DISPATCHED", notificationStatus(nid), "FAILED is terminal → parent dispatched");
   }
 
