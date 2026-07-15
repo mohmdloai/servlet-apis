@@ -6,6 +6,7 @@ import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.servlet.handler.BannerHandler;
 import com.loai.inventory.api.servlet.handler.CategoryHandler;
+import com.loai.inventory.api.servlet.handler.CommentHandler;
 import com.loai.inventory.api.servlet.handler.CreditNoteHandler;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
 import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
@@ -117,6 +118,7 @@ public class OrgServlet extends HttpServlet {
                     config.creditNoteService, config.documentRenderService, mapper)),
             Map.entry("refunds", new RefundHandler(config.refundService, mapper)),
             Map.entry("reviews", new ReviewHandler(config.listingReviewService, mapper)),
+            Map.entry("comments", new CommentHandler(config.listingCommentService, mapper)),
             Map.entry(
                 "invoices",
                 new InvoiceHandler(

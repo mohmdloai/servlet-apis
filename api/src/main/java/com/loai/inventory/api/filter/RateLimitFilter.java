@@ -66,6 +66,8 @@ public class RateLimitFilter implements Filter {
   static final int DEFAULT_PORTAL_REFRESH_LIMIT = 30;
   // Review writes (slice R1): strict — a review is a moderation-queue write, not a browse.
   static final int DEFAULT_PORTAL_REVIEW_LIMIT = 10;
+  // Comment writes (slice R2): same shape — every ask lands in the merchant's answer queue.
+  static final int DEFAULT_PORTAL_COMMENT_LIMIT = 10;
 
   private JedisPool jedisPool;
   private ObjectMapper objectMapper;
@@ -75,6 +77,7 @@ public class RateLimitFilter implements Filter {
   private int portalOtpVerifyLimit = DEFAULT_PORTAL_OTP_VERIFY_LIMIT;
   private int portalRefreshLimit = DEFAULT_PORTAL_REFRESH_LIMIT;
   private int portalReviewLimit = DEFAULT_PORTAL_REVIEW_LIMIT;
+  private int portalCommentLimit = DEFAULT_PORTAL_COMMENT_LIMIT;
   private boolean trustProxy;
 
   /** No-arg constructor for the servlet container; config is read in {@link #init}. */
@@ -110,6 +113,7 @@ public class RateLimitFilter implements Filter {
     this.portalOtpVerifyLimit =
         envIntOrDefault("PORTAL_OTP_VERIFY_LIMIT", DEFAULT_PORTAL_OTP_VERIFY_LIMIT);
     this.portalReviewLimit = envIntOrDefault("PORTAL_REVIEW_LIMIT", DEFAULT_PORTAL_REVIEW_LIMIT);
+    this.portalCommentLimit = envIntOrDefault("PORTAL_COMMENT_LIMIT", DEFAULT_PORTAL_COMMENT_LIMIT);
     this.trustProxy = Boolean.parseBoolean(System.getenv("TRUST_PROXY"));
     log.info(
         "RateLimitFilter: pub-read={}/min, pub-checkout={}/min, trustProxy={}",
@@ -150,6 +154,10 @@ public class RateLimitFilter implements Filter {
       // the generous portal-read bucket below.
       keyPrefix = "rl:portal-review:";
       limit = portalReviewLimit;
+    } else if (path.startsWith("/api/portal/comments") && !"GET".equals(req.getMethod())) {
+      // Comment mutations (slice R2) — same strict shape as reviews, its own bucket.
+      keyPrefix = "rl:portal-comment:";
+      limit = portalCommentLimit;
     } else if (path.startsWith("/api/portal/")) {
       keyPrefix = "rl:portal-read:";
       limit = publicReadLimit;
