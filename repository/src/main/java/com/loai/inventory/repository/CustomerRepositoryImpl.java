@@ -31,6 +31,28 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
   }
 
   @Override
+  public Optional<Customer> findByEmail(UUID orgId, String email) {
+    return dsl.selectFrom(CUSTOMER)
+        .where(CUSTOMER.ORG_ID.eq(orgId).and(CUSTOMER.EMAIL.eq(email)))
+        .fetchOptional()
+        .map(this::toCustomer);
+  }
+
+  @Override
+  public void markEmailVerified(UUID orgId, UUID id, OffsetDateTime verifiedAt) {
+    // Only stamp when currently null → records the FIRST proof of ownership, idempotently.
+    dsl.update(CUSTOMER)
+        .set(CUSTOMER.EMAIL_VERIFIED_AT, verifiedAt)
+        .where(
+            CUSTOMER
+                .ORG_ID
+                .eq(orgId)
+                .and(CUSTOMER.ID.eq(id))
+                .and(CUSTOMER.EMAIL_VERIFIED_AT.isNull()))
+        .execute();
+  }
+
+  @Override
   public List<Customer> findAll(UUID orgId, int offset, int limit) {
     return dsl.selectFrom(CUSTOMER)
         .where(CUSTOMER.ORG_ID.eq(orgId))
@@ -120,14 +142,17 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
   }
 
   private Customer toCustomer(CustomerRecord r) {
-    return new Customer(
-        r.getId(),
-        r.getOrgId(),
-        r.getEmail(),
-        r.getName(),
-        r.getPhone(),
-        r.getAddress(),
-        r.getCreatedAt(),
-        r.getUpdatedAt());
+    Customer c =
+        new Customer(
+            r.getId(),
+            r.getOrgId(),
+            r.getEmail(),
+            r.getName(),
+            r.getPhone(),
+            r.getAddress(),
+            r.getCreatedAt(),
+            r.getUpdatedAt());
+    c.setEmailVerifiedAt(r.getEmailVerifiedAt());
+    return c;
   }
 }

@@ -25,4 +25,9 @@ public record ActorContext(String actorId, ActorType actorType, UUID impersonato
   public static ActorContext migration(String migrationName) {
     return new ActorContext(migrationName, ActorType.MIGRATION, null);
   }
+
+  /** A portal-authenticated CRM customer (never impersonated). */
+  public static ActorContext customer(String customerId) {
+    return new ActorContext(customerId, ActorType.CUSTOMER, null);
+  }
 }

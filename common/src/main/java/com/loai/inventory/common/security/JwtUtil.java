@@ -16,8 +16,20 @@ public class JwtUtil {
 
   private final SecretKey key;
   private final long accessTtlMillis;
+  private final String audience;
 
   public JwtUtil(String base64Secret, long accessTtlMillis) {
+    this(base64Secret, accessTtlMillis, null);
+  }
+
+  /**
+   * Build a signer/verifier that stamps every minted token with a fixed {@code aud} (audience) —
+   * the plane marker for token-type separation. The staff instance passes {@code "staff"}; the
+   * customer-portal instance ({@code CUSTOMER_JWT_SECRET}) passes {@code "customer"}. A {@code
+   * null} audience mints no {@code aud} claim (back-compat for tests and the pre-hardening
+   * callers). See {@code portal_auth_core.md} §Identity + the epic's locked decision #2.
+   */
+  public JwtUtil(String base64Secret, long accessTtlMillis, String audience) {
     if (base64Secret == null || base64Secret.isBlank()) {
       throw new IllegalArgumentException("JWT secret must not be null or blank");
     }
@@ -28,6 +40,41 @@ public class JwtUtil {
     }
     this.key = new SecretKeySpec(decoded, "HmacSHA256");
     this.accessTtlMillis = accessTtlMillis;
+    this.audience = audience;
+  }
+
+  /**
+   * Mint a customer-portal access token. Deliberately carries <em>only</em> {@code sub=customerId},
+   * {@code actor_type=CUSTOMER}, {@code org_id}, {@code token_version}, {@code fam}, {@code aud}
+   * (via the instance's audience), {@code iat}, {@code exp} — <em>never</em> {@code
+   * org_roles}/{@code system_roles}/{@code allowed_actions}. A customer bears no authority beyond
+   * being that customer of that org. (portal_auth_core.md §Identity.)
+   */
+  public String generateCustomerAccessToken(
+      UUID customerId, UUID orgId, int tokenVersion, UUID familyId) {
+    long now = System.currentTimeMillis();
+    var builder =
+        Jwts.builder()
+            .subject(customerId.toString())
+            .claim("actor_type", ActorTypeName.CUSTOMER)
+            .claim("org_id", orgId.toString())
+            .claim("token_version", tokenVersion)
+            .claim("fam", familyId.toString())
+            .issuedAt(new Date(now))
+            .expiration(new Date(now + accessTtlMillis));
+    if (audience != null) {
+      builder.audience().add(audience).and();
+    }
+    return builder.signWith(key).compact();
+  }
+
+  /**
+   * The {@code actor_type} literal for a customer token — kept as a constant here so {@code common}
+   * need not depend on the {@code domain} {@code ActorType} enum. It equals {@code
+   * ActorType.CUSTOMER.name()} and the {@code CustomerAuthFilter} asserts the match.
+   */
+  private static final class ActorTypeName {
+    static final String CUSTOMER = "CUSTOMER";
   }
 
   public String generateAccessToken(
@@ -109,6 +156,12 @@ public class JwtUtil {
             .claim("token_version", tokenVersion)
             .issuedAt(new Date(now))
             .expiration(new Date(now + ttlMillis));
+
+    // Plane marker: staff tokens now carry aud="staff" (the JwtAuthFilter accepts staff or a
+    // missing aud during the grace window, and rejects "customer"). Null audience = no claim.
+    if (audience != null) {
+      builder.audience().add(audience).and();
+    }
 
     if (familyId != null) {
       builder.claim("fam", familyId.toString());
