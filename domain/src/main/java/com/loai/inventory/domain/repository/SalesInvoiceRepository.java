@@ -53,6 +53,19 @@ public interface SalesInvoiceRepository {
   long count(UUID orgId, InvoiceStatus status);
 
   /**
+   * One page of a single customer's <em>live</em> (non-VOID) invoices — the customer-portal "my
+   * invoices" read (slice P3, {@code stories/portal_invoices.md}). Filtered by the frozen {@code
+   * customer_id} snapshot (set from {@code sales_order.customer_id} at issuance, so equivalent to
+   * the invoice→order→customer join), which also excludes walk-in in-store receipts (null
+   * customer). Newest first ({@code created_at DESC, id DESC}). VOID rows are dropped so a
+   * reissue's cancelled predecessor never surfaces to the customer. Lean: the invoice header only.
+   */
+  List<SalesInvoice> findByCustomerId(UUID orgId, UUID customerId, int offset, int limit);
+
+  /** Total rows {@link #findByCustomerId} would page through for the same customer. */
+  long countByCustomerId(UUID orgId, UUID customerId);
+
+  /**
    * Persist the mutable cached state of an invoice: {@code status}, {@code paid_amount}, {@code
    * updated_at}. Scoped by {@code (org_id, id)}.
    */

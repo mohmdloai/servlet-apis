@@ -17,6 +17,7 @@ import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
+import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.CustomerPortalService.OrderPage;
@@ -93,7 +94,10 @@ class PortalOrdersIT {
     salesOrderRepositoryFactory = new SalesOrderRepositoryFactoryImpl();
     portalService =
         new CustomerPortalService(
-            dsl, new CustomerRepositoryFactoryImpl(), salesOrderRepositoryFactory);
+            dsl,
+            new CustomerRepositoryFactoryImpl(),
+            salesOrderRepositoryFactory,
+            new SalesInvoiceRepositoryFactoryImpl());
   }
 
   @AfterAll
