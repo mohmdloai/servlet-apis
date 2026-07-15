@@ -94,6 +94,7 @@ class PublicBannersIT {
             new InventoryRepositoryFactoryImpl(),
             new StorefrontBannerRepositoryFactoryImpl(),
             storage,
+            null,
             null);
     banners =
         new StorefrontBannerService(

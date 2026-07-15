@@ -70,6 +70,20 @@ public final class ObjectStorage implements AutoCloseable {
     return orgId + "/banner/";
   }
 
+  /**
+   * A tenant-scoped storefront og-image object key: {@code {orgId}/og/{uuid}-{name}} (customization
+   * epic §4, slice C2). The prefix lets the org-update path verify on attach that the key really
+   * belongs to this org (cross-tenant guard, mirroring logo + banner + listing images).
+   */
+  public String newOgImageKey(UUID orgId, String filename) {
+    return orgId + "/og/" + UUID.randomUUID() + "-" + sanitize(filename);
+  }
+
+  /** The key prefix every og-image object of this org must start with. */
+  public static String ogImageKeyPrefix(UUID orgId) {
+    return orgId + "/og/";
+  }
+
   /** A presigned PUT URL the client uploads bytes to directly. */
   public String presignPut(String objectKey, String contentType) {
     PutObjectRequest put =

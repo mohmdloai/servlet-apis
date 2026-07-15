@@ -41,6 +41,8 @@ import java.util.List;
  *       in_stock}, B2; {@code ?q=&min_price=&max_price=&sort=} search/filters, B3); {@code
  *       max-age=60}
  *   <li>{@code GET /api/public/{orgSlug}/categories} — category nav; {@code max-age=60}
+ *   <li>{@code GET /api/public/{orgSlug}/og-image} — the stable social-share image stream (bytes,
+ *       og key → logo fallback → 404, C2); {@code max-age=3600}
  *   <li>{@code GET /api/public/{orgSlug}/availability?slugs=a,b,c} — batch in-stock (B2); {@code
  *       max-age=15}
  *   <li>{@code POST /api/public/{orgSlug}/checkout} — anonymous checkout (B5); {@code no-store}
@@ -56,6 +58,9 @@ public class PublicStorefrontServlet extends HttpServlet {
   private static final String CACHE_LISTINGS = "public, max-age=60";
   private static final String CACHE_PROFILE = "public, max-age=300";
   private static final String CACHE_AVAILABILITY = "public, max-age=15";
+  // A whole hour: the point of the stable og-image route is a URL a social crawler's cache can hold
+  // well past the ~900s presign TTL of the bytes it streams (slice C2, epic §6).
+  private static final String CACHE_OG_IMAGE = "public, max-age=3600";
   private static final String CACHE_NONE = "no-store";
   private static final int MAX_AVAILABILITY_SLUGS = 100;
 
@@ -121,6 +126,13 @@ public class PublicStorefrontServlet extends HttpServlet {
           List<PublicBannerResponse> data =
               service.banners(orgSlug).stream().map(PublicBannerResponse::from).toList();
           writeJson(resp, 200, data, CACHE_LISTINGS);
+        }
+        case "og-image" -> {
+          if (parts.length != 2) {
+            throw new ValidationException("Unknown route");
+          }
+          StorefrontService.OgImage img = service.ogImage(orgSlug);
+          writeBytes(resp, img.bytes(), img.contentType(), CACHE_OG_IMAGE);
         }
         default -> throw new ValidationException("Unknown resource: " + resource);
       }
@@ -255,6 +267,18 @@ public class PublicStorefrontServlet extends HttpServlet {
       resp.setHeader("Cache-Control", cacheControl);
     }
     mapper.writeValue(resp.getOutputStream(), body);
+  }
+
+  private void writeBytes(
+      HttpServletResponse resp, byte[] body, String contentType, String cacheControl)
+      throws IOException {
+    resp.setStatus(200);
+    resp.setContentType(contentType == null ? "application/octet-stream" : contentType);
+    resp.setContentLength(body.length);
+    if (cacheControl != null) {
+      resp.setHeader("Cache-Control", cacheControl);
+    }
+    resp.getOutputStream().write(body);
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {

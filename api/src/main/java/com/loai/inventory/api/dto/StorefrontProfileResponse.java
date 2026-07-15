@@ -19,6 +19,8 @@ public class StorefrontProfileResponse {
   private String currency;
   private String instapayHandle;
   private String paymentInstructions;
+  private String metaTitle;
+  private String metaDescription;
 
   private StorefrontProfileResponse() {}
 
@@ -33,6 +35,8 @@ public class StorefrontProfileResponse {
     r.currency = v.currency();
     r.instapayHandle = v.instapayHandle();
     r.paymentInstructions = v.paymentInstructions();
+    r.metaTitle = v.metaTitle();
+    r.metaDescription = v.metaDescription();
     return r;
   }
 
@@ -70,5 +74,13 @@ public class StorefrontProfileResponse {
 
   public String getPaymentInstructions() {
     return paymentInstructions;
+  }
+
+  public String getMetaTitle() {
+    return metaTitle;
+  }
+
+  public String getMetaDescription() {
+    return metaDescription;
   }
 }
