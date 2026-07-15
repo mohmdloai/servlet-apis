@@ -12,10 +12,13 @@ import com.loai.inventory.api.dto.PublicCheckoutError;
 import com.loai.inventory.api.dto.PublicCheckoutRequest;
 import com.loai.inventory.api.dto.PublicListingResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
+import com.loai.inventory.api.dto.PublicPageResponse;
+import com.loai.inventory.api.dto.PublicPageSummaryResponse;
 import com.loai.inventory.api.dto.StorefrontProfileResponse;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.service.SalesOrderService;
+import com.loai.inventory.service.StorefrontPageService;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.StorefrontService.CheckoutInput;
 import com.loai.inventory.service.StorefrontService.CheckoutLine;
@@ -45,6 +48,10 @@ import java.util.List;
  *       og key → logo fallback → 404, C2); {@code max-age=3600}
  *   <li>{@code GET /api/public/{orgSlug}/availability?slugs=a,b,c} — batch in-stock (B2); {@code
  *       max-age=15}
+ *   <li>{@code GET /api/public/{orgSlug}/pages} — the kinds that exist (footer link source, C4);
+ *       {@code max-age=300}
+ *   <li>{@code GET /api/public/{orgSlug}/pages/{kind}} — one text page, both bodies verbatim (C4);
+ *       {@code max-age=300}
  *   <li>{@code POST /api/public/{orgSlug}/checkout} — anonymous checkout (B5); {@code no-store}
  * </ul>
  *
@@ -62,15 +69,21 @@ public class PublicStorefrontServlet extends HttpServlet {
   // well past the ~900s presign TTL of the bytes it streams (slice C2, epic §6).
   private static final String CACHE_OG_IMAGE = "public, max-age=3600";
   private static final String CACHE_NONE = "no-store";
+  // Text pages change rarely — the same slow cadence as the profile; the list/detail split (this
+  // list carries no bodies) is why the footer renders links without fetching page bodies (slice
+  // C4).
+  private static final String CACHE_PAGES = "public, max-age=300";
   private static final int MAX_AVAILABILITY_SLUGS = 100;
 
   private StorefrontService service;
+  private StorefrontPageService pageService;
   private ObjectMapper mapper;
 
   @Override
   public void init() {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.service = config.storefrontService;
+    this.pageService = config.storefrontPageService;
     this.mapper = config.objectMapper;
   }
 
@@ -119,6 +132,7 @@ public class PublicStorefrontServlet extends HttpServlet {
           writeJson(resp, 200, data, CACHE_LISTINGS);
         }
         case "availability" -> doAvailability(req, resp, orgSlug, parts);
+        case "pages" -> doPages(resp, orgSlug, parts);
         case "banners" -> {
           if (parts.length != 2) {
             throw new ValidationException("Unknown route");
@@ -176,6 +190,25 @@ public class PublicStorefrontServlet extends HttpServlet {
           200,
           PublicListingResponse.from(service.getListing(orgSlug, parts[2])),
           CACHE_LISTINGS);
+    } else {
+      throw new ValidationException("Unknown route");
+    }
+  }
+
+  private void doPages(HttpServletResponse resp, String orgSlug, String[] parts)
+      throws IOException {
+    if (parts.length == 2) {
+      // The footer's link source: which kinds exist, with updated_at — no bodies.
+      List<PublicPageSummaryResponse> data =
+          pageService.publicList(orgSlug).stream().map(PublicPageSummaryResponse::from).toList();
+      writeJson(resp, 200, data, CACHE_PAGES);
+    } else if (parts.length == 3) {
+      // One page, both bodies verbatim. Unknown kind → 400, never-written → 404 (service-decided).
+      writeJson(
+          resp,
+          200,
+          PublicPageResponse.from(pageService.publicPage(orgSlug, parts[2])),
+          CACHE_PAGES);
     } else {
       throw new ValidationException("Unknown route");
     }
