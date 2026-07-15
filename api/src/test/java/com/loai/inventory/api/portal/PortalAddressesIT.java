@@ -82,6 +82,7 @@ class PortalAddressesIT {
             new CustomerAddressRepositoryFactoryImpl(),
             new ProductListingRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl(),
             null);
   }
 

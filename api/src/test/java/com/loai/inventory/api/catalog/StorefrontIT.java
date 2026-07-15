@@ -89,6 +89,7 @@ class StorefrontIT {
             new CategoryRepositoryFactoryImpl(),
             new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
             new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             storage,
             // Read-only tests never call checkout(), so the placement engine is unused here.
             null,

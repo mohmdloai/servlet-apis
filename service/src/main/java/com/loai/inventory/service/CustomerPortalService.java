@@ -16,6 +16,7 @@ import com.loai.inventory.domain.repository.CustomerAddressRepository;
 import com.loai.inventory.domain.repository.CustomerAddressRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepository;
 import com.loai.inventory.domain.repository.ProductListingRepository.CheckoutLineResolution;
@@ -79,6 +80,7 @@ public class CustomerPortalService {
   private final CustomerAddressRepositoryFactory customerAddressRepositoryFactory;
   private final ProductListingRepositoryFactory productListingRepositoryFactory;
   private final OrgRepositoryFactory orgRepositoryFactory;
+  private final FulfillmentRepositoryFactory fulfillmentRepositoryFactory;
   private final SalesOrderService salesOrderService;
 
   public CustomerPortalService(
@@ -89,6 +91,7 @@ public class CustomerPortalService {
       CustomerAddressRepositoryFactory customerAddressRepositoryFactory,
       ProductListingRepositoryFactory productListingRepositoryFactory,
       OrgRepositoryFactory orgRepositoryFactory,
+      FulfillmentRepositoryFactory fulfillmentRepositoryFactory,
       SalesOrderService salesOrderService) {
     this.rootDsl = rootDsl;
     this.customerRepositoryFactory = customerRepositoryFactory;
@@ -97,6 +100,7 @@ public class CustomerPortalService {
     this.customerAddressRepositoryFactory = customerAddressRepositoryFactory;
     this.productListingRepositoryFactory = productListingRepositoryFactory;
     this.orgRepositoryFactory = orgRepositoryFactory;
+    this.fulfillmentRepositoryFactory = fulfillmentRepositoryFactory;
     this.salesOrderService = salesOrderService;
   }
 
@@ -138,6 +142,39 @@ public class CustomerPortalService {
             .filter(o -> customerId.equals(o.getCustomerId()))
             .orElseThrow(() -> new NotFoundException("Order not found: " + orderNumber));
     return new OrderView(order, repo.findLinesByOrderId(order.getId()));
+  }
+
+  /**
+   * The portal order detail (slice R1 rider): the owned order + lines, plus which lines have goods
+   * in hand ({@code deliveredLineIds} — any DELIVERED fulfillment quantity) and each line's public
+   * listing slug ({@code listingSlugByProduct}, any status — a delivered item stays reviewable
+   * after unpublishing). Both are customer-safe: the slug is the listing's public identity, and
+   * delivered is the customer's own order state. Drives the per-line "rate this item" entry
+   * (frontend story 40).
+   */
+  public record OrderDetail(
+      SalesOrder order,
+      List<SalesOrderLine> lines,
+      java.util.Set<UUID> deliveredLineIds,
+      Map<UUID, String> listingSlugByProduct) {}
+
+  public OrderDetail getOrderDetail(UUID orgId, UUID customerId, String orderNumber) {
+    OrderView view = getOrder(orgId, customerId, orderNumber);
+    Map<UUID, Integer> deliveredByLine =
+        fulfillmentRepositoryFactory
+            .create(rootDsl)
+            .sumDeliveredQtyByOrderLine(view.order().getId());
+    java.util.Set<UUID> deliveredLineIds =
+        view.lines().stream()
+            .map(SalesOrderLine::getId)
+            .filter(id -> deliveredByLine.getOrDefault(id, 0) > 0)
+            .collect(java.util.stream.Collectors.toSet());
+    Map<UUID, String> slugByProduct =
+        productListingRepositoryFactory
+            .create(rootDsl)
+            .findSlugsByProductIds(
+                orgId, view.lines().stream().map(SalesOrderLine::getProductId).toList());
+    return new OrderDetail(view.order(), view.lines(), deliveredLineIds, slugByProduct);
   }
 
   // invoices (slice P3)

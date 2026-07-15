@@ -16,6 +16,8 @@ import com.loai.inventory.api.dto.PortalMeResponse;
 import com.loai.inventory.api.dto.PortalNotificationResponse;
 import com.loai.inventory.api.dto.PortalProfileUpdateRequest;
 import com.loai.inventory.api.dto.PortalReorderResponse;
+import com.loai.inventory.api.dto.PortalReviewRequest;
+import com.loai.inventory.api.dto.PortalReviewResponse;
 import com.loai.inventory.api.dto.PortalSessionResponse;
 import com.loai.inventory.api.dto.PublicCheckoutError;
 import com.loai.inventory.api.dto.PublicOrderResponse;
@@ -29,6 +31,7 @@ import com.loai.inventory.domain.model.InAppFeedItem;
 import com.loai.inventory.domain.model.NotificationChannel;
 import com.loai.inventory.domain.model.NotificationPreference;
 import com.loai.inventory.service.CustomerPortalService;
+import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.NotificationService;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.auth.CustomerAuthService;
@@ -87,6 +90,7 @@ public class PortalServlet extends HttpServlet {
   private CustomerPortalService portalService;
   private DocumentRenderService renderService;
   private NotificationService notificationService;
+  private ListingReviewService reviewService;
   private ObjectMapper mapper;
   private boolean secureCookies;
   private int refreshMaxAge;
@@ -98,6 +102,7 @@ public class PortalServlet extends HttpServlet {
     this.portalService = config.customerPortalService;
     this.renderService = config.documentRenderService;
     this.notificationService = config.notificationService;
+    this.reviewService = config.listingReviewService;
     this.mapper = config.objectMapper;
     this.secureCookies = config.secureCookies;
     this.refreshMaxAge = config.customerRefreshMaxAgeSeconds;
@@ -145,6 +150,25 @@ public class PortalServlet extends HttpServlet {
           handleUpdateAddress(req, resp, rest);
         } else if ("DELETE".equals(method)) {
           handleDeleteAddress(req, resp, rest);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+      if ("/reviews".equals(path)) {
+        if ("POST".equals(method)) {
+          handleSubmitReview(req, resp);
+        } else if ("GET".equals(method)) {
+          handleMyReviews(req, resp);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+      if (path.startsWith("/reviews/")) {
+        String rest = path.substring("/reviews/".length());
+        if ("DELETE".equals(method)) {
+          handleDeleteReview(req, resp, rest);
         } else {
           writeError(resp, 405, "Method not allowed");
         }
@@ -298,10 +322,12 @@ public class PortalServlet extends HttpServlet {
   private void handleGetOrder(HttpServletRequest req, HttpServletResponse resp, String orderNumber)
       throws IOException {
     CustomerPrincipal principal = requirePrincipal(req);
-    CustomerPortalService.OrderView view =
-        portalService.getOrder(principal.orgId(), principal.customerId(), orderNumber);
+    // The detail read carries the two additive per-line fields (listing_slug + delivered) that
+    // drive the "rate this item" entry (slice R1 rider) — the list rows keep the lean shape.
+    CustomerPortalService.OrderDetail detail =
+        portalService.getOrderDetail(principal.orgId(), principal.customerId(), orderNumber);
     resp.setHeader("Cache-Control", "private, no-store");
-    writeJson(resp, 200, PublicOrderResponse.forOrderView(view.order(), view.lines()));
+    writeJson(resp, 200, PublicOrderResponse.forPortalOrderDetail(detail));
   }
 
   // invoices (slice P3)
@@ -431,6 +457,51 @@ public class PortalServlet extends HttpServlet {
         portalService.reorder(principal.orgId(), principal.customerId(), orderNumber);
     resp.setHeader("Cache-Control", "private, no-store");
     writeJson(resp, 200, PortalReorderResponse.from(result));
+  }
+
+  // reviews (slice R1)
+
+  private void handleSubmitReview(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    PortalReviewRequest body = readBody(req, PortalReviewRequest.class);
+    ListingReviewService.Submitted result =
+        reviewService.submit(
+            principal.orgId(),
+            principal.customerId(),
+            body.getListingSlug(),
+            body.getRating(),
+            body.getBody());
+    resp.setHeader("Cache-Control", "private, no-store");
+    // 201 on a fresh review; 200 when the (customer, listing) upsert replayed as an edit.
+    writeJson(
+        resp,
+        result.created() ? 201 : 200,
+        PortalReviewResponse.from(result.review(), result.listingSlug(), null));
+  }
+
+  private void handleMyReviews(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    List<PortalReviewResponse> data =
+        reviewService.myReviews(principal.orgId(), principal.customerId()).stream()
+            .map(m -> PortalReviewResponse.from(m.review(), m.listingSlug(), m.listingTitle()))
+            .toList();
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, data);
+  }
+
+  private void handleDeleteReview(HttpServletRequest req, HttpServletResponse resp, String idRaw)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    UUID reviewId;
+    try {
+      reviewId = UUID.fromString(idRaw);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid review id: " + idRaw);
+    }
+    reviewService.deleteOwn(principal.orgId(), principal.customerId(), reviewId);
+    resp.setStatus(204);
   }
 
   // notifications (slice P5)
@@ -610,6 +681,8 @@ public class PortalServlet extends HttpServlet {
     CustomerAuthCookies.writeAccess(
         resp, result.accessToken(), (int) result.expiresIn(), secureCookies);
     CustomerAuthCookies.writeRefresh(resp, result.refreshToken(), refreshMaxAge, secureCookies);
+    // The UI-only hint rides every session write and dies with the session (epic §11).
+    CustomerAuthCookies.writeHint(resp, refreshMaxAge, secureCookies);
   }
 
   private CustomerPrincipal requirePrincipal(HttpServletRequest req) {

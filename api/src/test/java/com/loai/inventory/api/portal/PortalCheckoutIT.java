@@ -182,6 +182,7 @@ class PortalCheckoutIT {
             new CustomerAddressRepositoryFactoryImpl(),
             new ProductListingRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl(),
             salesOrders);
   }
 

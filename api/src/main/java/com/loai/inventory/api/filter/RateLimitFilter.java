@@ -64,6 +64,8 @@ public class RateLimitFilter implements Filter {
   static final int DEFAULT_PORTAL_OTP_REQUEST_LIMIT = 5;
   static final int DEFAULT_PORTAL_OTP_VERIFY_LIMIT = 10;
   static final int DEFAULT_PORTAL_REFRESH_LIMIT = 30;
+  // Review writes (slice R1): strict — a review is a moderation-queue write, not a browse.
+  static final int DEFAULT_PORTAL_REVIEW_LIMIT = 10;
 
   private JedisPool jedisPool;
   private ObjectMapper objectMapper;
@@ -72,6 +74,7 @@ public class RateLimitFilter implements Filter {
   private int portalOtpRequestLimit = DEFAULT_PORTAL_OTP_REQUEST_LIMIT;
   private int portalOtpVerifyLimit = DEFAULT_PORTAL_OTP_VERIFY_LIMIT;
   private int portalRefreshLimit = DEFAULT_PORTAL_REFRESH_LIMIT;
+  private int portalReviewLimit = DEFAULT_PORTAL_REVIEW_LIMIT;
   private boolean trustProxy;
 
   /** No-arg constructor for the servlet container; config is read in {@link #init}. */
@@ -106,6 +109,7 @@ public class RateLimitFilter implements Filter {
         envIntOrDefault("PORTAL_OTP_REQUEST_LIMIT", DEFAULT_PORTAL_OTP_REQUEST_LIMIT);
     this.portalOtpVerifyLimit =
         envIntOrDefault("PORTAL_OTP_VERIFY_LIMIT", DEFAULT_PORTAL_OTP_VERIFY_LIMIT);
+    this.portalReviewLimit = envIntOrDefault("PORTAL_REVIEW_LIMIT", DEFAULT_PORTAL_REVIEW_LIMIT);
     this.trustProxy = Boolean.parseBoolean(System.getenv("TRUST_PROXY"));
     log.info(
         "RateLimitFilter: pub-read={}/min, pub-checkout={}/min, trustProxy={}",
@@ -141,6 +145,11 @@ public class RateLimitFilter implements Filter {
       // placement is the same expensive write whether or not the caller is logged in.
       keyPrefix = "rl:portal-checkout:";
       limit = publicCheckoutLimit;
+    } else if (path.startsWith("/api/portal/reviews") && !"GET".equals(req.getMethod())) {
+      // Review mutations (slice R1) get their own strict bucket; the GET (my reviews) stays on
+      // the generous portal-read bucket below.
+      keyPrefix = "rl:portal-review:";
+      limit = portalReviewLimit;
     } else if (path.startsWith("/api/portal/")) {
       keyPrefix = "rl:portal-read:";
       limit = publicReadLimit;

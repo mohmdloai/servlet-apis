@@ -2,6 +2,7 @@ package com.loai.inventory.api.dto;
 
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
+import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.StorefrontService.CheckoutResult;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -76,6 +77,24 @@ public class PublicOrderResponse {
     return out;
   }
 
+  /**
+   * The portal order <b>detail</b> (slice R1 rider, frontend story 40): the same customer-safe
+   * whitelist as {@link #forOrderView}, with two additive per-line fields — {@code listing_slug}
+   * (the line's public listing identity, so "rate this item" can pre-scope the review form) and
+   * {@code delivered} (goods in hand — the same fact the review-eligibility gate checks). Both stay
+   * omitted on the anonymous track view and the portal list rows.
+   */
+  public static PublicOrderResponse forPortalOrderDetail(CustomerPortalService.OrderDetail detail) {
+    PublicOrderResponse out = forOrderView(detail.order(), detail.lines());
+    for (int i = 0; i < detail.lines().size(); i++) {
+      SalesOrderLine line = detail.lines().get(i);
+      Line dto = out.lines.get(i);
+      dto.listingSlug = detail.listingSlugByProduct().get(line.getProductId());
+      dto.delivered = detail.deliveredLineIds().contains(line.getId());
+    }
+    return out;
+  }
+
   public String getOrderNumber() {
     return orderNumber;
   }
@@ -124,12 +143,18 @@ public class PublicOrderResponse {
     return trackUrl;
   }
 
-  /** A confirmation line: the listing title, quantity, and snapshotted unit + line totals. */
+  /**
+   * A confirmation line: the listing title, quantity, and snapshotted unit + line totals. {@code
+   * listingSlug} + {@code delivered} ride only the portal order detail ({@link
+   * #forPortalOrderDetail}) — omitted (null) everywhere else.
+   */
   public static class Line {
     private String title;
     private int quantity;
     private BigDecimal unitPrice;
     private BigDecimal lineTotal;
+    private String listingSlug;
+    private Boolean delivered;
 
     private Line() {}
 
@@ -156,6 +181,14 @@ public class PublicOrderResponse {
 
     public BigDecimal getLineTotal() {
       return lineTotal;
+    }
+
+    public String getListingSlug() {
+      return listingSlug;
+    }
+
+    public Boolean getDelivered() {
+      return delivered;
     }
   }
 }

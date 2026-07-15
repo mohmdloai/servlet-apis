@@ -17,6 +17,8 @@ import com.loai.inventory.domain.model.SalesOrderLine;
 import com.loai.inventory.domain.repository.CategoryRepository;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
+import com.loai.inventory.domain.repository.ListingReviewRepository;
+import com.loai.inventory.domain.repository.ListingReviewRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepository;
@@ -53,6 +55,7 @@ public class StorefrontService {
   private final CategoryRepositoryFactory categoryRepoFactory;
   private final InventoryRepositoryFactory inventoryRepoFactory;
   private final StorefrontBannerRepositoryFactory bannerRepoFactory;
+  private final ListingReviewRepositoryFactory reviewRepoFactory;
   private final ObjectStorage storage;
   private final SalesOrderService salesOrderService;
   private final OgImageSource ogImageSource;
@@ -64,6 +67,7 @@ public class StorefrontService {
       CategoryRepositoryFactory categoryRepoFactory,
       InventoryRepositoryFactory inventoryRepoFactory,
       StorefrontBannerRepositoryFactory bannerRepoFactory,
+      ListingReviewRepositoryFactory reviewRepoFactory,
       ObjectStorage storage,
       SalesOrderService salesOrderService,
       OgImageSource ogImageSource) {
@@ -73,6 +77,7 @@ public class StorefrontService {
     this.categoryRepoFactory = categoryRepoFactory;
     this.inventoryRepoFactory = inventoryRepoFactory;
     this.bannerRepoFactory = bannerRepoFactory;
+    this.reviewRepoFactory = reviewRepoFactory;
     this.storage = storage;
     this.salesOrderService = salesOrderService;
     this.ogImageSource = ogImageSource;
@@ -87,7 +92,9 @@ public class StorefrontService {
   /**
    * The public view of a listing. Carries no internal id, product id, status or timestamps. {@code
    * inStock} is the advisory availability boolean ({@code available_qty > 0}; untracked → false) —
-   * never a quantity (B2).
+   * never a quantity (B2). {@code ratingAvg}/{@code ratingCount} are the APPROVED-review aggregate
+   * (slice R1, epic §8/§10): computed per page behind the same {@code max-age=60}, one decimal,
+   * both {@code null} when the listing has no approved review — absent, never zero-fabricated.
    */
   public record ListingView(
       String slug,
@@ -96,7 +103,9 @@ public class StorefrontService {
       java.math.BigDecimal salesPrice,
       boolean inStock,
       List<PublicImage> images,
-      List<CategoryRef> categories) {}
+      List<CategoryRef> categories,
+      String ratingAvg,
+      Long ratingCount) {}
 
   /** A node in the public category nav; {@code parentSlug} is null at the root. */
   public record CategoryNav(String name, String slug, String parentSlug) {}
@@ -470,6 +479,12 @@ public class StorefrontService {
             .create(rootDsl)
             .findAvailableByProductIds(
                 orgId, rows.stream().map(ProductListing::getProductId).toList());
+    // And the APPROVED-review aggregate for the page (R1, epic §8) — one grouped query, absent
+    // when a listing has no approved review (never a fabricated zero).
+    Map<UUID, ListingReviewRepository.Aggregate> aggregateByListing =
+        reviewRepoFactory
+            .create(rootDsl)
+            .findAggregates(orgId, rows.stream().map(ProductListing::getId).toList());
     List<ListingView> items =
         rows.stream()
             .map(
@@ -478,6 +493,7 @@ public class StorefrontService {
                   List<PublicImage> images =
                       primary == null ? List.of() : List.of(toPublicImage(primary));
                   boolean inStock = availableByProduct.getOrDefault(l.getProductId(), 0) > 0;
+                  ListingReviewRepository.Aggregate agg = aggregateByListing.get(l.getId());
                   return new ListingView(
                       l.getSlug(),
                       l.getTitle(),
@@ -485,7 +501,9 @@ public class StorefrontService {
                       l.getSalesPrice(),
                       inStock,
                       images,
-                      List.of());
+                      List.of(),
+                      formatRatingAvg(agg),
+                      agg == null ? null : agg.count());
                 })
             .toList();
     return new ListingPage(items, total, page, size);
@@ -612,6 +630,11 @@ public class StorefrontService {
       List<CategoryRef> categories) {
     List<PublicImage> images =
         listings.findImages(l.getId()).stream().map(this::toPublicImage).toList();
+    ListingReviewRepository.Aggregate agg =
+        reviewRepoFactory
+            .create(rootDsl)
+            .findAggregates(l.getOrgId(), List.of(l.getId()))
+            .get(l.getId());
     return new ListingView(
         l.getSlug(),
         l.getTitle(),
@@ -619,7 +642,17 @@ public class StorefrontService {
         l.getSalesPrice(),
         inStock,
         images,
-        categories);
+        categories,
+        formatRatingAvg(agg),
+        agg == null ? null : agg.count());
+  }
+
+  /** One-decimal string average (epic §10 — never fabricated precision); null when no aggregate. */
+  private static String formatRatingAvg(ListingReviewRepository.Aggregate agg) {
+    if (agg == null || agg.count() == 0) {
+      return null;
+    }
+    return agg.average().setScale(1, java.math.RoundingMode.HALF_UP).toPlainString();
   }
 
   private PublicImage toPublicImage(ProductListingImage img) {

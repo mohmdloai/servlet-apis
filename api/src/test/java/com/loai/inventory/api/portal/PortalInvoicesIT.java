@@ -124,6 +124,7 @@ class PortalInvoicesIT {
             new CustomerAddressRepositoryFactoryImpl(),
             new ProductListingRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl(),
             null);
 
     // The real renderer, exactly as the servlet's PDF route uses it: renderInvoice() reads only the
