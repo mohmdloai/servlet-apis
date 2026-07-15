@@ -7,12 +7,14 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PortalAddressRequest;
 import com.loai.inventory.api.dto.PortalAddressResponse;
+import com.loai.inventory.api.dto.PortalCheckoutRequest;
 import com.loai.inventory.api.dto.PortalInvoiceResponse;
 import com.loai.inventory.api.dto.PortalInvoiceSummaryResponse;
 import com.loai.inventory.api.dto.PortalMeResponse;
 import com.loai.inventory.api.dto.PortalProfileUpdateRequest;
 import com.loai.inventory.api.dto.PortalReorderResponse;
 import com.loai.inventory.api.dto.PortalSessionResponse;
+import com.loai.inventory.api.dto.PublicCheckoutError;
 import com.loai.inventory.api.dto.PublicOrderResponse;
 import com.loai.inventory.api.filter.CustomerAuthFilter;
 import com.loai.inventory.common.exception.AppException;
@@ -21,6 +23,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.CustomerAddress;
 import com.loai.inventory.domain.model.CustomerPrincipal;
 import com.loai.inventory.service.CustomerPortalService;
+import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.auth.CustomerAuthService;
 import com.loai.inventory.service.document.DocumentRenderService;
 import com.loai.inventory.service.document.DocumentRenderService.RenderedDocument;
@@ -54,6 +57,10 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code PATCH|DELETE /addresses/{id}} — edit / remove an owned address
  *   <li>{@code POST /addresses/{id}/default} — promote an owned address to the default
  *   <li>{@code POST /orders/{orderNumber}/reorder} — resolve a past order into a buyable cart
+ *   <li>{@code POST /checkout} — place an order as the logged-in customer (slice P6): bound to the
+ *       session, delivery from an owned {@code address_id} or a typed address; {@code
+ *       Idempotency-Key} required; 409 slug-keyed shortages; {@code track_url} → the portal order
+ *       page
  * </ul>
  *
  * All identity comes from the {@link CustomerPrincipal} the filter published — never from the URL
@@ -86,6 +93,10 @@ public class PortalServlet extends HttpServlet {
     String path = req.getPathInfo() == null ? "/" : req.getPathInfo();
     String method = req.getMethod();
     try {
+      if ("/checkout".equals(path)) {
+        requirePost(method, () -> handleCheckout(req, resp));
+        return;
+      }
       if ("/orders".equals(path)) {
         requireGet(method, () -> handleListOrders(req, resp));
         return;
@@ -154,6 +165,10 @@ public class PortalServlet extends HttpServlet {
         }
         default -> writeError(resp, 404, "Unknown portal endpoint");
       }
+    } catch (StorefrontService.StorefrontOutOfStockException e) {
+      // Slug-keyed 409 — never a product_id (no-leak invariant), same shape as the anon checkout.
+      resp.setHeader("Cache-Control", "private, no-store");
+      writeJson(resp, 409, PublicCheckoutError.of(e.getMessage(), e.shortages()));
     } catch (AppException e) {
       writeError(resp, e.getStatusCode(), e.getMessage());
     } catch (IOException e) {
@@ -378,6 +393,39 @@ public class PortalServlet extends HttpServlet {
         portalService.reorder(principal.orgId(), principal.customerId(), orderNumber);
     resp.setHeader("Cache-Control", "private, no-store");
     writeJson(resp, 200, PortalReorderResponse.from(result));
+  }
+
+  // checkout (slice P6)
+
+  private void handleCheckout(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    // Idempotency-Key is REQUIRED — a missing/blank header is a 400 before any work (as anon).
+    String idempotencyKey = req.getHeader("Idempotency-Key");
+    if (idempotencyKey == null || idempotencyKey.isBlank()) {
+      throw new ValidationException("Idempotency-Key header is required");
+    }
+    PortalCheckoutRequest body = readBody(req, PortalCheckoutRequest.class);
+    List<CustomerPortalService.CheckoutLine> lines = new java.util.ArrayList<>();
+    if (body.getLines() != null) {
+      for (PortalCheckoutRequest.LineBody l : body.getLines()) {
+        lines.add(
+            new CustomerPortalService.CheckoutLine(
+                l == null ? null : l.getListingSlug(), l == null ? 0 : l.getQuantity()));
+      }
+    }
+    CustomerPortalService.CheckoutInput input =
+        new CustomerPortalService.CheckoutInput(
+            lines,
+            body.getNotes(),
+            body.getAddressId(),
+            body.getAddress() == null ? null : toAddressInput(body.getAddress()),
+            Boolean.TRUE.equals(body.getSaveAddress()));
+    StorefrontService.CheckoutResult result =
+        portalService.checkout(
+            principal.orgId(), principal.customerId(), input, idempotencyKey.trim());
+    resp.setHeader("Cache-Control", "private, no-store");
+    // 201 on a fresh order; 200 when a duplicate Idempotency-Key replayed the prior order.
+    writeJson(resp, result.created() ? 201 : 200, PublicOrderResponse.from(result));
   }
 
   // helpers

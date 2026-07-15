@@ -119,7 +119,9 @@ class PortalAuthIT {
             new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl(),
             new com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CustomerAddressRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.ProductListingRepositoryFactoryImpl());
+            new com.loai.inventory.repository.ProductListingRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            null);
 
     emailSender = new CapturingEmailSender();
     authService =

@@ -122,7 +122,9 @@ class PortalInvoicesIT {
             new SalesOrderRepositoryFactoryImpl(),
             new SalesInvoiceRepositoryFactoryImpl(),
             new CustomerAddressRepositoryFactoryImpl(),
-            new ProductListingRepositoryFactoryImpl());
+            new ProductListingRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            null);
 
     // The real renderer, exactly as the servlet's PDF route uses it: renderInvoice() reads only the
     // org profile + the invoice aggregate, so the credit-note / payment collaborators are unused
