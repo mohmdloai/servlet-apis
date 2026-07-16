@@ -3,9 +3,11 @@
 #
 # Routes:
 #   api.{$DOMAIN}    → backend:8080
-#   files.{$DOMAIN}  → minio:9000   (presigned image URLs)
+#   files.{$DOMAIN}  → minio:9000     (presigned image URLs)
+#   admin.{$DOMAIN}  → admin:3000     (admin Next app)
+#   store.{$DOMAIN}  → storefront:3000 (storefront Next app; path-based multi-tenant /{orgSlug})
 #
-# Both A records must resolve to this server before first boot (Caddy fetches certs on startup).
+# Every host's A record must resolve to this server before first boot (Caddy fetches certs on start).
 
 {
 	# Contact address for Let's Encrypt expiry notices.
@@ -21,3 +23,17 @@ files.{$DOMAIN} {
 	# Caddy preserves the Host header by default — MinIO SigV4 presigned URLs need that.
 	reverse_proxy minio:9000
 }
+
+admin.{$DOMAIN} {
+	reverse_proxy admin:3000
+	encode gzip
+}
+
+store.{$DOMAIN} {
+	reverse_proxy storefront:3000
+	encode gzip
+}
+
+# Server-local site blocks, kept OUTSIDE this repo so re-copying it never clobbers them. Drop
+# extra `*.caddy` files in /opt/ststore/caddy.d/ on the VPS (mounted read-only into the container).
+import /etc/caddy/conf.d/*.caddy
