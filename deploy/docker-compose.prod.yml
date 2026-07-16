@@ -111,19 +111,51 @@ services:
       retries: 5
       start_period: 40s
 
+  # ── Frontend (built + published by the frontst repo's CI) ──────────────────
+  admin:
+    image: ${ADMIN_IMAGE:-ghcr.io/mohmdloai/admin:latest}
+    restart: unless-stopped
+    networks: [internal]
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # Same-origin /api proxy → internal backend (keeps staff auth cookies first-party to admin.<domain>).
+      BACKEND_API_URL: http://backend:8080
+
+  storefront:
+    image: ${STOREFRONT_IMAGE:-ghcr.io/mohmdloai/storefront:latest}
+    restart: unless-stopped
+    networks: [internal]
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      BACKEND_API_URL: http://backend:8080
+      # NEXT_PUBLIC_STOREFRONT_ORIGIN is baked at build time (frontst CI), not read here.
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     networks: [internal]
     depends_on:
       - backend
+      - admin
+      - storefront
     ports:
       - "80:80"
       - "443:443"
     environment:
       DOMAIN: ${DOMAIN}
+    # Lets server-local site blocks (caddy.d) reach host-published container ports.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Server-local, repo-free site blocks (imported by the Caddyfile). Create dir on the VPS.
+      - ./caddy.d:/etc/caddy/conf.d:ro
       - caddy_data:/data
       - caddy_config:/config
 
