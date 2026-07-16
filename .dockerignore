@@ -1,0 +1,28 @@
+# The Dockerfile copies ONLY api/target/classes and api/target/dependency. Keep the build context
+# small by excluding everything else — especially other modules' target dirs, git, and docs.
+.git
+.github
+.idea
+.vscode
+.claude
+docs
+GUIDES
+stories
+sys-analysis
+deploy
+*.pdf
+*.md
+
+# Other modules' build output (not copied into the image)
+common/target
+domain/target
+repository/target
+service/target
+
+# Within api/target, keep only classes + dependency
+api/target/tomcat
+api/target/generated-sources
+api/target/maven-status
+api/target/maven-archiver
+api/target/test-classes
+api/target/*.war

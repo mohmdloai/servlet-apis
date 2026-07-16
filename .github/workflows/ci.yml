@@ -1,0 +1,45 @@
+name: CI
+
+# Build + full test suite on every PR and on pushes to non-main branches.
+# jOOQ codegen needs a live, migrated Postgres, so we run one as a service container on 5433
+# (the port the pom's db.url expects). Integration tests use Testcontainers against Docker, which
+# is preinstalled on GitHub's ubuntu runners.
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - master
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: inventorydb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d inventorydb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      # generate-sources (Flyway migrate + jOOQ codegen against the service DB) → compile →
+      # unit tests → Testcontainers ITs → spotless check, all in one reactor invocation.
+      - name: Build & verify
+        run: mvn -B -Pcodegen clean verify

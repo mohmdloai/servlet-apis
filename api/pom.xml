@@ -114,6 +114,23 @@
                 <artifactId>maven-war-plugin</artifactId>
                 <version>3.4.0</version>
             </plugin>
+            <!--
+              Version pin for the dependency plugin. The Docker build materialises the full runtime
+              classpath (internal modules + all transitive runtime deps, incl. embedded Tomcat) into
+              target/dependency by invoking the goal explicitly AFTER `install`, so the reactor
+              modules resolve as packaged jars from the local repo (avoids MDEP-187):
+                mvn -pl api dependency:copy-dependencies \
+                    -DincludeScope=runtime -DoutputDirectory=target/dependency
+              The image copies that directory + target/classes and runs EmbeddedTomcatLauncher via
+              `java -cp`. Separate jars (rather than a shaded uber-jar) avoid META-INF/services merge
+              hazards for Flyway / jOOQ / AWS SDK service discovery. Provided scope (servlet-api) is
+              excluded — the servlet classes come from tomcat-embed-core.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.7.1</version>
+            </plugin>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>

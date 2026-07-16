@@ -1,0 +1,89 @@
+name: Deploy
+
+# On every push to master: build + test, publish the runtime image to GHCR, then tell the VPS
+# to pull it and restart the backend service. Requires these repo secrets:
+#   VPS_HOST, VPS_USER, VPS_SSH_KEY   — SSH access to the server
+#   VPS_SSH_PORT                       — optional, defaults to 22
+# The GHCR push uses the built-in GITHUB_TOKEN (no secret needed).
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch: {} # allow manual re-deploys from the Actions tab
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/inventory-api
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: inventorydb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d inventorydb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      # Full gate: codegen + tests + spotless, and `install` so the reactor module jars land in the
+      # local repo for the copy-dependencies step below (resolves them as jars, avoids MDEP-187).
+      - name: Build, test & install
+        run: mvn -B -Pcodegen clean install
+
+      - name: Materialise runtime classpath
+        run: mvn -B -pl api dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=target/dependency
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull & restart backend on the VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_SSH_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            cd /opt/ststore
+            docker compose -f docker-compose.prod.yml pull backend
+            docker compose -f docker-compose.prod.yml up -d backend
+            docker image prune -f
