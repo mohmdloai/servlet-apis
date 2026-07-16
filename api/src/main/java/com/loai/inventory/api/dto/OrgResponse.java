@@ -32,6 +32,13 @@ public class OrgResponse {
   private String paymentInstructions;
   private String defaultLocale;
 
+  // Storefront sharing & SEO (V54) — nullable; omitted from JSON when null. The owner-facing
+  // Settings → Storefront form re-hydrates these on load; without them meta fields don't repopulate
+  // and the og-image preview can't tell a stored image from the logo fallback.
+  private String metaTitle;
+  private String metaDescription;
+  private String ogImageObjectKey;
+
   private OrgResponse() {}
 
   public static OrgResponse from(Org o) {
@@ -57,6 +64,9 @@ public class OrgResponse {
     r.instapayHandle = o.getInstapayHandle();
     r.paymentInstructions = o.getPaymentInstructions();
     r.defaultLocale = o.getDefaultLocale();
+    r.metaTitle = o.getMetaTitle();
+    r.metaDescription = o.getMetaDescription();
+    r.ogImageObjectKey = o.getOgImageObjectKey();
     return r;
   }
 
@@ -142,5 +152,17 @@ public class OrgResponse {
 
   public String getDefaultLocale() {
     return defaultLocale;
+  }
+
+  public String getMetaTitle() {
+    return metaTitle;
+  }
+
+  public String getMetaDescription() {
+    return metaDescription;
+  }
+
+  public String getOgImageObjectKey() {
+    return ogImageObjectKey;
   }
 }
