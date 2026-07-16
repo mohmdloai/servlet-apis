@@ -16,14 +16,17 @@ public class RedisFactory {
     Properties props = new Properties();
     try (InputStream is =
         RedisFactory.class.getClassLoader().getResourceAsStream("redis.properties")) {
-      if (is == null) throw new RuntimeException("redis.properties not found on classpath");
-      props.load(is);
+      if (is != null) props.load(is);
     } catch (Exception e) {
       throw new RuntimeException("Failed to load redis.properties", e);
     }
 
-    String host = props.getProperty("redis.host", "localhost");
-    int port = Integer.parseInt(props.getProperty("redis.port", "6379"));
+    // Env vars (REDIS_HOST / REDIS_PORT) win over the committed dev defaults so the prod container
+    // can point Jedis at the Compose `redis` service. Mirrors DataSourceFactory /
+    // ObjectStorageFactory.
+    String host = getenvOrDefault("REDIS_HOST", props.getProperty("redis.host", "localhost"));
+    int port =
+        Integer.parseInt(getenvOrDefault("REDIS_PORT", props.getProperty("redis.port", "6379")));
     int maxTotal = Integer.parseInt(props.getProperty("redis.maxTotal", "16"));
     int maxIdle = Integer.parseInt(props.getProperty("redis.maxIdle", "8"));
     int timeout = Integer.parseInt(props.getProperty("redis.timeout", "2000"));
@@ -34,5 +37,10 @@ public class RedisFactory {
     poolConfig.setMaxIdle(maxIdle);
 
     return new JedisPool(poolConfig, host, port, timeout);
+  }
+
+  private static String getenvOrDefault(String key, String defaultValue) {
+    String v = System.getenv(key);
+    return (v == null || v.isBlank()) ? defaultValue : v;
   }
 }

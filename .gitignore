@@ -8,7 +8,9 @@ EMBEDDED_*
 GUIDES
 .idea/
 .vscode/
-.github/
+# Local Java-modernize tooling only — CI workflows under .github/workflows/ ARE tracked.
+.github/java-upgrade/
+.github/modernize/
 
 # Local environment / secrets — never commit
 .env

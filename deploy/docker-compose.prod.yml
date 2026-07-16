@@ -1,0 +1,135 @@
+# Production stack for the inventory backend — lives on the VPS at /opt/ststore.
+#
+# Self-contained: your own Caddy owns 80/443 and is the single edge proxy, routing api.<domain> and
+# files.<domain> to this stack. See deploy/Caddyfile.
+#
+# Config/secrets come from a sibling `.env` (copy from env.prod.example; never commit it). Compose
+# auto-loads it from the working dir and interpolates ${VARS} below.
+#
+# First boot (make sure 80/443 are free — stop any other proxy on the box first):
+#   docker compose -f docker-compose.prod.yml up -d
+# The CI deploy job then only refreshes the backend.
+
+networks:
+  internal:
+    driver: bridge
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    networks: [internal]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [internal]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    networks: [internal]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # One-shot: create the catalog-images bucket (private — objects served via presigned GET), then exit.
+  minio-init:
+    image: minio/mc:latest
+    networks: [internal]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY} ${S3_SECRET_KEY} &&
+      mc mb --ignore-existing local/catalog-images &&
+      mc anonymous set none local/catalog-images;
+      exit 0;
+      "
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/mohmdloai/inventory-api:latest}
+    restart: unless-stopped
+    networks: [internal]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB}?currentSchema=inventorydb
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      MINIO_PUBLIC_ENDPOINT: https://files.${DOMAIN}
+      COOKIE_SECURE: "true"
+      TRUST_PROXY: "true"
+      CORS_ALLOWED_ORIGINS: https://admin.${DOMAIN},https://store.${DOMAIN}
+      PUBLIC_BASE_URL: https://store.${DOMAIN}
+      JWT_SECRET: ${JWT_SECRET}
+      CUSTOMER_JWT_SECRET: ${CUSTOMER_JWT_SECRET}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    networks: [internal]
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  caddy_data:
+  caddy_config:

@@ -13,19 +13,27 @@ public class DataSourceFactory {
   private DataSourceFactory() {}
 
   public static HikariDataSource build() {
-    // Load connection info from db.properties on the classpath :resources/db.properties
+    // Connection info comes from env vars first (DB_URL / DB_USER / DB_PASSWORD), falling back to
+    // db.properties on the classpath. In prod (container) the env vars point Hikari at the Compose
+    // `db` service; in dev the committed db.properties supplies localhost defaults. db.properties
+    // is
+    // gitignored and therefore absent in CI/prod, so it is optional — the env vars must supply the
+    // values there. Mirrors ObjectStorageFactory / RedisFactory.
     Properties props = new Properties();
     try (InputStream is =
         DataSourceFactory.class.getClassLoader().getResourceAsStream("db.properties")) {
-      if (is == null) throw new RuntimeException("db.properties not found on classpath");
-      props.load(is);
+      if (is != null) props.load(is);
     } catch (Exception e) {
       throw new RuntimeException("Failed to load db.properties", e);
     }
 
-    String url = props.getProperty("db.url");
-    String user = props.getProperty("db.user");
-    String password = props.getProperty("db.password");
+    String url = getenvOrDefault("DB_URL", props.getProperty("db.url"));
+    String user = getenvOrDefault("DB_USER", props.getProperty("db.user"));
+    String password = getenvOrDefault("DB_PASSWORD", props.getProperty("db.password"));
+    if (url == null || url.isBlank()) {
+      throw new RuntimeException(
+          "No database URL configured — set the DB_URL env var (or provide db.properties)");
+    }
     log.info("Initialising connection pool → {}", url);
 
     HikariConfig config = new HikariConfig();
@@ -47,5 +55,10 @@ public class DataSourceFactory {
     config.addDataSourceProperty("ApplicationName", "inventory-system");
 
     return new HikariDataSource(config);
+  }
+
+  private static String getenvOrDefault(String key, String defaultValue) {
+    String v = System.getenv(key);
+    return (v == null || v.isBlank()) ? defaultValue : v;
   }
 }

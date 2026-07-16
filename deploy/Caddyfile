@@ -1,0 +1,23 @@
+# Your edge proxy — owns 80/443, automatic HTTPS (Let's Encrypt). {$DOMAIN} is injected from the
+# Compose environment.
+#
+# Routes:
+#   api.{$DOMAIN}    → backend:8080
+#   files.{$DOMAIN}  → minio:9000   (presigned image URLs)
+#
+# Both A records must resolve to this server before first boot (Caddy fetches certs on startup).
+
+{
+	# Contact address for Let's Encrypt expiry notices.
+	email admin@{$DOMAIN}
+}
+
+api.{$DOMAIN} {
+	reverse_proxy backend:8080
+	encode gzip
+}
+
+files.{$DOMAIN} {
+	# Caddy preserves the Host header by default — MinIO SigV4 presigned URLs need that.
+	reverse_proxy minio:9000
+}
