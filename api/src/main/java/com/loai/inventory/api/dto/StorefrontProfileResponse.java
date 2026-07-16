@@ -21,6 +21,7 @@ public class StorefrontProfileResponse {
   private String paymentInstructions;
   private String metaTitle;
   private String metaDescription;
+  private String ogImageVersion;
 
   private StorefrontProfileResponse() {}
 
@@ -37,6 +38,7 @@ public class StorefrontProfileResponse {
     r.paymentInstructions = v.paymentInstructions();
     r.metaTitle = v.metaTitle();
     r.metaDescription = v.metaDescription();
+    r.ogImageVersion = v.ogImageVersion();
     return r;
   }
 
@@ -82,5 +84,9 @@ public class StorefrontProfileResponse {
 
   public String getMetaDescription() {
     return metaDescription;
+  }
+
+  public String getOgImageVersion() {
+    return ogImageVersion;
   }
 }

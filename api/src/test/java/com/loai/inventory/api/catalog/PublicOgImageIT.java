@@ -3,6 +3,9 @@ package com.loai.inventory.api.catalog;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -219,19 +222,43 @@ class PublicOgImageIT {
   }
 
   @Test
-  void profile_carriesNoOgImageKeyOrUrl() throws Exception {
+  void profile_carriesOgImageVersion_butNoKeyOrUrl() throws Exception {
     UUID id = insertOrg("acme", true);
-    setOgKey(id, id + "/og/share.png");
+    String ogKey = id + "/og/share.png";
+    setOgKey(id, ogKey);
+
+    var v1 = storefront.profile("acme");
+    // A cache-busting version token is present — a short one-way hash embedding no key material.
+    assertNotNull(v1.ogImageVersion());
+    assertTrue(v1.ogImageVersion().matches("[0-9a-f]{12}"), v1.ogImageVersion());
+    assertTrue(
+        !v1.ogImageVersion().contains(ogKey) && !v1.ogImageVersion().contains("/og/"),
+        "version must not embed the object key");
 
     String json =
-        JSON.writeValueAsString(
-            com.loai.inventory.api.dto.StorefrontProfileResponse.from(storefront.profile("acme")));
-    // The og image is never in the profile — the stable GET .../og-image route IS the URL, so no
-    // og key or (expiring) presigned og URL ever crosses the wire (C2, epic §6). The profile's
-    // logo_url is a separate, legitimate display URL and is out of scope here.
-    for (String forbidden : new String[] {"og_image", "/og/"}) {
+        JSON.writeValueAsString(com.loai.inventory.api.dto.StorefrontProfileResponse.from(v1));
+    // The version surfaces (so the storefront can ?v=-bust it); the raw object key, its /og/ path,
+    // and any (expiring) presigned og URL never cross the wire — the stable GET .../og-image route
+    // remains the URL (C2, epic §6). The profile's logo_url is a separate, legitimate display URL.
+    assertTrue(json.contains("og_image_version"), json);
+    for (String forbidden : new String[] {ogKey, "/og/"}) {
       assertTrue(!json.contains(forbidden), "leaked '" + forbidden + "' in profile: " + json);
     }
+
+    // Attaching a DIFFERENT image changes the version → a new og:image URL → scrapers re-fetch.
+    setOgKey(id, id + "/og/share-v2.png");
+    assertNotEquals(v1.ogImageVersion(), storefront.profile("acme").ogImageVersion());
+  }
+
+  @Test
+  void profile_ogImageVersion_fallsBackToLogo_nullWhenNeither() {
+    insertOrg("bare", true);
+    assertNull(storefront.profile("bare").ogImageVersion(), "no og key, no logo → no version");
+
+    UUID logoOnly = insertOrg("logoonly", true);
+    setLogoKey(logoOnly, logoOnly + "/logo/brand.png");
+    // Same fallback chain as the streamed image: with only a logo, the logo keys the version.
+    assertNotNull(storefront.profile("logoonly").ogImageVersion());
   }
 
   // ───────── helpers ─────────

@@ -130,7 +130,8 @@ public class StorefrontService {
       String instapayHandle,
       String paymentInstructions,
       String metaTitle,
-      String metaDescription) {}
+      String metaDescription,
+      String ogImageVersion) {}
 
   /** v1 constants: both locales ship live; single-currency platform. */
   private static final List<String> SUPPORTED_LOCALES = List.of("ar", "en");
@@ -152,6 +153,16 @@ public class StorefrontService {
     // meta_title/meta_description cross verbatim (nulls omitted by the DTO's NON_NULL); the profile
     // carries NO og-image URL — the stable GET /api/public/{slug}/og-image route IS the URL, so a
     // presigned URL (which expires) never reaches a meta tag (slice C2, epic §6).
+    // og_image_version: a short, one-way hash of the EFFECTIVE og key (og_image_object_key, else
+    // logo_object_key — the same fallback chain as ogImage()), null when neither is set. It carries
+    // no key material (the key never crosses the public boundary) — only a cache-busting token the
+    // storefront appends as ?v= so a changed share image yields a changed og:image URL and social
+    // scrapers re-fetch instead of serving the stale cached thumbnail forever.
+    String effectiveOgKey = trimToNull(org.getOgImageObjectKey());
+    if (effectiveOgKey == null) {
+      effectiveOgKey = trimToNull(org.getLogoObjectKey());
+    }
+    String ogImageVersion = effectiveOgKey == null ? null : shortHash(effectiveOgKey);
     return new StorefrontProfileView(
         org.getName(),
         org.getSlug(),
@@ -163,7 +174,25 @@ public class StorefrontService {
         org.getInstapayHandle(),
         org.getPaymentInstructions(),
         org.getMetaTitle(),
-        org.getMetaDescription());
+        org.getMetaDescription(),
+        ogImageVersion);
+  }
+
+  /**
+   * A short (12 hex chars), stable, one-way hash of an object key — the og-image cache-busting
+   * version token. SHA-256 truncated: not reversible to the key (which never crosses the public
+   * boundary), yet deterministic — the same image key yields the same {@code ?v=} and a newly
+   * attached image yields a different one, which is exactly what forces a scraper re-fetch.
+   */
+  private static String shortHash(String value) {
+    try {
+      byte[] digest =
+          java.security.MessageDigest.getInstance("SHA-256")
+              .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      return java.util.HexFormat.of().formatHex(digest).substring(0, 12);
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 not available", e);
+    }
   }
 
   // ───────── og-image (C2) ─────────
