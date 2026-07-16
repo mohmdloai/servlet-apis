@@ -3,6 +3,8 @@ package com.loai.inventory.api.catalog;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -114,6 +116,7 @@ class StorefrontProfileIT {
     assertEquals("acme", v.slug());
     assertNull(v.logoUrl(), "no logo set → null");
     assertNull(v.themeColor());
+    assertNull(v.ogImageVersion(), "no og key, no logo → no version");
     assertEquals("ar", v.defaultLocale(), "default landing locale is ar");
     assertEquals(java.util.List.of("ar", "en"), v.supportedLocales());
     assertEquals("EGP", v.currency());
@@ -257,10 +260,11 @@ class StorefrontProfileIT {
     // C2: unset SEO text fields are null (and omitted from JSON).
     assertNull(v.metaTitle());
     assertNull(v.metaDescription());
+    assertNull(v.ogImageVersion());
   }
 
   @Test
-  void ownerSetsSeoMetadata_textSurfacesOnProfile_ogKeyDoesNot() throws Exception {
+  void ownerSetsSeoMetadata_textAndVersionSurface_ogKeyDoesNot() throws Exception {
     UUID id = insertOrg("acme", "Acme Store", true);
 
     orgService.update(
@@ -271,14 +275,30 @@ class StorefrontProfileIT {
         null,
         null,
         new OrgService.SeoMetadata("Acme — Fair Prices", "Everyday essentials, delivered.", null));
+    // Attach a share (og) image key directly (presigning is offline in this IT).
+    String ogKey = id + "/og/share.png";
+    dsl.update(ORG).set(ORG.OG_IMAGE_OBJECT_KEY, ogKey).where(ORG.ID.eq(id)).execute();
 
     StorefrontProfileView v = storefront.profile("acme");
     assertEquals("Acme — Fair Prices", v.metaTitle());
     assertEquals("Everyday essentials, delivered.", v.metaDescription());
 
-    // The public profile never carries an og-image URL — the stable route is the URL (C2, epic §6).
+    // The public profile carries a cache-busting og_image_version (a short hash) but NEVER the raw
+    // object key — the stable route stays the URL; the version is only how a changed image
+    // invalidates a scraper's cache (C2, epic §6).
+    assertNotNull(v.ogImageVersion());
+    assertFalse(v.ogImageVersion().contains(ogKey) || v.ogImageVersion().contains("/og/"));
     String json = JSON.writeValueAsString(StorefrontProfileResponse.from(v));
-    assertFalse(json.contains("og_image"), json);
+    assertTrue(json.contains("og_image_version"), json);
+    assertFalse(json.contains(ogKey), "raw og key leaked: " + json);
+    assertFalse(json.contains("/og/"), "raw og key path leaked: " + json);
+
+    // Attaching a DIFFERENT image changes the version (→ a new og:image URL → scraper re-fetch).
+    dsl.update(ORG)
+        .set(ORG.OG_IMAGE_OBJECT_KEY, id + "/og/share-v2.png")
+        .where(ORG.ID.eq(id))
+        .execute();
+    assertNotEquals(v.ogImageVersion(), storefront.profile("acme").ogImageVersion());
   }
 
   private UUID insertOrg(String slug, String name, boolean active) {
