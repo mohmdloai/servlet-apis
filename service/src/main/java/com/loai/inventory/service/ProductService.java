@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Product;
 import com.loai.inventory.domain.repository.ProductRepository;
 import java.math.BigDecimal;
@@ -73,7 +74,9 @@ public class ProductService {
       BigDecimal basePrice,
       String sku,
       String barcode) {
-    validateProductFields(name, basePrice, sku);
+    String normalizedName = Text.normalizeText(name);
+    String normalizedDescription = Text.normalizeText(description);
+    validateProductFields(normalizedName, basePrice, sku);
     String normalizedBarcode = normalizeBarcode(barcode);
 
     return dsl.transactionResult(
@@ -87,8 +90,8 @@ public class ProductService {
 
           Product product = new Product();
           product.setOrgId(orgId);
-          product.setName(name);
-          product.setDescription(description);
+          product.setName(normalizedName);
+          product.setDescription(normalizedDescription);
           product.setBasePrice(basePrice);
           product.setSku(sku);
           product.setBarcode(normalizedBarcode);
@@ -107,7 +110,9 @@ public class ProductService {
       BigDecimal basePrice,
       String sku,
       String barcode) {
-    validateProductFields(name, basePrice, sku);
+    String normalizedName = Text.normalizeText(name);
+    String normalizedDescription = Text.normalizeText(description);
+    validateProductFields(normalizedName, basePrice, sku);
     String normalizedBarcode = normalizeBarcode(barcode);
 
     return dsl.transactionResult(
@@ -124,8 +129,8 @@ public class ProductService {
                 "Barcode already used by another product: " + normalizedBarcode);
           }
 
-          existing.setName(name);
-          existing.setDescription(description);
+          existing.setName(normalizedName);
+          existing.setDescription(normalizedDescription);
           existing.setBasePrice(basePrice);
           existing.setSku(sku);
           existing.setBarcode(normalizedBarcode);
@@ -171,21 +176,21 @@ public class ProductService {
   }
 
   /**
-   * Normalize an optional barcode: trim, treat blank as absent ({@code null} → column stays NULL,
-   * and the partial unique index allows many NULLs), and cap at the {@code VARCHAR(64)} column
-   * width. The barcode is an opaque symbology-agnostic string — no format enforcement.
+   * Normalize an optional barcode through the canonical numeric-identifier form ({@link
+   * Text#normalizeNumeric}): NFC, fold Arabic-Indic/Persian digits to ASCII, strip invisible
+   * bidi/zero-width controls, collapse whitespace, blank → absent ({@code null} → column stays
+   * NULL, and the partial unique index allows many NULLs). Cap at 64 <em>code points</em> (never
+   * bytes — the column is symbology-agnostic and an Arabic digit is multiple UTF-8 bytes). No
+   * format enforcement beyond the width.
    */
   private String normalizeBarcode(String barcode) {
-    if (barcode == null) {
+    String normalized = Text.normalizeNumeric(barcode);
+    if (normalized == null) {
       return null;
     }
-    String trimmed = barcode.trim();
-    if (trimmed.isEmpty()) {
-      return null;
-    }
-    if (trimmed.length() > 64) {
+    if (normalized.codePointCount(0, normalized.length()) > 64) {
       throw new ValidationException("barcode must be at most 64 characters");
     }
-    return trimmed;
+    return normalized;
   }
 }

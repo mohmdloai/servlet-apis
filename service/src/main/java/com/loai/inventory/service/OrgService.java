@@ -4,6 +4,7 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.storage.ObjectStorage;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.repository.OrgRepository;
@@ -129,7 +130,7 @@ public class OrgService {
           }
 
           Org org = new Org();
-          org.setName(name);
+          org.setName(Text.normalizeText(name));
           org.setSlug(slug);
           org.setActive(true);
 
@@ -253,7 +254,7 @@ public class OrgService {
           OrgRepository orgRepo = orgRepoFactory.create(txDsl);
 
           Org existing = orgRepo.findById(id).orElseThrow(() -> new NotFoundException("Org", id));
-          existing.setName(name);
+          existing.setName(Text.normalizeText(name));
           if (refundApprovalThreshold != null) {
             existing.setRefundApprovalThreshold(refundApprovalThreshold);
           }
@@ -281,9 +282,9 @@ public class OrgService {
       return;
     }
     if (b.themeColor() != null) org.setThemeColor(blankToNull(b.themeColor()));
-    if (b.instapayHandle() != null) org.setInstapayHandle(blankToNull(b.instapayHandle()));
+    if (b.instapayHandle() != null) org.setInstapayHandle(Text.normalizeText(b.instapayHandle()));
     if (b.paymentInstructions() != null) {
-      org.setPaymentInstructions(blankToNull(b.paymentInstructions()));
+      org.setPaymentInstructions(Text.normalizeText(b.paymentInstructions()));
     }
     if (b.defaultLocale() != null && !b.defaultLocale().isBlank()) {
       org.setDefaultLocale(b.defaultLocale().trim().toLowerCase());
@@ -321,8 +322,9 @@ public class OrgService {
     if (s == null) {
       return;
     }
-    if (s.metaTitle() != null) org.setMetaTitle(blankToNull(s.metaTitle()));
-    if (s.metaDescription() != null) org.setMetaDescription(blankToNull(s.metaDescription()));
+    if (s.metaTitle() != null) org.setMetaTitle(Text.normalizeText(s.metaTitle()));
+    if (s.metaDescription() != null)
+      org.setMetaDescription(Text.normalizeText(s.metaDescription()));
     if (s.ogImageObjectKey() != null) org.setOgImageObjectKey(blankToNull(s.ogImageObjectKey()));
   }
 
@@ -365,15 +367,15 @@ public class OrgService {
     if (p == null) {
       return;
     }
-    if (p.legalName() != null) org.setLegalName(blankToNull(p.legalName()));
+    if (p.legalName() != null) org.setLegalName(Text.normalizeText(p.legalName()));
     if (p.taxRegistrationNumber() != null)
-      org.setTaxRegistrationNumber(blankToNull(p.taxRegistrationNumber()));
-    if (p.addressLine1() != null) org.setAddressLine1(blankToNull(p.addressLine1()));
-    if (p.addressLine2() != null) org.setAddressLine2(blankToNull(p.addressLine2()));
-    if (p.city() != null) org.setCity(blankToNull(p.city()));
-    if (p.country() != null) org.setCountry(blankToNull(p.country()));
-    if (p.phone() != null) org.setPhone(blankToNull(p.phone()));
-    if (p.contactEmail() != null) org.setContactEmail(blankToNull(p.contactEmail()));
+      org.setTaxRegistrationNumber(Text.normalizeNumeric(p.taxRegistrationNumber()));
+    if (p.addressLine1() != null) org.setAddressLine1(Text.normalizeText(p.addressLine1()));
+    if (p.addressLine2() != null) org.setAddressLine2(Text.normalizeText(p.addressLine2()));
+    if (p.city() != null) org.setCity(Text.normalizeText(p.city()));
+    if (p.country() != null) org.setCountry(Text.normalizeText(p.country()));
+    if (p.phone() != null) org.setPhone(Text.normalizeNumeric(p.phone()));
+    if (p.contactEmail() != null) org.setContactEmail(Text.normalizeEmail(p.contactEmail()));
     if (p.logoObjectKey() != null) org.setLogoObjectKey(blankToNull(p.logoObjectKey()));
   }
 

@@ -3,6 +3,7 @@ package com.loai.inventory.service.auth;
 import com.loai.inventory.common.exception.AuthenticationException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.security.JwtUtil;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
@@ -286,10 +287,7 @@ public class CustomerAuthService {
    * Normalize an email for lookup/challenge keying, or {@code null} when not a single valid one.
    */
   private static String normalizeEmail(String raw) {
-    if (raw == null) {
-      return null;
-    }
-    String normalized = raw.trim().toLowerCase();
+    String normalized = Text.normalizeEmail(raw);
     return EmailAddresses.isSingleValid(normalized) ? normalized : null;
   }
 

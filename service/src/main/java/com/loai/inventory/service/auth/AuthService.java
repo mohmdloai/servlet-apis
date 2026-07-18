@@ -7,6 +7,7 @@ import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.security.JwtUtil;
 import com.loai.inventory.common.security.PasswordHasher;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.AppUser;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.ImpersonationEvent;
@@ -63,9 +64,11 @@ public class AuthService {
       boolean readOnly) {}
 
   public LoginResult login(String email, String rawPassword, String deviceInfo, String sourceIp) {
+    // Normalize the presented address the same way registration/admin-create store it (NFC +
+    // lowercase + trim), so login is case-insensitive and matches the canonical stored value.
     AppUser user =
         userRepo
-            .findByEmail(email)
+            .findByEmail(Text.normalizeEmail(email))
             .orElseThrow(() -> new AuthenticationException("Invalid email or password"));
     // no point doing crypto work (password hashing) for a disabled account.
     if (!user.isActive()) {

@@ -4,6 +4,7 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.security.PasswordHasher;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.AppUser;
 import com.loai.inventory.domain.model.AppUserTokenPurpose;
@@ -127,12 +128,13 @@ public class PlatformOrgService {
    */
   public ProvisionResult provision(
       SecurityContext actor, Environment env, String name, String slug, String ownerEmail) {
-    OrgService.validateName(name);
+    String normalizedName = Text.normalizeText(name);
+    OrgService.validateName(normalizedName);
     OrgService.validateSlug(slug);
     if (ownerEmail == null || ownerEmail.isBlank()) {
       throw new ValidationException("owner_email is required");
     }
-    String email = ownerEmail.trim();
+    String email = Text.normalizeEmail(ownerEmail);
     OffsetDateTime now = OffsetDateTime.now();
     // A minted owner's INVITE token, captured from the txn so we can email it after commit.
     String[] inviteToken = new String[1];
@@ -171,7 +173,7 @@ public class PlatformOrgService {
               }
 
               Org org = new Org();
-              org.setName(name);
+              org.setName(normalizedName);
               org.setSlug(slug);
               org.setActive(true);
               Org saved = orgRepo.insert(org);

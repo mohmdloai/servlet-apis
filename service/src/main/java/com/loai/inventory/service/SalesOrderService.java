@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.Fulfillment;
@@ -723,8 +724,9 @@ public class SalesOrderService {
             idempotencyKey,
             now);
     order.setTotals(subtotal, taxTotal, discountTotal, now);
-    if (notes != null && !notes.isBlank()) {
-      order.updateNotes(notes, now);
+    String normalizedNotes = Text.normalizeText(notes);
+    if (normalizedNotes != null) {
+      order.updateNotes(normalizedNotes, now);
     }
     return new BuiltOrder(order, orderLines, resolvedCustomer);
   }
@@ -745,16 +747,16 @@ public class SalesOrderService {
     }
     // A single valid address only — a comma list or injected header would otherwise be stored and
     // later fan the emailed order link out to arbitrary recipients (see MagicLink/email channel).
-    String normalizedEmail = normalize(customer.email());
+    String normalizedEmail = Text.normalizeEmail(customer.email());
     if (!EmailAddresses.isSingleValid(normalizedEmail)) {
       throw new ValidationException("customer.email is not a valid single email address");
     }
     return repo.upsertCustomerByEmail(
         orgId,
         normalizedEmail,
-        trimOrNull(customer.name()),
-        trimOrNull(customer.phone()),
-        trimOrNull(customer.address()));
+        Text.normalizeText(customer.name()),
+        Text.normalizeNumeric(customer.phone()),
+        Text.normalizeText(customer.address()));
   }
 
   /**
@@ -775,9 +777,9 @@ public class SalesOrderService {
     return repo.upsertCustomerByEmail(
         orgId,
         existing.getEmail(),
-        trimOrNull(delivery.recipient()),
-        trimOrNull(delivery.phone()),
-        trimOrNull(delivery.address()));
+        Text.normalizeText(delivery.recipient()),
+        Text.normalizeNumeric(delivery.phone()),
+        Text.normalizeText(delivery.address()));
   }
 
   // Validation
@@ -832,15 +834,5 @@ public class SalesOrderService {
     }
     return repo.findCustomerById(orgId, customerId)
         .orElseThrow(() -> new NotFoundException("Customer", customerId));
-  }
-
-  private static String normalize(String email) {
-    return email == null ? null : email.trim().toLowerCase();
-  }
-
-  private static String trimOrNull(String s) {
-    if (s == null) return null;
-    String t = s.trim();
-    return t.isEmpty() ? null : t;
   }
 }

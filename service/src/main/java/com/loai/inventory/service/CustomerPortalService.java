@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.CustomerAddress;
@@ -253,10 +254,10 @@ public class CustomerPortalService {
     CustomerAddress a = new CustomerAddress();
     a.setOrgId(orgId);
     a.setCustomerId(customerId);
-    a.setLabel(trimToNull(input.label()));
-    a.setRecipient(trimToNull(input.recipient()));
-    a.setPhone(trimToNull(input.phone()));
-    a.setAddress(trimToNull(input.address()));
+    a.setLabel(Text.normalizeText(input.label()));
+    a.setRecipient(Text.normalizeText(input.recipient()));
+    a.setPhone(Text.normalizeNumeric(input.phone()));
+    a.setAddress(Text.normalizeText(input.address()));
     a.setDefault(makeDefault);
     return repo.insert(a);
   }
@@ -275,10 +276,10 @@ public class CustomerPortalService {
           CustomerAddress existing =
               repo.findById(orgId, customerId, addressId)
                   .orElseThrow(() -> new NotFoundException("Address not found: " + addressId));
-          existing.setLabel(trimToNull(input.label()));
-          existing.setRecipient(trimToNull(input.recipient()));
-          existing.setPhone(trimToNull(input.phone()));
-          existing.setAddress(trimToNull(input.address()));
+          existing.setLabel(Text.normalizeText(input.label()));
+          existing.setRecipient(Text.normalizeText(input.recipient()));
+          existing.setPhone(Text.normalizeNumeric(input.phone()));
+          existing.setAddress(Text.normalizeText(input.address()));
           CustomerAddress saved = repo.update(existing);
           if (input.makeDefault() && !saved.isDefault()) {
             repo.clearDefault(orgId, customerId);
@@ -556,13 +557,13 @@ public class CustomerPortalService {
               repo.findById(orgId, customerId)
                   .orElseThrow(() -> new NotFoundException("Customer", customerId));
           if (update.name() != null) {
-            existing.setName(trimToNull(update.name()));
+            existing.setName(Text.normalizeText(update.name()));
           }
           if (update.phone() != null) {
-            existing.setPhone(trimToNull(update.phone()));
+            existing.setPhone(Text.normalizeNumeric(update.phone()));
           }
           if (update.address() != null) {
-            existing.setAddress(trimToNull(update.address()));
+            existing.setAddress(Text.normalizeText(update.address()));
           }
           // update() rewrites email too — but we pass the existing email untouched, so it is a
           // no-op
@@ -581,13 +582,5 @@ public class CustomerPortalService {
     if (value != null && value.length() > MAX_FIELD_LENGTH) {
       throw new ValidationException(field + " must be at most " + MAX_FIELD_LENGTH + " characters");
     }
-  }
-
-  private static String trimToNull(String s) {
-    if (s == null) {
-      return null;
-    }
-    String t = s.trim();
-    return t.isEmpty() ? null : t;
   }
 }

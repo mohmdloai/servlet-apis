@@ -4,6 +4,7 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.security.PasswordHasher;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.AppUser;
 import com.loai.inventory.domain.model.Environment;
@@ -117,7 +118,7 @@ public class UserAdminService {
     if (type != ActorType.USER && type != ActorType.SERVICE) {
       throw new ValidationException("actor_type must be USER or SERVICE");
     }
-    String normalizedEmail = email.trim();
+    String normalizedEmail = Text.normalizeEmail(email);
     String hash =
         (rawPassword == null || rawPassword.isBlank())
             ? PasswordHasher.hash("!" + UUID.randomUUID()) // unusable until reset
