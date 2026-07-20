@@ -5,7 +5,9 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.PageKind;
 import com.loai.inventory.domain.model.StorefrontPage;
+import com.loai.inventory.domain.model.StorefrontPageTranslation;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
+import com.loai.inventory.domain.repository.StorefrontPageRepository;
 import com.loai.inventory.domain.repository.StorefrontPageRepositoryFactory;
 import java.util.List;
 import java.util.Locale;
@@ -54,7 +56,7 @@ public class StorefrontPageService {
    */
   public record PageInput(String bodyAr, String bodyEn) {}
 
-  // ───────── admin reads/writes (org-scoped by id, VIEWER read / STAFF write) ─────────
+  // admin reads/writes (org-scoped by id, VIEWER read / STAFF write)
 
   /** Every page the org has written (both bodies + updated_at), {@code kind ASC}. */
   public List<StorefrontPage> list(UUID orgId) {
@@ -86,7 +88,18 @@ public class StorefrontPageService {
           page.setBodyAr(bodyAr);
           page.setBodyEn(bodyEn);
 
-          StorefrontPage saved = pageRepoFactory.create(tx).upsert(page);
+          StorefrontPageRepository repo = pageRepoFactory.create(tx);
+          StorefrontPage saved = repo.upsert(page);
+          // Dual-write per-language rows (slice L4); legacy paired columns stay authoritative until
+          // L6. One row per non-null body side (the default-locale row is guaranteed by validate).
+          List<StorefrontPageTranslation> rows = new java.util.ArrayList<>(2);
+          if (bodyAr != null) {
+            rows.add(new StorefrontPageTranslation("ar", bodyAr));
+          }
+          if (bodyEn != null) {
+            rows.add(new StorefrontPageTranslation("en", bodyEn));
+          }
+          repo.replaceTranslations(saved.getId(), rows);
           log.info("Upserted storefront_page kind={} orgId={}", kind.wire(), orgId);
           return saved;
         });
@@ -105,7 +118,7 @@ public class StorefrontPageService {
         });
   }
 
-  // ───────── public reads (org-scoped by slug, anonymous) ─────────
+  // public reads (org-scoped by slug, anonymous)
 
   /**
    * The anonymous footer source: the kinds this org has written, {@code kind ASC} (the DTO keeps
@@ -118,20 +131,43 @@ public class StorefrontPageService {
   }
 
   /**
-   * One page by kind for the anonymous storefront (both bodies verbatim — the client resolves the
-   * §1 fallback). Unknown kind value → 400 (the closed set is the contract); unknown/inactive slug
-   * → opaque 404; a valid kind the org never wrote → 404 (the page genuinely doesn't exist).
+   * One page by kind for the anonymous storefront, resolved to a <b>single</b> {@code body} by
+   * {@code ?locale=} (slice L4 — reverses the shipped C4 both-bodies-client-resolve; cache keyed
+   * per (org, locale)): the requested-locale translation row, else the default-locale row, else the
+   * legacy default-locale column — never null. Unknown kind value → 400; unknown/inactive slug →
+   * opaque 404; a valid kind the org never wrote → 404; unknown locale → 400.
    */
-  public StorefrontPage publicPage(String orgSlug, String rawKind) {
+  public PublicPageView publicPage(String orgSlug, String rawKind, String locale) {
     PageKind kind = parseKind(rawKind);
-    UUID orgId = resolveOrg(orgSlug).getId();
-    return pageRepoFactory
-        .create(rootDsl)
-        .findByKind(orgId, kind)
-        .orElseThrow(() -> new NotFoundException("Page not found: " + kind.wire()));
+    Org org = resolveOrg(orgSlug);
+    String defaultLocale = defaultLocaleOf(org);
+    String resolvedLocale = resolveRequestedLocale(locale, defaultLocale);
+    StorefrontPageRepository repo = pageRepoFactory.create(rootDsl);
+    StorefrontPage page =
+        repo.findByKind(org.getId(), kind)
+            .orElseThrow(() -> new NotFoundException("Page not found: " + kind.wire()));
+    List<StorefrontPageTranslation> ts = repo.findTranslations(page.getId());
+    String legacyDefault = "en".equals(defaultLocale) ? page.getBodyEn() : page.getBodyAr();
+    String body = coalesce(bodyOf(ts, resolvedLocale), bodyOf(ts, defaultLocale), legacyDefault);
+    return new PublicPageView(kind.wire(), body, page.getUpdatedAt());
   }
 
-  // ───────── helpers ─────────
+  /** A public page resolved to one locale (slice L4). */
+  public record PublicPageView(String kind, String body, java.time.OffsetDateTime updatedAt) {}
+
+  private static String bodyOf(List<StorefrontPageTranslation> ts, String lang) {
+    if (ts == null) {
+      return null;
+    }
+    for (StorefrontPageTranslation t : ts) {
+      if (t.language().equals(lang)) {
+        return t.body();
+      }
+    }
+    return null;
+  }
+
+  // helpers
 
   private static PageKind parseKind(String rawKind) {
     try {
@@ -164,6 +200,34 @@ public class StorefrontPageService {
             .orElseThrow(() -> new NotFoundException("Org", orgId));
     String loc = org.getDefaultLocale();
     return loc == null || loc.isBlank() ? "ar" : loc.trim().toLowerCase(Locale.ROOT);
+  }
+
+  /**
+   * The BCP-47 languages the storefront serves (mirrors StorefrontService); L4 locale resolution.
+   */
+  private static final java.util.Set<String> SUPPORTED_LOCALES = java.util.Set.of("ar", "en");
+
+  private static String defaultLocaleOf(Org org) {
+    String loc = org.getDefaultLocale();
+    return loc == null || loc.isBlank() ? "ar" : loc.trim().toLowerCase(Locale.ROOT);
+  }
+
+  private static String resolveRequestedLocale(String requested, String defaultLocale) {
+    if (requested == null || requested.isBlank()) {
+      return defaultLocale;
+    }
+    String loc = requested.trim().toLowerCase(Locale.ROOT);
+    if (!SUPPORTED_LOCALES.contains(loc)) {
+      throw new ValidationException("unsupported locale: " + loc);
+    }
+    return loc;
+  }
+
+  private static String coalesce(String a, String b, String c) {
+    if (a != null) {
+      return a;
+    }
+    return b != null ? b : c;
   }
 
   private Org resolveOrg(String orgSlug) {

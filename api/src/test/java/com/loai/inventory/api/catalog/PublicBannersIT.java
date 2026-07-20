@@ -120,7 +120,7 @@ class PublicBannersIT {
             + " CASCADE");
   }
 
-  // ───────── AC6: only active, in-window, resolving — in sort order ─────────
+  // AC6: only active, in-window, resolving — in sort order
 
   @Test
   void servesOnlyActiveInWindowResolving_inSortOrder() {
@@ -141,7 +141,7 @@ class PublicBannersIT {
 
     List<PublicBannerView> served = storefront.banners("acme");
     assertEquals(
-        List.of("first", "second"), served.stream().map(PublicBannerView::headlineAr).toList());
+        List.of("first", "second"), served.stream().map(PublicBannerView::headline).toList());
   }
 
   @Test
@@ -173,10 +173,10 @@ class PublicBannersIT {
     assertTrue(storefront.banners("acme").isEmpty());
   }
 
-  // ───────── AC7: whitelist + both locales ─────────
+  // AC7 (L4-updated): whitelist + single locale-resolved value
 
   @Test
-  void publicRow_isWhitelisted_carriesBothLocales() throws Exception {
+  void publicRow_isWhitelisted_singleValueResolvedByLocale() throws Exception {
     UUID org = insertOrg("acme", "ar", true);
     insertCategory(org, "kitchen");
     banners.create(
@@ -193,15 +193,25 @@ class PublicBannersIT {
             null,
             null));
 
+    // L4: en request resolves to the English copy; ar (default) to the Arabic; unset → default.
+    assertEquals("Sale", storefront.banners("acme", "en").get(0).headline());
+    assertEquals("Big discounts", storefront.banners("acme", "en").get(0).subheading());
+    assertEquals("عرض", storefront.banners("acme", "ar").get(0).headline());
+    assertEquals("عرض", storefront.banners("acme").get(0).headline());
+
     List<PublicBannerResponse> data =
-        storefront.banners("acme").stream().map(PublicBannerResponse::from).toList();
+        storefront.banners("acme", "en").stream().map(PublicBannerResponse::from).toList();
     String json = JSON.writeValueAsString(data);
 
-    // Both locale columns cross verbatim + the structured target.
-    assertTrue(json.contains("headline_ar"), json);
-    assertTrue(json.contains("headline_en"), json);
+    // Single resolved values + the structured target — the paired _ar/_en keys are gone (L4).
+    assertTrue(json.contains("headline"), json);
+    assertTrue(json.contains("subheading"), json);
     assertTrue(json.contains("target_type"), json);
     assertTrue(json.contains("target_slug"), json);
+    assertFalse(json.contains("headline_ar"), json);
+    assertFalse(json.contains("headline_en"), json);
+    assertFalse(json.contains("subheading_ar"), json);
+    assertFalse(json.contains("subheading_en"), json);
     // No internal field leaks (JSON keys — the image-less row can't smuggle a key via a URL).
     for (String forbidden :
         new String[] {
@@ -219,7 +229,17 @@ class PublicBannersIT {
     }
   }
 
-  // ───────── AC8: no price/discount column (structural honesty rule) ─────────
+  @Test
+  void unsupportedLocale_is400() {
+    UUID org = insertOrg("acme", "ar", true);
+    insertCategory(org, "kitchen");
+    banners.create(org, input("عرض", "category", "kitchen"));
+    assertThrows(
+        com.loai.inventory.common.exception.ValidationException.class,
+        () -> storefront.banners("acme", "fr"));
+  }
+
+  // AC8: no price/discount column (structural honesty rule)
 
   @Test
   void schema_hasNoPriceOrDiscountColumn() {
@@ -241,7 +261,7 @@ class PublicBannersIT {
     }
   }
 
-  // ───────── opaque 404 ─────────
+  // opaque 404
 
   @Test
   void unknownOrInactiveOrg_is404() {
@@ -250,7 +270,7 @@ class PublicBannersIT {
     assertThrows(NotFoundException.class, () -> storefront.banners("ghost"));
   }
 
-  // ───────── fixtures ─────────
+  // fixtures
 
   private static BannerInput input(String headlineAr, String targetType, String targetSlug) {
     return new BannerInput(

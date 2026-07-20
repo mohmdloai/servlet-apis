@@ -16,6 +16,8 @@ import com.loai.inventory.domain.model.ProductListingImage;
 import com.loai.inventory.domain.model.ProductListingTranslation;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
+import com.loai.inventory.domain.model.StorefrontBanner;
+import com.loai.inventory.domain.model.StorefrontBannerTranslation;
 import com.loai.inventory.domain.repository.CategoryRepository;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
@@ -140,7 +142,7 @@ public class StorefrontService {
 
   private static final String CURRENCY_EGP = "EGP";
 
-  // ───────── reads ─────────
+  // reads
 
   /**
    * The anonymous storefront profile for {@code orgSlug}: name/slug/logo/theme/locales/currency +
@@ -197,7 +199,7 @@ public class StorefrontService {
     }
   }
 
-  // ───────── og-image (C2) ─────────
+  // og-image (C2)
 
   /** The bytes + content type of a storefront's og image, for the stable public stream (C2). */
   public record OgImage(byte[] bytes, String contentType) {}
@@ -226,54 +228,88 @@ public class StorefrontService {
         .orElseThrow(() -> new NotFoundException("Storefront image unavailable"));
   }
 
-  // ───────── banners (C1) ─────────
+  // banners (C1)
 
   /**
    * A public banner row — whitelisted for the anonymous storefront (customization epic slice C1).
-   * Both locale columns cross verbatim so the cache stays one entry per org (the client resolves
-   * the path-locale → default-locale fallback, epic §1); {@code imageUrl} is a short-lived
-   * presigned GET URL or null (→ gradient slide); the target is the structured slug pair. Carries
-   * <b>no</b> id, org id, object key, window bounds, or timestamps.
+   * {@code headline}/{@code subheading} are resolved to a <b>single</b> value by {@code ?locale=}
+   * (slice L4 — this reverses the shipped C1 both-locales-client-resolve; the cache is now keyed
+   * per (org, locale)); {@code imageUrl} is a short-lived presigned GET URL or null (→ gradient
+   * slide); the target is the structured slug pair. Carries <b>no</b> id, org id, object key,
+   * window bounds, or timestamps.
    */
   public record PublicBannerView(
-      String headlineAr,
-      String headlineEn,
-      String subheadingAr,
-      String subheadingEn,
-      String imageUrl,
-      String targetType,
-      String targetSlug) {}
+      String headline, String subheading, String imageUrl, String targetType, String targetSlug) {}
+
+  /** Locale-less overload — resolves to the org's default locale. */
+  public List<PublicBannerView> banners(String orgSlug) {
+    return banners(orgSlug, null);
+  }
 
   /**
    * The anonymous home-banner carousel for {@code orgSlug}: the org's banners that are active,
    * in-window, and whose target still resolves (a category that exists, or a <b>PUBLISHED</b>
    * listing), {@code sort_order ASC}. The stale-target filtering is the repository's JOIN (epic §3)
    * — a banner pointing at an unpublished listing silently drops here and returns when it
-   * re-publishes, with no edit from the merchant. 404 on unknown/inactive slug (opaque, via {@link
-   * #resolveOrg}).
+   * re-publishes, with no edit from the merchant. Each row's {@code headline}/{@code subheading} is
+   * resolved per field to {@code ?locale=} (requested → default → legacy paired column, slice L4).
+   * 404 on unknown/inactive slug (opaque, via {@link #resolveOrg}); unknown locale → 400.
    */
-  public List<PublicBannerView> banners(String orgSlug) {
-    UUID orgId = resolveOrg(orgSlug).getId();
-    return bannerRepoFactory
-        .create(rootDsl)
-        .findPublicResolved(orgId, OffsetDateTime.now())
-        .stream()
+  public List<PublicBannerView> banners(String orgSlug, String locale) {
+    Org org = resolveOrg(orgSlug);
+    UUID orgId = org.getId();
+    String defaultLocale = defaultLocaleOf(org);
+    String resolvedLocale = resolveRequestedLocale(locale, defaultLocale);
+    List<StorefrontBanner> rows =
+        bannerRepoFactory.create(rootDsl).findPublicResolved(orgId, OffsetDateTime.now());
+    Map<UUID, List<StorefrontBannerTranslation>> translations =
+        bannerRepoFactory
+            .create(rootDsl)
+            .findTranslationsForBanners(rows.stream().map(StorefrontBanner::getId).toList());
+    return rows.stream()
         .map(
-            b ->
-                new PublicBannerView(
-                    b.getHeadlineAr(),
-                    b.getHeadlineEn(),
-                    b.getSubheadingAr(),
-                    b.getSubheadingEn(),
-                    b.getImageObjectKey() == null
-                        ? null
-                        : storage.presignGet(b.getImageObjectKey()),
-                    b.getTargetType().wire(),
-                    b.getTargetSlug()))
+            b -> {
+              List<StorefrontBannerTranslation> ts = translations.get(b.getId());
+              StorefrontBannerTranslation pref = pickLang(ts, resolvedLocale);
+              StorefrontBannerTranslation def = pickLang(ts, defaultLocale);
+              String legacyHeadline =
+                  "en".equals(defaultLocale) ? b.getHeadlineEn() : b.getHeadlineAr();
+              String legacySub =
+                  "en".equals(defaultLocale) ? b.getSubheadingEn() : b.getSubheadingAr();
+              String headline =
+                  coalesce(
+                      pref == null ? null : pref.headline(),
+                      def == null ? null : def.headline(),
+                      legacyHeadline);
+              String subheading =
+                  coalesce(
+                      pref == null ? null : pref.subheading(),
+                      def == null ? null : def.subheading(),
+                      legacySub);
+              return new PublicBannerView(
+                  headline,
+                  subheading,
+                  b.getImageObjectKey() == null ? null : storage.presignGet(b.getImageObjectKey()),
+                  b.getTargetType().wire(),
+                  b.getTargetSlug());
+            })
         .toList();
   }
 
-  // ───────── checkout (B5) ─────────
+  private static StorefrontBannerTranslation pickLang(
+      List<StorefrontBannerTranslation> ts, String lang) {
+    if (ts == null) {
+      return null;
+    }
+    for (StorefrontBannerTranslation t : ts) {
+      if (t.language().equals(lang)) {
+        return t;
+      }
+    }
+    return null;
+  }
+
+  // checkout (B5)
 
   /** One cart line at checkout: a public listing slug + quantity. */
   public record CheckoutLine(String listingSlug, int quantity) {}
@@ -409,7 +445,7 @@ public class StorefrontService {
     }
   }
 
-  // ───────── availability (B2) ─────────
+  // availability (B2)
 
   /** One availability row: a public slug + the boolean {@code inStock} (never a quantity). */
   public record AvailabilityView(String slug, boolean inStock) {}
@@ -666,7 +702,7 @@ public class StorefrontService {
         .toList();
   }
 
-  // ───────── helpers ─────────
+  // helpers
 
   private static String trimToNull(String raw) {
     if (raw == null) {
@@ -765,7 +801,7 @@ public class StorefrontService {
         agg == null ? null : agg.count());
   }
 
-  // ───────── locale resolution (content-localization slice L2) ─────────
+  // locale resolution (content-localization slice L2)
 
   private static String defaultLocaleOf(Org org) {
     String loc = org.getDefaultLocale();

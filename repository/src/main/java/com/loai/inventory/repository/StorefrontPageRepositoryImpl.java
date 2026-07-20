@@ -1,12 +1,16 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.STOREFRONT_PAGE;
+import static com.loai.inventory.repository.generated.Tables.STOREFRONT_PAGE_TRANSLATION;
 
 import com.loai.inventory.domain.model.PageKind;
 import com.loai.inventory.domain.model.StorefrontPage;
+import com.loai.inventory.domain.model.StorefrontPageTranslation;
 import com.loai.inventory.domain.repository.StorefrontPageRepository;
 import com.loai.inventory.repository.generated.tables.records.StorefrontPageRecord;
+import com.loai.inventory.repository.generated.tables.records.StorefrontPageTranslationRecord;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -68,6 +72,36 @@ public final class StorefrontPageRepositoryImpl implements StorefrontPageReposit
             .where(STOREFRONT_PAGE.ORG_ID.eq(orgId).and(STOREFRONT_PAGE.KIND.eq(kind.wire())))
             .execute();
     return deleted > 0;
+  }
+
+  // --- translations (content-localization slice L4) ---
+
+  @Override
+  public void replaceTranslations(UUID pageId, List<StorefrontPageTranslation> translations) {
+    dsl.deleteFrom(STOREFRONT_PAGE_TRANSLATION)
+        .where(STOREFRONT_PAGE_TRANSLATION.PAGE_ID.eq(pageId))
+        .execute();
+    if (translations == null || translations.isEmpty()) {
+      return;
+    }
+    List<StorefrontPageTranslationRecord> rows = new ArrayList<>(translations.size());
+    for (StorefrontPageTranslation t : translations) {
+      StorefrontPageTranslationRecord r = dsl.newRecord(STOREFRONT_PAGE_TRANSLATION);
+      r.setPageId(pageId);
+      r.setLanguage(t.language());
+      r.setBody(t.body());
+      rows.add(r);
+    }
+    dsl.batchInsert(rows).execute();
+  }
+
+  @Override
+  public List<StorefrontPageTranslation> findTranslations(UUID pageId) {
+    return dsl.selectFrom(STOREFRONT_PAGE_TRANSLATION)
+        .where(STOREFRONT_PAGE_TRANSLATION.PAGE_ID.eq(pageId))
+        .orderBy(STOREFRONT_PAGE_TRANSLATION.LANGUAGE.asc())
+        .fetch()
+        .map(r -> new StorefrontPageTranslation(r.getLanguage(), r.getBody()));
   }
 
   private StorefrontPage toPage(StorefrontPageRecord r) {
