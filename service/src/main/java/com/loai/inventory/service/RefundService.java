@@ -4,6 +4,7 @@ import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.CreditNote;
 import com.loai.inventory.domain.model.CreditNoteStatus;
 import com.loai.inventory.domain.model.Org;
@@ -122,7 +123,7 @@ public final class RefundService {
           DSLContext txDsl = DSL.using(cfg);
           OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
           BigDecimal amount = cmd.amount();
-          String currency = normalizeCurrency(cmd.currency());
+          String currency = Text.normalizeCurrency(cmd.currency());
 
           UUID customerId;
           if (cmd.creditNoteId() != null) {
@@ -183,7 +184,7 @@ public final class RefundService {
                   amount,
                   currency,
                   cmd.method(),
-                  cmd.notes(),
+                  Text.normalizeText(cmd.notes()),
                   now);
           refundRepoFactory.create(txDsl).insert(refund);
           log.info(
@@ -225,10 +226,11 @@ public final class RefundService {
 
           // 1. DEBIT transaction, created VERIFIED. (provider, provider_ref) UNIQUE is the
           //    double-execute backstop.
+          String normalizedOverride = Text.normalizeNumeric(providerRefOverride);
           String providerRef =
-              (providerRefOverride == null || providerRefOverride.isBlank())
+              normalizedOverride == null
                   ? refund.getMethod().name() + "-" + refund.getId()
-                  : providerRefOverride.trim();
+                  : normalizedOverride;
           PaymentTransaction debit =
               PaymentTransaction.createVerifiedDebit(
                   UUID.randomUUID(),
@@ -674,12 +676,5 @@ public final class RefundService {
     if (cmd.method() == null) {
       throw new ValidationException("method is required");
     }
-  }
-
-  private static String normalizeCurrency(String currency) {
-    if (currency == null || currency.isBlank()) {
-      return CURRENCY_EGP;
-    }
-    return currency.trim().toUpperCase();
   }
 }

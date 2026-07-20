@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
@@ -43,20 +44,21 @@ public class CustomerService {
   }
 
   public Customer create(UUID orgId, String email) {
-    validateEmail(email);
+    String normalizedEmail = Text.normalizeEmail(email);
+    validateEmail(normalizedEmail);
 
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           CustomerRepository repo = repoFactory.create(txDsl);
 
-          if (repo.existsByEmail(orgId, email)) {
-            throw new ConflictException("Email already registered in this org: " + email);
+          if (repo.existsByEmail(orgId, normalizedEmail)) {
+            throw new ConflictException("Email already registered in this org: " + normalizedEmail);
           }
 
           Customer customer = new Customer();
           customer.setOrgId(orgId);
-          customer.setEmail(email);
+          customer.setEmail(normalizedEmail);
 
           Customer saved = repo.insert(customer);
           log.info(
@@ -69,7 +71,8 @@ public class CustomerService {
   }
 
   public Customer update(UUID orgId, UUID id, String email) {
-    validateEmail(email);
+    String normalizedEmail = Text.normalizeEmail(email);
+    validateEmail(normalizedEmail);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -79,12 +82,12 @@ public class CustomerService {
           Customer existing =
               repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Customer", id));
 
-          if (repo.existsByEmailAndIdNot(orgId, email, id)) {
+          if (repo.existsByEmailAndIdNot(orgId, normalizedEmail, id)) {
             throw new ConflictException(
-                "Email already used by another customer in this org: " + email);
+                "Email already used by another customer in this org: " + normalizedEmail);
           }
 
-          existing.setEmail(email);
+          existing.setEmail(normalizedEmail);
 
           Customer updated = repo.update(existing);
           log.info("Updated customer id={} orgId={}", id, orgId);

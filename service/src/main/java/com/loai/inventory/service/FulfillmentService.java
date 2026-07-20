@@ -5,6 +5,7 @@ import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.InsufficientStockException.Shortage;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.Fulfillment;
@@ -275,18 +276,18 @@ public final class FulfillmentService {
                 fulfillmentId,
                 orgId,
                 salesOrderId,
-                trimOrNull(carrier),
-                trimOrNull(trackingNumber),
-                trimOrNull(notes),
+                Text.normalizeText(carrier),
+                Text.normalizeNumeric(trackingNumber),
+                Text.normalizeText(notes),
                 now)
             : Fulfillment.createReplacementPending(
                 fulfillmentId,
                 orgId,
                 salesOrderId,
                 replacesFulfillmentId,
-                trimOrNull(carrier),
-                trimOrNull(trackingNumber),
-                trimOrNull(notes),
+                Text.normalizeText(carrier),
+                Text.normalizeNumeric(trackingNumber),
+                Text.normalizeText(notes),
                 now);
     fulfillmentRepo.insert(fulfillment, fulfillmentLines);
 
@@ -1085,9 +1086,9 @@ public final class FulfillmentService {
             fulfillmentId,
             orgId,
             order.getId(),
-            trimOrNull(carrier),
-            trimOrNull(trackingNumber),
-            trimOrNull(notes),
+            Text.normalizeText(carrier),
+            Text.normalizeNumeric(trackingNumber),
+            Text.normalizeText(notes),
             now);
     fulfillmentRepo.insert(fulfillment, fulfillmentLines);
 
@@ -1309,13 +1310,5 @@ public final class FulfillmentService {
             "duplicate sales_order_line_id in lines: " + l.salesOrderLineId());
       }
     }
-  }
-
-  private static String trimOrNull(String s) {
-    if (s == null) {
-      return null;
-    }
-    String t = s.trim();
-    return t.isEmpty() ? null : t;
   }
 }

@@ -4,6 +4,7 @@ import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentDirection;
 import com.loai.inventory.domain.model.PaymentProvider;
@@ -101,7 +102,7 @@ public final class PaymentTransactionService {
           PaymentRepository paymentRepo = paymentRepoFactory.create(txDsl);
 
           OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-          String currency = normalizeCurrency(cmd.currency());
+          String currency = Text.normalizeCurrency(cmd.currency());
 
           // 1. Idempotently record the claimed transaction (UNVERIFIED).
           PaymentTransaction claim =
@@ -109,12 +110,12 @@ public final class PaymentTransactionService {
                   UUID.randomUUID(),
                   orgId,
                   cmd.provider(),
-                  cmd.providerRef().trim(),
+                  Text.normalizeNumeric(cmd.providerRef()),
                   cmd.amount(),
                   currency,
                   cmd.claimedByCustomerId(),
-                  trimOrNull(cmd.customerNote()),
-                  trimOrNull(cmd.verificationProof()),
+                  Text.normalizeText(cmd.customerNote()),
+                  Text.normalizeText(cmd.verificationProof()),
                   cmd.occurredAt(),
                   now);
           PaymentTransactionRepository.Recorded rec = txnRepo.insertIfAbsent(claim);
@@ -457,7 +458,7 @@ public final class PaymentTransactionService {
   }
 
   private static String orphanRefundNotes(String notes) {
-    String t = trimOrNull(notes);
+    String t = Text.normalizeText(notes);
     return t != null ? t : "orphan refund — verified transfer with no matching order";
   }
 
@@ -515,20 +516,5 @@ public final class PaymentTransactionService {
     if (cmd.amount().signum() <= 0) {
       throw new ValidationException("amount must be > 0");
     }
-  }
-
-  private static String normalizeCurrency(String currency) {
-    if (currency == null || currency.isBlank()) {
-      return CURRENCY_EGP;
-    }
-    return currency.trim().toUpperCase();
-  }
-
-  private static String trimOrNull(String s) {
-    if (s == null) {
-      return null;
-    }
-    String t = s.trim();
-    return t.isEmpty() ? null : t;
   }
 }

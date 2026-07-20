@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.AppUser;
 import com.loai.inventory.domain.model.OrgMember;
@@ -73,7 +74,7 @@ public class MemberService {
     if (email == null || email.isBlank()) {
       throw new ValidationException("email is required");
     }
-    String normalized = email.trim();
+    String normalized = Text.normalizeEmail(email);
     UUID grantedId =
         dsl.transactionResult(
             cfg -> {

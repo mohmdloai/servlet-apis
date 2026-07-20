@@ -4,6 +4,7 @@ import com.loai.inventory.common.Pagination;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Category;
 import com.loai.inventory.domain.repository.CategoryRepository;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
@@ -63,7 +64,7 @@ public class CategoryService {
           Category category = new Category();
           category.setOrgId(orgId);
           category.setParentCategoryId(parentCategoryId);
-          category.setName(name);
+          category.setName(Text.normalizeText(name));
           category.setSlug(slug);
 
           Category saved = repo.insert(category);
@@ -88,7 +89,7 @@ public class CategoryService {
           }
           validateParent(repo, orgId, id, parentCategoryId);
 
-          existing.setName(name);
+          existing.setName(Text.normalizeText(name));
           existing.setSlug(slug);
           existing.setParentCategoryId(parentCategoryId);
 

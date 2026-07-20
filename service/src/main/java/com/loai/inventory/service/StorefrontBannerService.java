@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.storage.ObjectStorage;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.BannerTargetType;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.StorefrontBanner;
@@ -111,10 +112,10 @@ public class StorefrontBannerService {
 
           StorefrontBanner b = new StorefrontBanner();
           b.setOrgId(orgId);
-          b.setHeadlineAr(blankToNull(in.headlineAr()));
-          b.setHeadlineEn(blankToNull(in.headlineEn()));
-          b.setSubheadingAr(blankToNull(in.subheadingAr()));
-          b.setSubheadingEn(blankToNull(in.subheadingEn()));
+          b.setHeadlineAr(Text.normalizeText(in.headlineAr()));
+          b.setHeadlineEn(Text.normalizeText(in.headlineEn()));
+          b.setSubheadingAr(Text.normalizeText(in.subheadingAr()));
+          b.setSubheadingEn(Text.normalizeText(in.subheadingEn()));
           b.setImageObjectKey(blankToNull(in.imageObjectKey()));
           applyTarget(b, in.targetType(), in.targetSlug());
           b.setActive(in.active() == null || in.active());
@@ -150,10 +151,10 @@ public class StorefrontBannerService {
           String defaultLocale = defaultLocale(orgId, tx);
 
           // Merge: a null field is left unchanged; a non-null text field applies (blank clears).
-          if (in.headlineAr() != null) b.setHeadlineAr(blankToNull(in.headlineAr()));
-          if (in.headlineEn() != null) b.setHeadlineEn(blankToNull(in.headlineEn()));
-          if (in.subheadingAr() != null) b.setSubheadingAr(blankToNull(in.subheadingAr()));
-          if (in.subheadingEn() != null) b.setSubheadingEn(blankToNull(in.subheadingEn()));
+          if (in.headlineAr() != null) b.setHeadlineAr(Text.normalizeText(in.headlineAr()));
+          if (in.headlineEn() != null) b.setHeadlineEn(Text.normalizeText(in.headlineEn()));
+          if (in.subheadingAr() != null) b.setSubheadingAr(Text.normalizeText(in.subheadingAr()));
+          if (in.subheadingEn() != null) b.setSubheadingEn(Text.normalizeText(in.subheadingEn()));
           if (in.imageObjectKey() != null) b.setImageObjectKey(blankToNull(in.imageObjectKey()));
           if (in.targetType() != null || in.targetSlug() != null) {
             if (in.targetType() == null || in.targetSlug() == null || in.targetSlug().isBlank()) {

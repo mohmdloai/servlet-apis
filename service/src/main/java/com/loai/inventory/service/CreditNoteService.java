@@ -4,6 +4,7 @@ import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.CreditNote;
 import com.loai.inventory.domain.model.CreditNoteLine;
 import com.loai.inventory.domain.model.CreditNoteReason;
@@ -170,7 +171,7 @@ public final class CreditNoteService {
                   invoice.getCustomerId(),
                   invoice.getId(),
                   cmd.reason(),
-                  cmd.reasonNote(),
+                  Text.normalizeText(cmd.reasonNote()),
                   subtotal,
                   taxTotal,
                   invoice.getCurrency(),

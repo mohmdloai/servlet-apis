@@ -5,6 +5,7 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.security.PasswordHasher;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.AppUser;
 import com.loai.inventory.domain.model.AppUserTokenPurpose;
@@ -72,14 +73,15 @@ public class AccountService {
    */
   public LoginResult register(
       String email, String rawPassword, String orgName, String deviceInfo, String sourceIp) {
-    String normalizedEmail = normalizeEmail(email);
+    String normalizedEmail = Text.normalizeEmail(email);
     if (!EmailAddresses.isSingleValid(normalizedEmail)) {
       throw new ValidationException("a valid email is required");
     }
     validatePassword(rawPassword);
-    boolean withOrg = orgName != null && !orgName.isBlank();
+    String normalizedOrgName = Text.normalizeText(orgName);
+    boolean withOrg = normalizedOrgName != null;
     if (withOrg) {
-      OrgService.validateName(orgName);
+      OrgService.validateName(normalizedOrgName);
     }
 
     AppUser created =
@@ -104,8 +106,8 @@ public class AccountService {
               if (withOrg) {
                 OrgRepository orgRepo = orgRepoFactory.create(tx);
                 Org org = new Org();
-                org.setName(orgName);
-                org.setSlug(uniqueSlug(orgRepo, orgName));
+                org.setName(normalizedOrgName);
+                org.setSlug(uniqueSlug(orgRepo, normalizedOrgName));
                 org.setActive(true);
                 Org saved = orgRepo.insert(org);
                 userRepo.insertOrgRole(user.getId(), saved.getId(), OrgRole.OWNER);
@@ -124,7 +126,7 @@ public class AccountService {
    */
   public void requestPasswordReset(String email, OffsetDateTime now) {
     try {
-      String normalizedEmail = normalizeEmail(email);
+      String normalizedEmail = Text.normalizeEmail(email);
       if (!EmailAddresses.isSingleValid(normalizedEmail)) {
         return;
       }
@@ -213,10 +215,6 @@ public class AccountService {
       throw new ValidationException(
           "password must be at least " + MIN_PASSWORD_LENGTH + " characters");
     }
-  }
-
-  private static String normalizeEmail(String email) {
-    return email == null ? null : email.trim();
   }
 
   /**
