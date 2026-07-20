@@ -26,6 +26,7 @@ public class ProductListingResponse {
   private OffsetDateTime updatedAt;
   private List<UUID> categoryIds;
   private List<ProductListingImageResponse> images;
+  private List<ProductListingTranslationDto> translations;
 
   private ProductListingResponse() {}
 
@@ -49,6 +50,7 @@ public class ProductListingResponse {
     ProductListingResponse r = from(view.listing());
     r.categoryIds = view.categoryIds();
     r.images = view.images().stream().map(ProductListingImageResponse::from).toList();
+    r.translations = view.translations().stream().map(ProductListingTranslationDto::from).toList();
     return r;
   }
 
@@ -102,5 +104,9 @@ public class ProductListingResponse {
 
   public List<ProductListingImageResponse> getImages() {
     return images;
+  }
+
+  public List<ProductListingTranslationDto> getTranslations() {
+    return translations;
   }
 }

@@ -12,6 +12,7 @@ import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
+import com.loai.inventory.domain.model.ProductListingTranslation;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
 import com.loai.inventory.domain.repository.CategoryRepository;
@@ -420,7 +421,22 @@ public class StorefrontService {
 
   /** The unfiltered/category-only read — delegates with no search, no bounds, default sort. */
   public ListingPage listPublished(String orgSlug, String categorySlug, int page, int size) {
-    return listPublished(orgSlug, categorySlug, null, null, null, null, null, page, size);
+    return listPublished(orgSlug, categorySlug, null, null, null, null, null, null, page, size);
+  }
+
+  /** Filtered read without an explicit locale — resolves to the org's default locale. */
+  public ListingPage listPublished(
+      String orgSlug,
+      String categorySlug,
+      String q,
+      String minPrice,
+      String maxPrice,
+      String sort,
+      String featured,
+      int page,
+      int size) {
+    return listPublished(
+        orgSlug, categorySlug, q, minPrice, maxPrice, sort, featured, null, page, size);
   }
 
   /**
@@ -444,6 +460,7 @@ public class StorefrontService {
       String maxPrice,
       String sort,
       String featured,
+      String locale,
       int page,
       int size) {
     int offset = Pagination.offset(page, size);
@@ -463,7 +480,10 @@ public class StorefrontService {
           "min_price must not exceed max_price");
     }
 
-    UUID orgId = resolveOrg(orgSlug).getId();
+    Org org = resolveOrg(orgSlug);
+    UUID orgId = org.getId();
+    String defaultLocale = defaultLocaleOf(org);
+    String resolvedLocale = resolveRequestedLocale(locale, defaultLocale);
     ProductListingRepository listings = listingRepoFactory.create(rootDsl);
 
     UUID categoryId = null;
@@ -482,6 +502,8 @@ public class StorefrontService {
             ListingStatus.PUBLISHED,
             categoryId,
             query,
+            resolvedLocale,
+            defaultLocale,
             min,
             max,
             featuredOnly,
@@ -490,7 +512,15 @@ public class StorefrontService {
             size);
     long total =
         listings.countByFilters(
-            orgId, ListingStatus.PUBLISHED, categoryId, query, min, max, featuredOnly);
+            orgId,
+            ListingStatus.PUBLISHED,
+            categoryId,
+            query,
+            resolvedLocale,
+            defaultLocale,
+            min,
+            max,
+            featuredOnly);
 
     // One batched image query for the whole page (avoids an N+1), and the grid presigns only each
     // listing's primary image — full galleries and category breadcrumbs are a detail-view concern.
@@ -514,6 +544,9 @@ public class StorefrontService {
         reviewRepoFactory
             .create(rootDsl)
             .findAggregates(orgId, rows.stream().map(ProductListing::getId).toList());
+    // Batch the per-language content and resolve each listing to the requested locale (L2).
+    Map<UUID, List<ProductListingTranslation>> translationsByListing =
+        listings.findTranslationsForListings(rows.stream().map(ProductListing::getId).toList());
     List<ListingView> items =
         rows.stream()
             .map(
@@ -523,10 +556,13 @@ public class StorefrontService {
                       primary == null ? List.of() : List.of(toPublicImage(primary));
                   boolean inStock = availableByProduct.getOrDefault(l.getProductId(), 0) > 0;
                   ListingReviewRepository.Aggregate agg = aggregateByListing.get(l.getId());
+                  ResolvedContent content =
+                      resolveContent(
+                          translationsByListing.get(l.getId()), resolvedLocale, defaultLocale, l);
                   return new ListingView(
                       l.getSlug(),
-                      l.getTitle(),
-                      l.getMarketingCopy(),
+                      content.title(),
+                      content.marketingCopy(),
                       l.getSalesPrice(),
                       inStock,
                       images,
@@ -538,8 +574,16 @@ public class StorefrontService {
     return new ListingPage(items, total, page, size);
   }
 
+  /** Detail read without an explicit locale — resolves to the org's default locale. */
   public ListingView getListing(String orgSlug, String listingSlug) {
-    UUID orgId = resolveOrg(orgSlug).getId();
+    return getListing(orgSlug, listingSlug, null);
+  }
+
+  public ListingView getListing(String orgSlug, String listingSlug, String locale) {
+    Org org = resolveOrg(orgSlug);
+    UUID orgId = org.getId();
+    String defaultLocale = defaultLocaleOf(org);
+    String resolvedLocale = resolveRequestedLocale(locale, defaultLocale);
     ProductListingRepository listings = listingRepoFactory.create(rootDsl);
     ProductListing listing =
         listings
@@ -557,7 +601,10 @@ public class StorefrontService {
                 .findAvailableByProductIds(orgId, List.of(listing.getProductId()))
                 .getOrDefault(listing.getProductId(), 0)
             > 0;
-    return toView(listings, listing, inStock, categories);
+    ResolvedContent content =
+        resolveContent(
+            listings.findTranslations(listing.getId()), resolvedLocale, defaultLocale, listing);
+    return toView(listings, listing, inStock, categories, content);
   }
 
   public List<CategoryNav> listCategories(String orgSlug) {
@@ -656,7 +703,8 @@ public class StorefrontService {
       ProductListingRepository listings,
       ProductListing l,
       boolean inStock,
-      List<CategoryRef> categories) {
+      List<CategoryRef> categories,
+      ResolvedContent content) {
     List<PublicImage> images =
         listings.findImages(l.getId()).stream().map(this::toPublicImage).toList();
     ListingReviewRepository.Aggregate agg =
@@ -666,14 +714,83 @@ public class StorefrontService {
             .get(l.getId());
     return new ListingView(
         l.getSlug(),
-        l.getTitle(),
-        l.getMarketingCopy(),
+        content.title(),
+        content.marketingCopy(),
         l.getSalesPrice(),
         inStock,
         images,
         categories,
         formatRatingAvg(agg),
         agg == null ? null : agg.count());
+  }
+
+  // ───────── locale resolution (content-localization slice L2) ─────────
+
+  private static String defaultLocaleOf(Org org) {
+    String loc = org.getDefaultLocale();
+    return loc == null || loc.isBlank() ? "ar" : loc.trim().toLowerCase(java.util.Locale.ROOT);
+  }
+
+  /**
+   * The requested {@code ?locale=} resolved to a served locale: blank/unset → the org's default;
+   * anything outside the supported set → 400 (cause-naming, never a silent default — the {@code
+   * ?sort=} convention).
+   */
+  private static String resolveRequestedLocale(String requested, String defaultLocale) {
+    if (requested == null || requested.isBlank()) {
+      return defaultLocale;
+    }
+    String loc = requested.trim().toLowerCase(java.util.Locale.ROOT);
+    if (!SUPPORTED_LOCALES.contains(loc)) {
+      throw new com.loai.inventory.common.exception.ValidationException(
+          "unsupported locale: " + loc);
+    }
+    return loc;
+  }
+
+  /** A listing's content resolved to one locale (per-field fallback). */
+  private record ResolvedContent(String title, String marketingCopy) {}
+
+  /**
+   * Resolve a listing's localized content <b>per field</b>: the requested locale's value, else the
+   * default locale's, else the legacy column (never null for {@code title}). {@code marketingCopy}
+   * falls back the same way, so a present-but-empty locale copy shows the default's.
+   */
+  private static ResolvedContent resolveContent(
+      List<ProductListingTranslation> translations,
+      String preferred,
+      String defaultLocale,
+      ProductListing fallback) {
+    ProductListingTranslation pref = null;
+    ProductListingTranslation def = null;
+    if (translations != null) {
+      for (ProductListingTranslation t : translations) {
+        if (t.language().equals(preferred)) {
+          pref = t;
+        }
+        if (t.language().equals(defaultLocale)) {
+          def = t;
+        }
+      }
+    }
+    String title =
+        coalesce(
+            pref == null ? null : pref.title(),
+            def == null ? null : def.title(),
+            fallback.getTitle());
+    String copy =
+        coalesce(
+            pref == null ? null : pref.marketingCopy(),
+            def == null ? null : def.marketingCopy(),
+            fallback.getMarketingCopy());
+    return new ResolvedContent(title, copy);
+  }
+
+  private static String coalesce(String a, String b, String c) {
+    if (a != null) {
+      return a;
+    }
+    return b != null ? b : c;
   }
 
   /** One-decimal string average (epic §10 — never fabricated precision); null when no aggregate. */

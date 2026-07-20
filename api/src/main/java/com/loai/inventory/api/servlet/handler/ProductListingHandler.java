@@ -9,6 +9,7 @@ import com.loai.inventory.api.dto.PresignImageUploadRequest;
 import com.loai.inventory.api.dto.PresignImageUploadResponse;
 import com.loai.inventory.api.dto.ProductListingImageResponse;
 import com.loai.inventory.api.dto.ProductListingResponse;
+import com.loai.inventory.api.dto.ProductListingTranslationDto;
 import com.loai.inventory.api.dto.SetCategoriesRequest;
 import com.loai.inventory.api.dto.SetFeaturedListingsRequest;
 import com.loai.inventory.api.dto.UpdateImageRequest;
@@ -168,11 +169,14 @@ public class ProductListingHandler implements OrgResourceHandler {
         service.create(
             orgId,
             body.getProductId(),
-            body.getTitle(),
-            body.getMarketingCopy(),
             body.getSlug(),
-            body.getSalesPrice());
-    writeJson(resp, 201, ProductListingResponse.from(created));
+            body.getSalesPrice(),
+            new ProductListingService.TranslatedContentInput(
+                toDomainTranslations(body.getTranslations()),
+                body.getTitle(),
+                body.getMarketingCopy()));
+    // Re-read as the full view so the response embeds every language.
+    writeJson(resp, 201, ProductListingResponse.fromView(service.getById(orgId, created.getId())));
   }
 
   // --- featured curation (slice C3) ---
@@ -209,15 +213,21 @@ public class ProductListingHandler implements OrgResourceHandler {
       throws IOException {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
     UpdateProductListingRequest body = readBody(req, UpdateProductListingRequest.class);
-    ProductListing updated =
-        service.update(
-            orgId,
-            id,
+    service.update(
+        orgId,
+        id,
+        body.getSlug(),
+        body.getSalesPrice(),
+        new ProductListingService.TranslatedContentInput(
+            toDomainTranslations(body.getTranslations()),
             body.getTitle(),
-            body.getMarketingCopy(),
-            body.getSlug(),
-            body.getSalesPrice());
-    writeJson(resp, 200, ProductListingResponse.from(updated));
+            body.getMarketingCopy()));
+    writeJson(resp, 200, ProductListingResponse.fromView(service.getById(orgId, id)));
+  }
+
+  private static java.util.List<com.loai.inventory.domain.model.ProductListingTranslation>
+      toDomainTranslations(java.util.List<ProductListingTranslationDto> dtos) {
+    return dtos == null ? null : dtos.stream().map(ProductListingTranslationDto::toDomain).toList();
   }
 
   private void doDelete(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)

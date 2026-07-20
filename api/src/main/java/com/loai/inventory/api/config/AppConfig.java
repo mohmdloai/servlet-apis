@@ -424,7 +424,8 @@ public class AppConfig {
             portalOtpRequestLimit,
             60);
     this.productListingService =
-        new ProductListingService(dsl, productListingRepositoryFactory, objectStorage);
+        new ProductListingService(
+            dsl, productListingRepositoryFactory, orgRepositoryFactory, objectStorage);
     this.storefrontBannerService =
         new StorefrontBannerService(
             dsl,

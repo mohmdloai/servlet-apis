@@ -6,16 +6,19 @@ import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_CATEGORY;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_IMAGE;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
 
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.ListingSort;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
+import com.loai.inventory.domain.model.ProductListingTranslation;
 import com.loai.inventory.domain.repository.ProductListingRepository;
 import com.loai.inventory.repository.generated.tables.records.ProductListingCategoryRecord;
 import com.loai.inventory.repository.generated.tables.records.ProductListingImageRecord;
 import com.loai.inventory.repository.generated.tables.records.ProductListingRecord;
+import com.loai.inventory.repository.generated.tables.records.ProductListingTranslationRecord;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -198,6 +201,8 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       ListingStatus status,
       UUID categoryId,
       String q,
+      String locale,
+      String defaultLocale,
       java.math.BigDecimal minPrice,
       java.math.BigDecimal maxPrice,
       boolean featuredOnly,
@@ -206,7 +211,17 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       int limit) {
     SelectJoinStep<Record> step = dsl.select(PRODUCT_LISTING.fields()).from(PRODUCT_LISTING);
     return joinCategoryIfNeeded(step, categoryId)
-        .where(filterConditions(orgId, status, categoryId, q, minPrice, maxPrice, featuredOnly))
+        .where(
+            filterConditions(
+                orgId,
+                status,
+                categoryId,
+                q,
+                locale,
+                defaultLocale,
+                minPrice,
+                maxPrice,
+                featuredOnly))
         .orderBy(orderFields(sort))
         .offset(offset)
         .limit(limit)
@@ -220,6 +235,8 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       ListingStatus status,
       UUID categoryId,
       String q,
+      String locale,
+      String defaultLocale,
       java.math.BigDecimal minPrice,
       java.math.BigDecimal maxPrice,
       boolean featuredOnly) {
@@ -227,7 +244,16 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     return dsl.fetchCount(
         joinCategoryIfNeeded(step, categoryId)
             .where(
-                filterConditions(orgId, status, categoryId, q, minPrice, maxPrice, featuredOnly)));
+                filterConditions(
+                    orgId,
+                    status,
+                    categoryId,
+                    q,
+                    locale,
+                    defaultLocale,
+                    minPrice,
+                    maxPrice,
+                    featuredOnly)));
   }
 
   /** The category narrow is a join only when requested — the unfiltered read stays join-free. */
@@ -242,16 +268,23 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
 
   /**
    * The shared predicate set behind {@link #findByFilters} and {@link #countByFilters}: org +
-   * status always; category / substring / price bounds each only when present. {@code q} is bound
-   * as a parameter ({@code lower(col) LIKE lower(?)} — ILIKE semantics, never interpolated); {@code
+   * status always; category / substring / price bounds each only when present.
+   *
+   * <p>The text match (slice L2) runs against the per-language {@code product_listing_translation}
+   * rows in {@code (locale, defaultLocale)}: the Arabic-folded {@code title_search} (GIN, so {@code
+   * "احمد"} matches an {@code "أحمد"} title) OR the plain {@code marketing_copy} substring. It is
+   * an {@code EXISTS} so a listing surfaces once even when both its locale rows match. {@code
    * %}/{@code _} in the term are treated as literal-enough user text at per-org published scale (no
-   * escaping in v1, per the B3 story).
+   * escaping in v1, per the B3 story). {@code locale}/{@code defaultLocale} are ignored when {@code
+   * q} is null.
    */
   private static Condition filterConditions(
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
       String q,
+      String locale,
+      String defaultLocale,
       java.math.BigDecimal minPrice,
       java.math.BigDecimal maxPrice,
       boolean featuredOnly) {
@@ -264,12 +297,14 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       c = c.and(PRODUCT_LISTING.FEATURED_SORT.isNotNull());
     }
     if (q != null) {
+      // Dual-write era: match the per-language translation rows (Arabic-folded) OR the legacy
+      // default-locale columns — so a listing that predates its translation backfill (or a raw-
+      // inserted fixture) still matches on its legacy title/copy. The legacy arm is dropped at L6.
       String pattern = "%" + q + "%";
       c =
           c.and(
-              PRODUCT_LISTING
-                  .TITLE
-                  .likeIgnoreCase(pattern)
+              translationSearchExists(q, locale, defaultLocale)
+                  .or(PRODUCT_LISTING.TITLE.likeIgnoreCase(pattern))
                   .or(PRODUCT_LISTING.MARKETING_COPY.likeIgnoreCase(pattern)));
     }
     if (minPrice != null) {
@@ -279,6 +314,47 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       c = c.and(PRODUCT_LISTING.SALES_PRICE.le(maxPrice));
     }
     return c;
+  }
+
+  /**
+   * EXISTS a translation row for the listing, in one of the resolved locales, whose folded {@code
+   * title_search} contains the folded term (Arabic-aware, GIN-indexed) or whose {@code
+   * marketing_copy} contains the raw term. Distinct locale names are de-duplicated so a listing
+   * whose {@code locale == defaultLocale} scans one language, not two.
+   */
+  private static Condition translationSearchExists(String q, String locale, String defaultLocale) {
+    String pattern = "%" + q + "%";
+    org.jooq.Field<String> foldedTerm =
+        org.jooq.impl.DSL.field("fold_search({0})", String.class, org.jooq.impl.DSL.val(q));
+    java.util.LinkedHashSet<String> langs = new java.util.LinkedHashSet<>();
+    if (locale != null) {
+      langs.add(locale);
+    }
+    if (defaultLocale != null) {
+      langs.add(defaultLocale);
+    }
+    return org.jooq.impl.DSL.exists(
+        org.jooq
+            .impl
+            .DSL
+            .selectOne()
+            .from(PRODUCT_LISTING_TRANSLATION)
+            .where(
+                PRODUCT_LISTING_TRANSLATION
+                    .LISTING_ID
+                    .eq(PRODUCT_LISTING.ID)
+                    .and(PRODUCT_LISTING_TRANSLATION.LANGUAGE.in(langs))
+                    .and(
+                        PRODUCT_LISTING_TRANSLATION
+                            .TITLE_SEARCH
+                            .like(
+                                org.jooq.impl.DSL.concat(
+                                    org.jooq.impl.DSL.inline("%"),
+                                    foldedTerm,
+                                    org.jooq.impl.DSL.inline("%")))
+                            .or(
+                                PRODUCT_LISTING_TRANSLATION.MARKETING_COPY.likeIgnoreCase(
+                                    pattern)))));
   }
 
   /** Every sort is tie-broken by {@code slug ASC} (unique per org) so paging is deterministic. */
@@ -638,6 +714,62 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     if (deleted == 0) {
       throw new NotFoundException("ProductListingImage", imageId);
     }
+  }
+
+  // --- translations (content-localization slice L2) ---
+
+  @Override
+  public void replaceTranslations(UUID listingId, List<ProductListingTranslation> translations) {
+    dsl.deleteFrom(PRODUCT_LISTING_TRANSLATION)
+        .where(PRODUCT_LISTING_TRANSLATION.LISTING_ID.eq(listingId))
+        .execute();
+    if (translations == null || translations.isEmpty()) {
+      return;
+    }
+    List<ProductListingTranslationRecord> rows = new ArrayList<>(translations.size());
+    for (ProductListingTranslation t : translations) {
+      ProductListingTranslationRecord r = dsl.newRecord(PRODUCT_LISTING_TRANSLATION);
+      r.setListingId(listingId);
+      r.setLanguage(t.language());
+      r.setTitle(t.title());
+      r.setMarketingCopy(t.marketingCopy());
+      rows.add(r);
+    }
+    dsl.batchInsert(rows).execute();
+  }
+
+  @Override
+  public List<ProductListingTranslation> findTranslations(UUID listingId) {
+    return dsl.selectFrom(PRODUCT_LISTING_TRANSLATION)
+        .where(PRODUCT_LISTING_TRANSLATION.LISTING_ID.eq(listingId))
+        .orderBy(PRODUCT_LISTING_TRANSLATION.LANGUAGE.asc())
+        .fetch()
+        .map(ProductListingRepositoryImpl::toTranslation);
+  }
+
+  @Override
+  public Map<UUID, List<ProductListingTranslation>> findTranslationsForListings(
+      Collection<UUID> listingIds) {
+    if (listingIds == null || listingIds.isEmpty()) {
+      return Map.of();
+    }
+    Map<UUID, List<ProductListingTranslation>> byListing = new HashMap<>();
+    dsl.selectFrom(PRODUCT_LISTING_TRANSLATION)
+        .where(PRODUCT_LISTING_TRANSLATION.LISTING_ID.in(listingIds))
+        .orderBy(
+            PRODUCT_LISTING_TRANSLATION.LISTING_ID.asc(),
+            PRODUCT_LISTING_TRANSLATION.LANGUAGE.asc())
+        .fetch()
+        .forEach(
+            r ->
+                byListing
+                    .computeIfAbsent(r.getListingId(), k -> new ArrayList<>())
+                    .add(toTranslation(r)));
+    return byListing;
+  }
+
+  private static ProductListingTranslation toTranslation(ProductListingTranslationRecord r) {
+    return new ProductListingTranslation(r.getLanguage(), r.getTitle(), r.getMarketingCopy());
   }
 
   // --- mappers / enum bridge ---

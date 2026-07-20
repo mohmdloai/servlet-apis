@@ -5,14 +5,22 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.storage.ObjectStorage;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ListingStatus;
+import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
+import com.loai.inventory.domain.model.ProductListingTranslation;
+import com.loai.inventory.domain.repository.OrgRepository;
+import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepository;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -30,23 +38,50 @@ import org.slf4j.LoggerFactory;
 public class ProductListingService {
   private static final Logger log = LoggerFactory.getLogger(ProductListingService.class);
 
+  /** Max length for a translated title / marketing-copy value (defensive cap on stored text). */
+  static final int MAX_TITLE_CHARS = 255;
+
+  static final int MAX_COPY_CHARS = 20_000;
+
   private final DSLContext rootDsl;
   private final ProductListingRepositoryFactory repoFactory;
+  private final OrgRepositoryFactory orgRepoFactory;
   private final ObjectStorage storage;
 
   public ProductListingService(
-      DSLContext rootDsl, ProductListingRepositoryFactory repoFactory, ObjectStorage storage) {
+      DSLContext rootDsl,
+      ProductListingRepositoryFactory repoFactory,
+      OrgRepositoryFactory orgRepoFactory,
+      ObjectStorage storage) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
+    this.orgRepoFactory = orgRepoFactory;
     this.storage = storage;
   }
 
   /** A presigned image with a display-ready URL (object keys are never exposed to clients). */
   public record ImageView(UUID id, String url, String altText, int sortOrder) {}
 
-  /** A listing plus its category ids and presigned images — the detail view. */
+  /**
+   * A listing plus its category ids, presigned images, and every language's translation — the admin
+   * detail/list view. {@code translations} carries all authored languages (slice L2); the base
+   * {@code listing}'s {@code title}/{@code marketingCopy} stay populated (dual-written to the org's
+   * default locale) for the card label and pre-L6 rollback.
+   */
   public record ListingView(
-      ProductListing listing, List<UUID> categoryIds, List<ImageView> images) {}
+      ProductListing listing,
+      List<UUID> categoryIds,
+      List<ImageView> images,
+      List<ProductListingTranslation> translations) {}
+
+  /**
+   * The localized content of a create/update write (slice L2). {@code translations} is the authored
+   * per-language set; when it is null/empty the legacy single {@code title}/{@code marketingCopy}
+   * are synthesized into one row at the org's default locale (backward-compatible with pre-L2
+   * callers). The service normalizes, caps, and validates the default-locale row before persisting.
+   */
+  public record TranslatedContentInput(
+      List<ProductListingTranslation> translations, String title, String marketingCopy) {}
 
   /** The result of requesting an upload slot: where to PUT, and the key to attach afterward. */
   public record PresignResult(String uploadUrl, String objectKey, long expiresInSeconds) {}
@@ -77,7 +112,7 @@ public class ProductListingService {
         repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("ProductListing", id));
     List<UUID> categoryIds = repo.findCategoryIds(id);
     List<ImageView> images = repo.findImages(id).stream().map(this::toImageView).toList();
-    return new ListingView(listing, categoryIds, images);
+    return new ListingView(listing, categoryIds, images, repo.findTranslations(id));
   }
 
   /**
@@ -104,6 +139,8 @@ public class ProductListingService {
                 Collectors.groupingBy(
                     ProductListingImage::getListingId,
                     Collectors.mapping(this::toImageView, Collectors.toList())));
+    Map<UUID, List<ProductListingTranslation>> translationsByListing =
+        repo.findTranslationsForListings(ids);
 
     return listings.stream()
         .map(
@@ -111,7 +148,8 @@ public class ProductListingService {
                 new ListingView(
                     l,
                     categoriesByListing.getOrDefault(l.getId(), List.of()),
-                    imagesByListing.getOrDefault(l.getId(), List.of())))
+                    imagesByListing.getOrDefault(l.getId(), List.of()),
+                    translationsByListing.getOrDefault(l.getId(), List.of())))
         .toList();
   }
 
@@ -145,13 +183,16 @@ public class ProductListingService {
                 Collectors.groupingBy(
                     ProductListingImage::getListingId,
                     Collectors.mapping(this::toImageView, Collectors.toList())));
+    Map<UUID, List<ProductListingTranslation>> translationsByListing =
+        repo.findTranslationsForListings(ids);
     return listings.stream()
         .map(
             l ->
                 new ListingView(
                     l,
                     categoriesByListing.getOrDefault(l.getId(), List.of()),
-                    imagesByListing.getOrDefault(l.getId(), List.of())))
+                    imagesByListing.getOrDefault(l.getId(), List.of()),
+                    translationsByListing.getOrDefault(l.getId(), List.of())))
         .toList();
   }
 
@@ -186,6 +227,7 @@ public class ProductListingService {
 
   // --- listing CRUD ---
 
+  /** Single-language convenience: title/marketingCopy become the org's default-locale row. */
   public ProductListing create(
       UUID orgId,
       UUID productId,
@@ -193,8 +235,25 @@ public class ProductListingService {
       String marketingCopy,
       String slug,
       BigDecimal salesPrice) {
+    return create(
+        orgId, productId, slug, salesPrice, new TranslatedContentInput(null, title, marketingCopy));
+  }
+
+  /** Single-language convenience: title/marketingCopy become the org's default-locale row. */
+  public ProductListing update(
+      UUID orgId, UUID id, String title, String marketingCopy, String slug, BigDecimal salesPrice) {
+    return update(
+        orgId, id, slug, salesPrice, new TranslatedContentInput(null, title, marketingCopy));
+  }
+
+  public ProductListing create(
+      UUID orgId,
+      UUID productId,
+      String slug,
+      BigDecimal salesPrice,
+      TranslatedContentInput content) {
     if (productId == null) throw new ValidationException("product_id is required");
-    validateContent(title, slug, salesPrice);
+    validateSlugAndPrice(slug, salesPrice);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -211,29 +270,36 @@ public class ProductListingService {
             throw new ConflictException("Listing slug already used in this org: " + slug);
           }
 
+          List<ProductListingTranslation> translations =
+              normalizeTranslations(orgId, content, txDsl);
+          ProductListingTranslation defaultRow = translations.get(0); // resolver puts default first
+
           ProductListing listing = new ProductListing();
           listing.setOrgId(orgId);
           listing.setProductId(productId);
-          listing.setTitle(title);
-          listing.setMarketingCopy(marketingCopy);
+          // Dual-write the default-locale copy onto the legacy columns (rollback safe until L6).
+          listing.setTitle(defaultRow.title());
+          listing.setMarketingCopy(defaultRow.marketingCopy());
           listing.setSlug(slug);
           listing.setSalesPrice(salesPrice);
           listing.setStatus(ListingStatus.DRAFT);
           listing.setPublishedAt(null);
 
           ProductListing saved = repo.insert(listing);
+          repo.replaceTranslations(saved.getId(), translations);
           log.info(
-              "Created product_listing id={} orgId={} productId={}",
+              "Created product_listing id={} orgId={} productId={} langs={}",
               saved.getId(),
               orgId,
-              productId);
+              productId,
+              translations.size());
           return saved;
         });
   }
 
   public ProductListing update(
-      UUID orgId, UUID id, String title, String marketingCopy, String slug, BigDecimal salesPrice) {
-    validateContent(title, slug, salesPrice);
+      UUID orgId, UUID id, String slug, BigDecimal salesPrice, TranslatedContentInput content) {
+    validateSlugAndPrice(slug, salesPrice);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -247,13 +313,19 @@ public class ProductListingService {
             throw new ConflictException("Listing slug already used in this org: " + slug);
           }
 
-          existing.setTitle(title);
-          existing.setMarketingCopy(marketingCopy);
+          List<ProductListingTranslation> translations =
+              normalizeTranslations(orgId, content, txDsl);
+          ProductListingTranslation defaultRow = translations.get(0);
+
+          existing.setTitle(defaultRow.title());
+          existing.setMarketingCopy(defaultRow.marketingCopy());
           existing.setSlug(slug);
           existing.setSalesPrice(salesPrice);
 
           ProductListing updated = repo.update(existing);
-          log.info("Updated product_listing id={} orgId={}", id, orgId);
+          repo.replaceTranslations(id, translations); // PUT replaces the whole set
+          log.info(
+              "Updated product_listing id={} orgId={} langs={}", id, orgId, translations.size());
           return updated;
         });
   }
@@ -438,10 +510,7 @@ public class ProductListingService {
         image.getSortOrder());
   }
 
-  private void validateContent(String title, String slug, BigDecimal salesPrice) {
-    if (title == null || title.isBlank()) {
-      throw new ValidationException("title is required");
-    }
+  private void validateSlugAndPrice(String slug, BigDecimal salesPrice) {
     if (slug == null || slug.isBlank()) {
       throw new ValidationException("slug is required");
     }
@@ -451,5 +520,86 @@ public class ProductListingService {
     if (salesPrice.signum() < 0) {
       throw new ValidationException("sales_price must be >= 0");
     }
+  }
+
+  /**
+   * The BCP-47 languages the storefront serves today; widening is a CHECK edit (V63) + this set.
+   */
+  private static final Set<String> SUPPORTED_LOCALES = Set.of("ar", "en");
+
+  /**
+   * Normalize + validate a write's translations into the persisted set (slice L2). Accepts either
+   * an explicit {@code translations} list or the legacy single {@code title}/{@code marketingCopy}
+   * (synthesized into one default-locale row). Every value is NFC-normalized ({@link Text}) and
+   * length-capped; an entry whose title normalizes to blank is treated as not-provided (dropped);
+   * the org's {@code default_locale} row must survive that with a non-blank title, else 400. The
+   * returned list is default-locale-first (callers dual-write the legacy columns from {@code
+   * get(0)}).
+   */
+  private List<ProductListingTranslation> normalizeTranslations(
+      UUID orgId, TranslatedContentInput content, DSLContext txDsl) {
+    String defaultLocale = defaultLocale(orgId, txDsl);
+    List<ProductListingTranslation> source;
+    if (content != null && content.translations() != null && !content.translations().isEmpty()) {
+      source = content.translations();
+    } else {
+      source =
+          List.of(
+              new ProductListingTranslation(
+                  defaultLocale,
+                  content == null ? null : content.title(),
+                  content == null ? null : content.marketingCopy()));
+    }
+
+    Map<String, ProductListingTranslation> byLang = new LinkedHashMap<>();
+    for (ProductListingTranslation t : source) {
+      if (t == null) {
+        continue;
+      }
+      String lang = t.language() == null ? null : t.language().trim().toLowerCase(Locale.ROOT);
+      if (lang == null || lang.isBlank()) {
+        throw new ValidationException("translation language is required");
+      }
+      if (!SUPPORTED_LOCALES.contains(lang)) {
+        throw new ValidationException("unsupported language: " + lang);
+      }
+      String title = Text.normalizeText(t.title());
+      String copy = Text.normalizeText(t.marketingCopy());
+      if (title == null) {
+        continue; // blank tab — not provided; the default-locale requirement is checked below
+      }
+      if (title.length() > MAX_TITLE_CHARS) {
+        throw new ValidationException("title exceeds the " + MAX_TITLE_CHARS + "-character limit");
+      }
+      if (copy != null && copy.length() > MAX_COPY_CHARS) {
+        throw new ValidationException(
+            "marketing_copy exceeds the " + MAX_COPY_CHARS + "-character limit");
+      }
+      if (byLang.containsKey(lang)) {
+        throw new ValidationException("duplicate translation for language: " + lang);
+      }
+      byLang.put(lang, new ProductListingTranslation(lang, title, copy));
+    }
+
+    ProductListingTranslation defaultRow = byLang.get(defaultLocale);
+    if (defaultRow == null) {
+      throw new ValidationException(
+          "a title in the org's default locale (" + defaultLocale + ") is required");
+    }
+    List<ProductListingTranslation> ordered = new ArrayList<>(byLang.size());
+    ordered.add(defaultRow);
+    for (Map.Entry<String, ProductListingTranslation> e : byLang.entrySet()) {
+      if (!e.getKey().equals(defaultLocale)) {
+        ordered.add(e.getValue());
+      }
+    }
+    return ordered;
+  }
+
+  private String defaultLocale(UUID orgId, DSLContext txDsl) {
+    OrgRepository orgRepo = orgRepoFactory.create(txDsl);
+    Org org = orgRepo.findById(orgId).orElseThrow(() -> new NotFoundException("Org", orgId));
+    String loc = org.getDefaultLocale();
+    return loc == null || loc.isBlank() ? "ar" : loc.trim().toLowerCase(Locale.ROOT);
   }
 }

@@ -102,7 +102,12 @@ class FeaturedListingsIT {
     dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
     storage = ObjectStorageFactory.build();
 
-    admin = new ProductListingService(dsl, new ProductListingRepositoryFactoryImpl(), storage);
+    admin =
+        new ProductListingService(
+            dsl,
+            new ProductListingRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            storage);
     storefront =
         new StorefrontService(
             dsl,

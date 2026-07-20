@@ -4,6 +4,7 @@ import com.loai.inventory.domain.model.ListingSort;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
+import com.loai.inventory.domain.model.ProductListingTranslation;
 import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
@@ -116,12 +117,21 @@ public interface ProductListingRepository {
    * tie-broken by {@code slug ASC} so paging is deterministic. {@code featuredOnly} (slice C3) adds
    * the optional {@code featured_sort IS NOT NULL} predicate — ANDed with everything else — so
    * {@code ?featured=true&category=x} intersects the two.
+   *
+   * <p>Content-localization (slice L2): when {@code q} is present the text match runs against the
+   * per-language {@code product_listing_translation} rows in {@code (locale, defaultLocale)} — the
+   * Arabic-folded {@code title_search} (GIN) OR the plain {@code marketing_copy} — so {@code
+   * "احمد"} finds an {@code "أحمد"} title within the shopper's resolved locale. {@code locale} is
+   * the requested locale, {@code defaultLocale} the org's fallback; both are ignored when {@code q}
+   * is null.
    */
   List<ProductListing> findByFilters(
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
       String q,
+      String locale,
+      String defaultLocale,
       BigDecimal minPrice,
       BigDecimal maxPrice,
       boolean featuredOnly,
@@ -142,9 +152,33 @@ public interface ProductListingRepository {
       ListingStatus status,
       UUID categoryId,
       String q,
+      String locale,
+      String defaultLocale,
       BigDecimal minPrice,
       BigDecimal maxPrice,
       boolean featuredOnly);
+
+  // --- translations (content-localization slice L2) ---
+
+  /**
+   * Set-replace a listing's translation set: delete every existing {@code
+   * product_listing_translation} row for the listing, then insert the given ones (the generated
+   * {@code title_search} recomputes on insert). The service validates the default-locale row is
+   * present and each value is normalized/capped before calling this.
+   */
+  void replaceTranslations(UUID listingId, List<ProductListingTranslation> translations);
+
+  /** A listing's translations (all languages) — the admin detail embed. */
+  List<ProductListingTranslation> findTranslations(UUID listingId);
+
+  /**
+   * Translations for many listings in one query, grouped {@code listingId → [translation]}, so an
+   * admin page can embed every language without one {@link #findTranslations} per row (N+1), and
+   * the storefront read can resolve each listing to its locale from the batch. Listings with no
+   * translation row are absent from the map.
+   */
+  Map<UUID, List<ProductListingTranslation>> findTranslationsForListings(
+      Collection<UUID> listingIds);
 
   // --- featured curation (slice C3) ---
 

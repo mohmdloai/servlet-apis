@@ -193,6 +193,9 @@ public class PublicStorefrontServlet extends HttpServlet {
       // B3 (storefront_search_and_filters.md): free-text q, inclusive EGP price band, sort — all
       // optional, parsed/validated in the service (unknown sort / bad price → 400 there). C3 adds
       // ?featured=true (the merchant's curated pinned list; bad value → 400 there too).
+      // L2: ?locale= resolves each listing's title/marketing_copy server-side (unknown → 400 in the
+      // service). The locale is part of the URL, so the max-age=60 cache is naturally
+      // per-(org,locale).
       ListingPage p =
           service.listPublished(
               orgSlug,
@@ -202,6 +205,7 @@ public class PublicStorefrontServlet extends HttpServlet {
               req.getParameter("max_price"),
               req.getParameter("sort"),
               req.getParameter("featured"),
+              req.getParameter("locale"),
               page,
               size);
       List<PublicListingResponse> data =
@@ -211,7 +215,8 @@ public class PublicStorefrontServlet extends HttpServlet {
       writeJson(
           resp,
           200,
-          PublicListingResponse.from(service.getListing(orgSlug, parts[2])),
+          PublicListingResponse.from(
+              service.getListing(orgSlug, parts[2], req.getParameter("locale"))),
           CACHE_LISTINGS);
     } else if (parts.length == 4 && "reviews".equals(parts[3])) {
       // Slice R1: the listing's APPROVED reviews. The slug resolves through the same
