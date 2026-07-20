@@ -272,20 +272,15 @@ public class StorefrontService {
               List<StorefrontBannerTranslation> ts = translations.get(b.getId());
               StorefrontBannerTranslation pref = pickLang(ts, resolvedLocale);
               StorefrontBannerTranslation def = pickLang(ts, defaultLocale);
-              String legacyHeadline =
-                  "en".equals(defaultLocale) ? b.getHeadlineEn() : b.getHeadlineAr();
-              String legacySub =
-                  "en".equals(defaultLocale) ? b.getSubheadingEn() : b.getSubheadingAr();
+              // Requested locale, else the default-locale row (guaranteed present by the write rule
+              // + L1 backfill). The legacy paired-column fallback was dropped at L6.
               String headline =
                   coalesce(
-                      pref == null ? null : pref.headline(),
-                      def == null ? null : def.headline(),
-                      legacyHeadline);
+                      pref == null ? null : pref.headline(), def == null ? null : def.headline());
               String subheading =
                   coalesce(
                       pref == null ? null : pref.subheading(),
-                      def == null ? null : def.subheading(),
-                      legacySub);
+                      def == null ? null : def.subheading());
               return new PublicBannerView(
                   headline,
                   subheading,
@@ -614,7 +609,7 @@ public class StorefrontService {
                   ListingReviewRepository.Aggregate agg = aggregateByListing.get(l.getId());
                   ResolvedContent content =
                       resolveContent(
-                          translationsByListing.get(l.getId()), resolvedLocale, defaultLocale, l);
+                          translationsByListing.get(l.getId()), resolvedLocale, defaultLocale);
                   return new ListingView(
                       l.getSlug(),
                       content.title(),
@@ -657,7 +652,7 @@ public class StorefrontService {
                 c ->
                     new CategoryRef(
                         resolveCategoryName(
-                            catTranslations.get(c.getId()), resolvedLocale, defaultLocale, c),
+                            catTranslations.get(c.getId()), resolvedLocale, defaultLocale),
                         c.getSlug()))
             .toList();
     boolean inStock =
@@ -667,8 +662,7 @@ public class StorefrontService {
                 .getOrDefault(listing.getProductId(), 0)
             > 0;
     ResolvedContent content =
-        resolveContent(
-            listings.findTranslations(listing.getId()), resolvedLocale, defaultLocale, listing);
+        resolveContent(listings.findTranslations(listing.getId()), resolvedLocale, defaultLocale);
     return toView(listings, listing, inStock, categories, content);
   }
 
@@ -695,8 +689,7 @@ public class StorefrontService {
         .map(
             c ->
                 new CategoryNav(
-                    resolveCategoryName(
-                        translations.get(c.getId()), resolvedLocale, defaultLocale, c),
+                    resolveCategoryName(translations.get(c.getId()), resolvedLocale, defaultLocale),
                     c.getSlug(),
                     c.getParentCategoryId() == null ? null : slugById.get(c.getParentCategoryId())))
         .toList();
@@ -830,14 +823,13 @@ public class StorefrontService {
 
   /**
    * Resolve a listing's localized content <b>per field</b>: the requested locale's value, else the
-   * default locale's, else the legacy column (never null for {@code title}). {@code marketingCopy}
-   * falls back the same way, so a present-but-empty locale copy shows the default's.
+   * default locale's (never null for {@code title} — a default-locale row is guaranteed by the
+   * write rule + L1 backfill). {@code marketingCopy} falls back the same way, so a
+   * present-but-empty locale copy shows the default's. (The legacy {@code product_listing} column
+   * fallback was dropped at L6 — the translation table is the only source.)
    */
   private static ResolvedContent resolveContent(
-      List<ProductListingTranslation> translations,
-      String preferred,
-      String defaultLocale,
-      ProductListing fallback) {
+      List<ProductListingTranslation> translations, String preferred, String defaultLocale) {
     ProductListingTranslation pref = null;
     ProductListingTranslation def = null;
     if (translations != null) {
@@ -850,35 +842,24 @@ public class StorefrontService {
         }
       }
     }
-    String title =
-        coalesce(
-            pref == null ? null : pref.title(),
-            def == null ? null : def.title(),
-            fallback.getTitle());
+    String title = coalesce(pref == null ? null : pref.title(), def == null ? null : def.title());
     String copy =
         coalesce(
-            pref == null ? null : pref.marketingCopy(),
-            def == null ? null : def.marketingCopy(),
-            fallback.getMarketingCopy());
+            pref == null ? null : pref.marketingCopy(), def == null ? null : def.marketingCopy());
     return new ResolvedContent(title, copy);
   }
 
-  private static String coalesce(String a, String b, String c) {
-    if (a != null) {
-      return a;
-    }
-    return b != null ? b : c;
+  private static String coalesce(String a, String b) {
+    return a != null ? a : b;
   }
 
   /**
    * Resolve a category's name to one locale (L3): the requested locale's row, else the default
-   * locale's, else the legacy {@code category.name} — never null.
+   * locale's — never null (a default-locale row is guaranteed). The legacy {@code category.name}
+   * fallback was dropped at L6.
    */
   private static String resolveCategoryName(
-      List<CategoryTranslation> translations,
-      String preferred,
-      String defaultLocale,
-      Category fallback) {
+      List<CategoryTranslation> translations, String preferred, String defaultLocale) {
     String pref = null;
     String def = null;
     if (translations != null) {
@@ -891,7 +872,7 @@ public class StorefrontService {
         }
       }
     }
-    return coalesce(pref, def, fallback.getName());
+    return coalesce(pref, def);
   }
 
   /** One-decimal string average (epic §10 — never fabricated precision); null when no aggregate. */

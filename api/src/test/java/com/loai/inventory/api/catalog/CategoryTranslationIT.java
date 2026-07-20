@@ -202,10 +202,8 @@ class CategoryTranslationIT {
     assertEquals(2, t.size());
     assertTrue(t.stream().anyMatch(x -> x.language().equals("ar") && x.name().equals("أكواب")));
     assertTrue(t.stream().anyMatch(x -> x.language().equals("en") && x.name().equals("Mugs")));
-
-    // Dual-write: the legacy category.name carries the default-locale (ar) name.
-    String legacy = (String) dsl.fetchOne("select name from category where id = ?", id).get(0);
-    assertEquals("أكواب", legacy);
+    // (The legacy category.name dual-write assertion was removed at L6 — the column is dropped and
+    // category_translation is the single source of truth.)
   }
 
   @Test

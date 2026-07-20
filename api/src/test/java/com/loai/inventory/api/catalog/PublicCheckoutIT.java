@@ -4,6 +4,7 @@ import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -459,16 +460,26 @@ class PublicCheckoutIT {
 
   private void insertListing(
       UUID org, UUID product, String slug, String title, BigDecimal price, ListingStatus status) {
+    UUID id = UUID.randomUUID();
     dsl.insertInto(PRODUCT_LISTING)
-        .set(PRODUCT_LISTING.ID, UUID.randomUUID())
+        .set(PRODUCT_LISTING.ID, id)
         .set(PRODUCT_LISTING.ORG_ID, org)
         .set(PRODUCT_LISTING.PRODUCT_ID, product)
-        .set(PRODUCT_LISTING.TITLE, title)
         .set(PRODUCT_LISTING.SLUG, slug)
         .set(PRODUCT_LISTING.SALES_PRICE, price)
         .set(PRODUCT_LISTING.STATUS, status)
         .set(PRODUCT_LISTING.PUBLISHED_AT, OffsetDateTime.now())
         .execute();
+    // L6: the title lives in the per-language translation table. Same value in both locales here,
+    // so
+    // the read resolves it whatever the org's default_locale is.
+    for (String lang : new String[] {"ar", "en"}) {
+      dsl.insertInto(PRODUCT_LISTING_TRANSLATION)
+          .set(PRODUCT_LISTING_TRANSLATION.LISTING_ID, id)
+          .set(PRODUCT_LISTING_TRANSLATION.LANGUAGE, lang)
+          .set(PRODUCT_LISTING_TRANSLATION.TITLE, title)
+          .execute();
+    }
   }
 
   private void createInventory(UUID org, UUID product, int stockQty) {

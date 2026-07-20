@@ -5,6 +5,7 @@ import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.LISTING_COMMENT;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -267,6 +268,16 @@ class PortalCommentsIT {
     l.setSalesPrice(new BigDecimal("19.99"));
     l.setStatus(status);
     l.setPublishedAt(status == ListingStatus.PUBLISHED ? OffsetDateTime.now() : null);
-    return new ProductListingRepositoryFactoryImpl().create(dsl).insert(l).getId();
+    UUID listingId = new ProductListingRepositoryFactoryImpl().create(dsl).insert(l).getId();
+    // The listing title (worklist + COMMENT_REPLIED payload) resolves from the default-locale
+    // translation row (L6 — the legacy product_listing.title column is gone).
+    for (String lang : new String[] {"ar", "en"}) {
+      dsl.insertInto(PRODUCT_LISTING_TRANSLATION)
+          .set(PRODUCT_LISTING_TRANSLATION.LISTING_ID, listingId)
+          .set(PRODUCT_LISTING_TRANSLATION.LANGUAGE, lang)
+          .set(PRODUCT_LISTING_TRANSLATION.TITLE, slug + " title")
+          .execute();
+    }
+    return listingId;
   }
 }

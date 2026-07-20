@@ -125,12 +125,13 @@ public class CategoryService {
           Category category = new Category();
           category.setOrgId(orgId);
           category.setParentCategoryId(parentCategoryId);
-          // Dual-write the default-locale name onto the legacy column (rollback safe until L6).
-          category.setName(defaultRow.name());
           category.setSlug(slug);
 
           Category saved = repo.insert(category);
           repo.replaceTranslations(saved.getId(), translations);
+          // The insert RETURNING no longer carries a name column (dropped at L6); surface the
+          // default-locale name on the returned object for the response scalar.
+          saved.setName(defaultRow.name());
           log.info(
               "Created category id={} orgId={} slug={} langs={}",
               saved.getId(),
@@ -166,12 +167,14 @@ public class CategoryService {
           List<CategoryTranslation> translations = normalizeTranslations(orgId, content, txDsl);
           CategoryTranslation defaultRow = translations.get(0);
 
-          existing.setName(defaultRow.name());
           existing.setSlug(slug);
           existing.setParentCategoryId(parentCategoryId);
 
           Category updated = repo.update(existing);
           repo.replaceTranslations(id, translations); // PUT replaces the whole set
+          // The update RETURNING no longer carries a name column (dropped at L6); surface the
+          // default-locale name on the returned object for the response scalar.
+          updated.setName(defaultRow.name());
           log.info("Updated category id={} orgId={} langs={}", id, orgId, translations.size());
           return updated;
         });

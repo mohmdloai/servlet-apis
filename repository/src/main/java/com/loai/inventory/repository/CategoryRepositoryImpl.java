@@ -2,6 +2,7 @@ package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.CATEGORY;
 import static com.loai.inventory.repository.generated.Tables.CATEGORY_TRANSLATION;
+import static com.loai.inventory.repository.generated.Tables.ORG;
 
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.Category;
@@ -18,6 +19,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
+import org.jooq.Record;
+import org.jooq.SelectJoinStep;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,9 +32,33 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
     this.dsl = dsl;
   }
 
+  /**
+   * The default-locale translation row, aliased for the base reads. Since L6 dropped the legacy
+   * {@code category.name} column, the domain object's single {@code name} (the admin-plane display
+   * value) is sourced here: the row whose {@code language} equals the org's {@code default_locale}
+   * (NOT NULL since V52; a default-locale row is guaranteed by the write rule + L1 backfill).
+   */
+  private static final com.loai.inventory.repository.generated.tables.CategoryTranslation
+      DEFAULT_CT = CATEGORY_TRANSLATION.as("default_ct");
+
+  /**
+   * {@code SELECT category.*, default_ct.name} joined to the org's default-locale translation row —
+   * the base read shape behind every category fetch. {@link #toCategory(Record)} reads the resolved
+   * scalar from it.
+   */
+  private SelectJoinStep<Record> selectCategory() {
+    return dsl.select(CATEGORY.fields())
+        .select(DEFAULT_CT.NAME)
+        .from(CATEGORY)
+        .join(ORG)
+        .on(ORG.ID.eq(CATEGORY.ORG_ID))
+        .leftJoin(DEFAULT_CT)
+        .on(DEFAULT_CT.CATEGORY_ID.eq(CATEGORY.ID).and(DEFAULT_CT.LANGUAGE.eq(ORG.DEFAULT_LOCALE)));
+  }
+
   @Override
   public Optional<Category> findById(UUID orgId, UUID id) {
-    return dsl.selectFrom(CATEGORY)
+    return selectCategory()
         .where(CATEGORY.ORG_ID.eq(orgId).and(CATEGORY.ID.eq(id)))
         .fetchOptional()
         .map(this::toCategory);
@@ -39,7 +66,7 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
 
   @Override
   public Optional<Category> findBySlug(UUID orgId, String slug) {
-    return dsl.selectFrom(CATEGORY)
+    return selectCategory()
         .where(CATEGORY.ORG_ID.eq(orgId).and(CATEGORY.SLUG.eq(slug)))
         .fetchOptional()
         .map(this::toCategory);
@@ -50,7 +77,7 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
     if (ids.isEmpty()) {
       return java.util.List.of();
     }
-    return dsl.selectFrom(CATEGORY)
+    return selectCategory()
         .where(CATEGORY.ORG_ID.eq(orgId).and(CATEGORY.ID.in(ids)))
         .fetch()
         .map(this::toCategory);
@@ -58,7 +85,7 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
 
   @Override
   public List<Category> findAll(UUID orgId, int offset, int limit) {
-    return dsl.selectFrom(CATEGORY)
+    return selectCategory()
         .where(CATEGORY.ORG_ID.eq(orgId))
         .orderBy(CATEGORY.CREATED_AT.desc())
         .offset(offset)
@@ -69,7 +96,7 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
 
   @Override
   public List<Category> findAllByOrg(UUID orgId) {
-    return dsl.selectFrom(CATEGORY)
+    return selectCategory()
         .where(CATEGORY.ORG_ID.eq(orgId))
         .orderBy(CATEGORY.CREATED_AT.desc())
         .fetch()
@@ -87,7 +114,6 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
         dsl.insertInto(CATEGORY)
             .set(CATEGORY.ORG_ID, category.getOrgId())
             .set(CATEGORY.PARENT_CATEGORY_ID, category.getParentCategoryId())
-            .set(CATEGORY.NAME, category.getName())
             .set(CATEGORY.SLUG, category.getSlug())
             .returning()
             .fetchOne();
@@ -107,7 +133,6 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
     CategoryRecord record =
         dsl.update(CATEGORY)
             .set(CATEGORY.PARENT_CATEGORY_ID, category.getParentCategoryId())
-            .set(CATEGORY.NAME, category.getName())
             .set(CATEGORY.SLUG, category.getSlug())
             .set(CATEGORY.UPDATED_AT, OffsetDateTime.now())
             .where(CATEGORY.ORG_ID.eq(category.getOrgId()).and(CATEGORY.ID.eq(category.getId())))
@@ -217,14 +242,22 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
     return new CategoryTranslation(r.getLanguage(), r.getName());
   }
 
-  private Category toCategory(CategoryRecord r) {
+  /**
+   * Map a category row. The single {@code name} is the org's default-locale translation, joined in
+   * by {@link #selectCategory()}: a joined read carries it; a bare {@code category} record from an
+   * INSERT/UPDATE {@code RETURNING} does not, so {@code field(...) == null} → name null (the
+   * service fills those return values from the write's default-locale row — the column is gone
+   * since L6).
+   */
+  private Category toCategory(Record r) {
+    String name = r.field(DEFAULT_CT.NAME) == null ? null : r.get(DEFAULT_CT.NAME);
     return new Category(
-        r.getId(),
-        r.getOrgId(),
-        r.getParentCategoryId(),
-        r.getName(),
-        r.getSlug(),
-        r.getCreatedAt(),
-        r.getUpdatedAt());
+        r.get(CATEGORY.ID),
+        r.get(CATEGORY.ORG_ID),
+        r.get(CATEGORY.PARENT_CATEGORY_ID),
+        name,
+        r.get(CATEGORY.SLUG),
+        r.get(CATEGORY.CREATED_AT),
+        r.get(CATEGORY.UPDATED_AT));
   }
 }

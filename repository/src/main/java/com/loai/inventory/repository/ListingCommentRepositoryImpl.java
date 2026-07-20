@@ -2,7 +2,9 @@ package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.LISTING_COMMENT;
+import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
 
 import com.loai.inventory.domain.model.CommentStatus;
 import com.loai.inventory.domain.model.ListingComment;
@@ -16,6 +18,15 @@ import org.jooq.DSLContext;
 public final class ListingCommentRepositoryImpl implements ListingCommentRepository {
 
   private final DSLContext dsl;
+
+  /**
+   * The listing's default-locale title, aliased for the worklist reads. Since L6 dropped {@code
+   * product_listing.title}, the merchant-facing display title (My questions, the moderation queue)
+   * is resolved from the {@code product_listing_translation} row whose {@code language} equals the
+   * org's {@code default_locale} (NOT NULL since V52; a default-locale row is guaranteed).
+   */
+  private static final com.loai.inventory.repository.generated.tables.ProductListingTranslation
+      DEFAULT_T = PRODUCT_LISTING_TRANSLATION.as("default_t");
 
   public ListingCommentRepositoryImpl(DSLContext dsl) {
     this.dsl = dsl;
@@ -56,10 +67,18 @@ public final class ListingCommentRepositoryImpl implements ListingCommentReposit
   @Override
   public List<MyComment> findMine(UUID orgId, UUID customerId) {
     return dsl.select(LISTING_COMMENT.fields())
-        .select(PRODUCT_LISTING.SLUG, PRODUCT_LISTING.TITLE)
+        .select(PRODUCT_LISTING.SLUG, DEFAULT_T.TITLE)
         .from(LISTING_COMMENT)
         .join(PRODUCT_LISTING)
         .on(PRODUCT_LISTING.ID.eq(LISTING_COMMENT.PRODUCT_LISTING_ID))
+        .join(ORG)
+        .on(ORG.ID.eq(LISTING_COMMENT.ORG_ID))
+        .leftJoin(DEFAULT_T)
+        .on(
+            DEFAULT_T
+                .LISTING_ID
+                .eq(PRODUCT_LISTING.ID)
+                .and(DEFAULT_T.LANGUAGE.eq(ORG.DEFAULT_LOCALE)))
         .where(LISTING_COMMENT.ORG_ID.eq(orgId).and(LISTING_COMMENT.CUSTOMER_ID.eq(customerId)))
         .orderBy(LISTING_COMMENT.CREATED_AT.desc(), LISTING_COMMENT.ID.desc())
         .fetch(
@@ -67,7 +86,7 @@ public final class ListingCommentRepositoryImpl implements ListingCommentReposit
                 new MyComment(
                     toComment(rec.into(LISTING_COMMENT)),
                     rec.get(PRODUCT_LISTING.SLUG),
-                    rec.get(PRODUCT_LISTING.TITLE)));
+                    rec.get(DEFAULT_T.TITLE)));
   }
 
   @Override
@@ -119,12 +138,20 @@ public final class ListingCommentRepositoryImpl implements ListingCommentReposit
   public List<AdminComment> findAdminPage(UUID orgId, CommentStatus status, int offset, int limit) {
     var query =
         dsl.select(LISTING_COMMENT.fields())
-            .select(CUSTOMER.NAME, CUSTOMER.EMAIL, PRODUCT_LISTING.TITLE)
+            .select(CUSTOMER.NAME, CUSTOMER.EMAIL, DEFAULT_T.TITLE)
             .from(LISTING_COMMENT)
             .join(CUSTOMER)
             .on(CUSTOMER.ID.eq(LISTING_COMMENT.CUSTOMER_ID))
             .join(PRODUCT_LISTING)
             .on(PRODUCT_LISTING.ID.eq(LISTING_COMMENT.PRODUCT_LISTING_ID))
+            .join(ORG)
+            .on(ORG.ID.eq(LISTING_COMMENT.ORG_ID))
+            .leftJoin(DEFAULT_T)
+            .on(
+                DEFAULT_T
+                    .LISTING_ID
+                    .eq(PRODUCT_LISTING.ID)
+                    .and(DEFAULT_T.LANGUAGE.eq(ORG.DEFAULT_LOCALE)))
             .where(LISTING_COMMENT.ORG_ID.eq(orgId));
     if (status != null) {
       query = query.and(LISTING_COMMENT.STATUS.eq(status.name()));
@@ -143,7 +170,7 @@ public final class ListingCommentRepositoryImpl implements ListingCommentReposit
                     toComment(rec.into(LISTING_COMMENT)),
                     rec.get(CUSTOMER.NAME),
                     rec.get(CUSTOMER.EMAIL),
-                    rec.get(PRODUCT_LISTING.TITLE)));
+                    rec.get(DEFAULT_T.TITLE)));
   }
 
   @Override

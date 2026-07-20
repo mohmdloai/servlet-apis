@@ -132,8 +132,11 @@ public class StorefrontBannerService {
           }
 
           StorefrontBanner saved = repo.insert(b);
-          // Dual-write per-language rows (slice L4); legacy paired columns stay authoritative until
-          // L6. The default-locale row is guaranteed non-empty by the headline rule above.
+          // The insert RETURNING no longer carries the paired headline/subheading columns (dropped
+          // at L6); carry them from the input-built banner so translationRows + the view see them.
+          carryPairedContent(b, saved);
+          // Per-language rows are the authoritative store now (L6). The default-locale row is
+          // guaranteed non-empty by the headline rule above.
           repo.replaceTranslations(saved.getId(), translationRows(saved));
           BannerView view = toView(saved);
           log.info("Created storefront_banner id={} orgId={}", view.banner().getId(), orgId);
@@ -180,7 +183,8 @@ public class StorefrontBannerService {
           }
 
           StorefrontBanner saved = repo.update(b);
-          repo.replaceTranslations(saved.getId(), translationRows(saved)); // L4 dual-write
+          carryPairedContent(b, saved); // RETURNING lost the paired columns at L6
+          repo.replaceTranslations(saved.getId(), translationRows(saved));
           BannerView view = toView(saved);
           log.info("Updated storefront_banner id={} orgId={}", id, orgId);
           return view;
@@ -304,7 +308,17 @@ public class StorefrontBannerService {
   }
 
   /**
-   * The per-language rows to persist from a banner's paired columns (slice L4): one row per
+   * Carry the paired headline/subheading sides across (the write's input → the returned banner).
+   */
+  private static void carryPairedContent(StorefrontBanner from, StorefrontBanner to) {
+    to.setHeadlineAr(from.getHeadlineAr());
+    to.setHeadlineEn(from.getHeadlineEn());
+    to.setSubheadingAr(from.getSubheadingAr());
+    to.setSubheadingEn(from.getSubheadingEn());
+  }
+
+  /**
+   * The per-language rows to persist from a banner's paired content (slice L4): one row per
    * non-empty locale side, reproducing the L1 backfill exactly (headline OR subheading present).
    */
   private static List<StorefrontBannerTranslation> translationRows(StorefrontBanner b) {

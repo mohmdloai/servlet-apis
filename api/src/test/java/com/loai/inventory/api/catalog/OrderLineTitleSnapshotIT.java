@@ -215,7 +215,7 @@ class OrderLineTitleSnapshotIT {
   void anonCheckout_snapshotsResolvedTitle_perLocale() {
     UUID org = seedOrg("acme", "ar");
     UUID product = seedProduct(org, "Internal Kettle Name");
-    UUID listing = seedListing(org, product, "kettle", "غلاية"); // legacy title = ar default
+    UUID listing = seedListing(org, product, "kettle");
     translate(listing, "ar", "غلاية");
     translate(listing, "en", "Kettle");
     seedInventory(org, product, 20);
@@ -238,7 +238,7 @@ class OrderLineTitleSnapshotIT {
   void anonCheckout_missingLocaleRow_fallsBackToDefaultTitle() {
     UUID org = seedOrg("acme", "ar");
     UUID product = seedProduct(org, "Internal Pen Name");
-    UUID listing = seedListing(org, product, "pen", "قلم");
+    UUID listing = seedListing(org, product, "pen");
     translate(listing, "ar", "قلم"); // no en row
     seedInventory(org, product, 5);
 
@@ -251,7 +251,7 @@ class OrderLineTitleSnapshotIT {
   void unsupportedLocale_is400() {
     UUID org = seedOrg("acme", "ar");
     UUID product = seedProduct(org, "Internal");
-    UUID listing = seedListing(org, product, "kettle", "غلاية");
+    UUID listing = seedListing(org, product, "kettle");
     translate(listing, "ar", "غلاية");
     seedInventory(org, product, 5);
 
@@ -262,7 +262,7 @@ class OrderLineTitleSnapshotIT {
   void onlineOrder_stillSnapshotsProductName() {
     UUID org = seedOrg("acme", "ar");
     UUID product = seedProduct(org, "Internal Kettle Name");
-    UUID listing = seedListing(org, product, "kettle", "غلاية");
+    UUID listing = seedListing(org, product, "kettle");
     translate(listing, "ar", "غلاية");
     translate(listing, "en", "Kettle");
     seedInventory(org, product, 5);
@@ -284,7 +284,7 @@ class OrderLineTitleSnapshotIT {
   void portalCheckout_snapshotsResolvedTitle_perLocale() {
     UUID org = seedOrg("acme", "ar");
     UUID product = seedProduct(org, "Internal Kettle Name");
-    UUID listing = seedListing(org, product, "kettle", "غلاية");
+    UUID listing = seedListing(org, product, "kettle");
     translate(listing, "ar", "غلاية");
     translate(listing, "en", "Kettle");
     seedInventory(org, product, 20);
@@ -359,13 +359,12 @@ class OrderLineTitleSnapshotIT {
     return id;
   }
 
-  private UUID seedListing(UUID org, UUID product, String slug, String legacyTitle) {
+  private UUID seedListing(UUID org, UUID product, String slug) {
     UUID id = UUID.randomUUID();
     dsl.insertInto(PRODUCT_LISTING)
         .set(PRODUCT_LISTING.ID, id)
         .set(PRODUCT_LISTING.ORG_ID, org)
         .set(PRODUCT_LISTING.PRODUCT_ID, product)
-        .set(PRODUCT_LISTING.TITLE, legacyTitle)
         .set(PRODUCT_LISTING.SLUG, slug)
         .set(PRODUCT_LISTING.SALES_PRICE, new BigDecimal("50.00"))
         .set(PRODUCT_LISTING.STATUS, ListingStatus.PUBLISHED)

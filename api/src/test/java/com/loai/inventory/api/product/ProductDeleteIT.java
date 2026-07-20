@@ -94,7 +94,6 @@ class ProductDeleteIT {
     dsl.insertInto(PRODUCT_LISTING)
         .set(PRODUCT_LISTING.ORG_ID, org)
         .set(PRODUCT_LISTING.PRODUCT_ID, product)
-        .set(PRODUCT_LISTING.TITLE, "Widget")
         .set(PRODUCT_LISTING.SLUG, "widget")
         .set(PRODUCT_LISTING.SALES_PRICE, new BigDecimal("9.99"))
         .set(PRODUCT_LISTING.STATUS, ListingStatus.DRAFT)

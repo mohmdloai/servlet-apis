@@ -2,6 +2,7 @@ package com.loai.inventory.api.catalog;
 
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -493,7 +494,21 @@ class StorefrontSearchIT {
     l.setSalesPrice(new BigDecimal(price));
     l.setStatus(status);
     l.setPublishedAt(publishedAt);
-    return listingRepo().insert(l).getId();
+    UUID listingId = listingRepo().insert(l).getId();
+    // Search resolves against the per-language translation rows (L6 — the legacy
+    // title/marketing_copy
+    // columns and their search arm are gone). Seed both locales the same, so the query matches
+    // under
+    // whichever locale resolution picks.
+    for (String lang : new String[] {"ar", "en"}) {
+      dsl.insertInto(PRODUCT_LISTING_TRANSLATION)
+          .set(PRODUCT_LISTING_TRANSLATION.LISTING_ID, listingId)
+          .set(PRODUCT_LISTING_TRANSLATION.LANGUAGE, lang)
+          .set(PRODUCT_LISTING_TRANSLATION.TITLE, title)
+          .set(PRODUCT_LISTING_TRANSLATION.MARKETING_COPY, copy)
+          .execute();
+    }
+    return listingId;
   }
 
   private ProductListingRepository listingRepo() {
