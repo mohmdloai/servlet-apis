@@ -13,6 +13,7 @@ import com.loai.inventory.domain.model.Category;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.CategoryService;
+import com.loai.inventory.service.CategoryService.TranslatedNameInput;
 import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.ServletOutputStream;
@@ -88,13 +89,17 @@ class CategoryHandlerAuthTest {
             ORG,
             "");
     assertEquals(403, resp.status);
-    verify(service, never()).create(any(), any(), any(), any());
+    verify(service, never()).create(any(), any(), any(), any(TranslatedNameInput.class));
   }
 
   @Test
   void create_allowedForStaff() throws IOException {
     CategoryService service = Mockito.mock(CategoryService.class);
-    when(service.create(any(), any(), any(), any())).thenReturn(aCategory());
+    when(service.create(any(), any(), any(), any(TranslatedNameInput.class)))
+        .thenReturn(aCategory());
+    // The handler re-reads for the full-language embed (slice L3).
+    when(service.getById(any(), any()))
+        .thenReturn(new CategoryService.CategoryView(aCategory(), List.of()));
     Resp resp = new Resp();
     handler(service)
         .handle(
@@ -104,7 +109,7 @@ class CategoryHandlerAuthTest {
             ORG,
             "");
     assertEquals(201, resp.status);
-    verify(service).create(any(), any(), any(), any());
+    verify(service).create(any(), any(), any(), any(TranslatedNameInput.class));
   }
 
   @Test

@@ -3,6 +3,7 @@ package com.loai.inventory.api.servlet.handler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CategoryResponse;
+import com.loai.inventory.api.dto.CategoryTranslationDto;
 import com.loai.inventory.api.dto.CreateCategoryRequest;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.UpdateCategoryRequest;
@@ -10,8 +11,11 @@ import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Category;
+import com.loai.inventory.domain.model.CategoryTranslation;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.service.CategoryService;
+import com.loai.inventory.service.CategoryService.CategoryView;
+import com.loai.inventory.service.CategoryService.TranslatedNameInput;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -64,12 +68,12 @@ public class CategoryHandler implements OrgResourceHandler {
     if (categoryId == null) {
       int page = intParam(req, "page", 0);
       int size = intParam(req, "size", 10);
-      List<Category> categories = categoryService.getAll(orgId, page, size);
+      List<CategoryView> categories = categoryService.getAll(orgId, page, size);
       long total = categoryService.count(orgId);
       List<CategoryResponse> data = categories.stream().map(CategoryResponse::from).toList();
       writeJson(resp, 200, new PageResponse<>(data, total, page, size));
     } else {
-      Category category = categoryService.getById(orgId, categoryId);
+      CategoryView category = categoryService.getById(orgId, categoryId);
       writeJson(resp, 200, CategoryResponse.from(category));
     }
   }
@@ -81,9 +85,12 @@ public class CategoryHandler implements OrgResourceHandler {
       throw new ValidationException("POST does not accept a category id in the path");
     }
     CreateCategoryRequest body = readBody(req, CreateCategoryRequest.class);
+    TranslatedNameInput content =
+        new TranslatedNameInput(toDomainTranslations(body.getTranslations()), body.getName());
     Category created =
-        categoryService.create(orgId, body.getName(), body.getSlug(), body.getParentCategoryId());
-    writeJson(resp, 201, CategoryResponse.from(created));
+        categoryService.create(orgId, body.getSlug(), body.getParentCategoryId(), content);
+    // Re-read for the full embed (all languages), mirroring the listing handler.
+    writeJson(resp, 201, CategoryResponse.from(categoryService.getById(orgId, created.getId())));
   }
 
   private void doPut(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID categoryId)
@@ -93,10 +100,18 @@ public class CategoryHandler implements OrgResourceHandler {
       throw new ValidationException("Category id is required for update");
     }
     UpdateCategoryRequest body = readBody(req, UpdateCategoryRequest.class);
-    Category updated =
-        categoryService.update(
-            orgId, categoryId, body.getName(), body.getSlug(), body.getParentCategoryId());
-    writeJson(resp, 200, CategoryResponse.from(updated));
+    TranslatedNameInput content =
+        new TranslatedNameInput(toDomainTranslations(body.getTranslations()), body.getName());
+    categoryService.update(orgId, categoryId, body.getSlug(), body.getParentCategoryId(), content);
+    // Re-read for the full embed (all languages), mirroring the listing handler.
+    writeJson(resp, 200, CategoryResponse.from(categoryService.getById(orgId, categoryId)));
+  }
+
+  private static List<CategoryTranslation> toDomainTranslations(List<CategoryTranslationDto> dtos) {
+    if (dtos == null) {
+      return null;
+    }
+    return dtos.stream().map(CategoryTranslationDto::toDomain).toList();
   }
 
   private void doDelete(

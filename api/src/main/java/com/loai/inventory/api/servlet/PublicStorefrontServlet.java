@@ -150,8 +150,12 @@ public class PublicStorefrontServlet extends HttpServlet {
           if (parts.length != 2) {
             throw new ValidationException("Unknown route");
           }
+          // L3: ?locale= resolves each nav name server-side (unknown → 400); the locale is part of
+          // the URL, so the max-age=60 cache is naturally per-(org,locale).
           List<PublicCategoryResponse> data =
-              service.listCategories(orgSlug).stream().map(PublicCategoryResponse::from).toList();
+              service.listCategories(orgSlug, req.getParameter("locale")).stream()
+                  .map(PublicCategoryResponse::from)
+                  .toList();
           writeJson(resp, 200, data, CACHE_LISTINGS);
         }
         case "availability" -> doAvailability(req, resp, orgSlug, parts);

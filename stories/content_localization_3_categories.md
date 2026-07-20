@@ -1,5 +1,30 @@
 # Slice L3 — category translation cutover
 
+> **Status: SHIPPED (core) 2026-07-20** — local-only on branch
+> `81_feat/content-localization-categories` (off master at the merged L2, PR #80). As built, mirroring
+> L2: `CategoryService` gained `OrgRepositoryFactory` (for `default_locale`), a `TranslatedNameInput`
+> (`translations:[{language,name}]` **or** the legacy single `name` → default-locale row) and a
+> `CategoryView(category, translations[])`; `create`/`update` take the input and kept their old
+> name-arg overloads as backward-compat; `getById`/`getAll` now return `CategoryView` (all languages
+> embedded). Repo gained `replaceTranslations`/`findTranslations`/`findTranslationsForCategories`.
+> The public nav (`listCategories(orgSlug, ?locale=)`) and the listing-detail category chips resolve
+> `name` per-node (requested locale → default → legacy `category.name`, never null; unknown locale →
+> 400). Legacy `category.name` is dual-written from the default-locale row. DTOs (`CategoryResponse`,
+> Create/Update requests) gained `translations`; the servlet passes `?locale=` to the nav read.
+>
+> **One refinement vs the story below:** categories have **no HTTP search surface** (neither the admin
+> `GET /categories` nor the storefront nav takes a `q`), so — unlike L2's listing search — there is no
+> `ILIKE`-to-`name_search` cutover to make and no ICU-sorted endpoint. AC5's Arabic-aware match is
+> therefore proven **structurally** (the generated `name_search` + `fold_search` folds a hamza-less
+> query onto a hamza'd `ar` name, asserted directly against `category_translation` in the IT); the ICU
+> `und-x-icu` collation on the column is likewise structural until a sorted category read exists. If a
+> category search endpoint is ever added, the per-language `name_search` EXISTS pattern from
+> `ProductListingRepositoryImpl` drops straight in.
+>
+> Tests: `CategoryTranslationIT` (api module, 7 green) + the full catalog/storefront regression suite
+> green (`CategoryCrudIT`, `CategoryHandlerAuthTest`, `ProductListingIT`, `StorefrontSearchIT`, … — the
+> whole api suite passed).
+>
 > Cutover slice of [`content_localization.md`](content_localization.md). Same shape as L2, smaller
 > surface: `category.name` moves onto `category_translation` (L1). Admin embeds all languages; the
 > storefront nav + category reads resolve to one by `?locale=`; category search finally becomes

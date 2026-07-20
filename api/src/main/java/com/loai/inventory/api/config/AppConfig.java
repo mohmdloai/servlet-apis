@@ -381,7 +381,8 @@ public class AppConfig {
         new UserAdminService(
             dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);
     this.productService = new ProductService(productRepository, dsl);
-    this.categoryService = new CategoryService(dsl, categoryRepositoryFactory);
+    this.categoryService =
+        new CategoryService(dsl, categoryRepositoryFactory, orgRepositoryFactory);
     // MagicLinkService is built before NotificationService — the producer mints an unsubscribe
     // link for every customer email through it. (publicBaseUrl was resolved above for auth links.)
     long magicTtlDays = parseLong(System.getenv("MAGIC_LINK_TTL_DAYS"), 30L);

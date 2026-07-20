@@ -1,7 +1,9 @@
 package com.loai.inventory.api.dto;
 
 import com.loai.inventory.domain.model.Category;
+import com.loai.inventory.service.CategoryService.CategoryView;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 public class CategoryResponse {
@@ -12,6 +14,11 @@ public class CategoryResponse {
   private String slug;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
+
+  /**
+   * Every authored language (content-localization slice L3); null on the legacy base-only shape.
+   */
+  private List<CategoryTranslationDto> translations;
 
   private CategoryResponse() {}
 
@@ -25,6 +32,17 @@ public class CategoryResponse {
     r.createdAt = c.getCreatedAt();
     r.updatedAt = c.getUpdatedAt();
     return r;
+  }
+
+  /** The admin shape carrying every language's name (slice L3). */
+  public static CategoryResponse from(CategoryView v) {
+    CategoryResponse r = from(v.category());
+    r.translations = v.translations().stream().map(CategoryTranslationDto::from).toList();
+    return r;
+  }
+
+  public List<CategoryTranslationDto> getTranslations() {
+    return translations;
   }
 
   public UUID getId() {
