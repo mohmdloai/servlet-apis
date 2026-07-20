@@ -1,8 +1,10 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Category;
+import com.loai.inventory.domain.model.CategoryTranslation;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -39,4 +41,15 @@ public interface CategoryRepository {
 
   /** True if any category in the org names {@code id} as its parent (blocks delete). */
   boolean hasChildren(UUID orgId, UUID id);
+
+  // --- translations (content-localization slice L3) ---
+
+  /** Replace the whole per-language translation set for a category (delete-then-insert). */
+  void replaceTranslations(UUID categoryId, List<CategoryTranslation> translations);
+
+  /** Every language's translation for one category, ordered by language. */
+  List<CategoryTranslation> findTranslations(UUID categoryId);
+
+  /** Batch-load translations for a set of categories (avoids N+1), keyed by category id. */
+  Map<UUID, List<CategoryTranslation>> findTranslationsForCategories(Collection<UUID> categoryIds);
 }

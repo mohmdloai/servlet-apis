@@ -59,7 +59,11 @@ class CategoryCrudIT {
     dataSource = new HikariDataSource(cfg);
     dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
 
-    service = new CategoryService(dsl, new CategoryRepositoryFactoryImpl());
+    service =
+        new CategoryService(
+            dsl,
+            new CategoryRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl());
   }
 
   @AfterAll
@@ -76,7 +80,7 @@ class CategoryCrudIT {
   void create_then_read() {
     UUID org = createOrg("acme");
     Category c = service.create(org, "Books", "books", null);
-    Category read = service.getById(org, c.getId());
+    Category read = service.getById(org, c.getId()).category();
     assertEquals("books", read.getSlug());
     assertEquals(1, service.count(org));
   }
@@ -93,7 +97,8 @@ class CategoryCrudIT {
     UUID org = createOrg("acme");
     Category parent = service.create(org, "Notebooks", "notebooks", null);
     Category child = service.create(org, "Spiral", "spiral", parent.getId());
-    assertEquals(parent.getId(), service.getById(org, child.getId()).getParentCategoryId());
+    assertEquals(
+        parent.getId(), service.getById(org, child.getId()).category().getParentCategoryId());
   }
 
   @Test

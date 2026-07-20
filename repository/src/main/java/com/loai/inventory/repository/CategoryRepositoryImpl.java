@@ -1,13 +1,20 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.CATEGORY;
+import static com.loai.inventory.repository.generated.Tables.CATEGORY_TRANSLATION;
 
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.Category;
+import com.loai.inventory.domain.model.CategoryTranslation;
 import com.loai.inventory.domain.repository.CategoryRepository;
 import com.loai.inventory.repository.generated.tables.records.CategoryRecord;
+import com.loai.inventory.repository.generated.tables.records.CategoryTranslationRecord;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -155,6 +162,59 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
         dsl.selectOne()
             .from(CATEGORY)
             .where(CATEGORY.ORG_ID.eq(orgId).and(CATEGORY.PARENT_CATEGORY_ID.eq(id))));
+  }
+
+  // --- translations (content-localization slice L3) ---
+
+  @Override
+  public void replaceTranslations(UUID categoryId, List<CategoryTranslation> translations) {
+    dsl.deleteFrom(CATEGORY_TRANSLATION)
+        .where(CATEGORY_TRANSLATION.CATEGORY_ID.eq(categoryId))
+        .execute();
+    if (translations == null || translations.isEmpty()) {
+      return;
+    }
+    List<CategoryTranslationRecord> rows = new ArrayList<>(translations.size());
+    for (CategoryTranslation t : translations) {
+      CategoryTranslationRecord r = dsl.newRecord(CATEGORY_TRANSLATION);
+      r.setCategoryId(categoryId);
+      r.setLanguage(t.language());
+      r.setName(t.name());
+      rows.add(r);
+    }
+    dsl.batchInsert(rows).execute();
+  }
+
+  @Override
+  public List<CategoryTranslation> findTranslations(UUID categoryId) {
+    return dsl.selectFrom(CATEGORY_TRANSLATION)
+        .where(CATEGORY_TRANSLATION.CATEGORY_ID.eq(categoryId))
+        .orderBy(CATEGORY_TRANSLATION.LANGUAGE.asc())
+        .fetch()
+        .map(CategoryRepositoryImpl::toTranslation);
+  }
+
+  @Override
+  public Map<UUID, List<CategoryTranslation>> findTranslationsForCategories(
+      Collection<UUID> categoryIds) {
+    if (categoryIds == null || categoryIds.isEmpty()) {
+      return Map.of();
+    }
+    Map<UUID, List<CategoryTranslation>> byCategory = new HashMap<>();
+    dsl.selectFrom(CATEGORY_TRANSLATION)
+        .where(CATEGORY_TRANSLATION.CATEGORY_ID.in(categoryIds))
+        .orderBy(CATEGORY_TRANSLATION.CATEGORY_ID.asc(), CATEGORY_TRANSLATION.LANGUAGE.asc())
+        .fetch()
+        .forEach(
+            r ->
+                byCategory
+                    .computeIfAbsent(r.getCategoryId(), k -> new ArrayList<>())
+                    .add(toTranslation(r)));
+    return byCategory;
+  }
+
+  private static CategoryTranslation toTranslation(CategoryTranslationRecord r) {
+    return new CategoryTranslation(r.getLanguage(), r.getName());
   }
 
   private Category toCategory(CategoryRecord r) {

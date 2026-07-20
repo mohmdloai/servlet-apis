@@ -7,6 +7,7 @@ import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Category;
+import com.loai.inventory.domain.model.CategoryTranslation;
 import com.loai.inventory.domain.model.ListingSort;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.Org;
@@ -591,9 +592,18 @@ public class StorefrontService {
             .orElseThrow(() -> new NotFoundException("Listing not found: " + listingSlug));
 
     List<UUID> categoryIds = listings.findCategoryIds(listing.getId());
+    CategoryRepository categoryRepo = categoryRepoFactory.create(rootDsl);
+    // Resolve each chip's name to the same locale as the listing (L3, per-field fallback).
+    Map<UUID, List<CategoryTranslation>> catTranslations =
+        categoryRepo.findTranslationsForCategories(categoryIds);
     List<CategoryRef> categories =
-        categoryRepoFactory.create(rootDsl).findByIds(orgId, categoryIds).stream()
-            .map(c -> new CategoryRef(c.getName(), c.getSlug()))
+        categoryRepo.findByIds(orgId, categoryIds).stream()
+            .map(
+                c ->
+                    new CategoryRef(
+                        resolveCategoryName(
+                            catTranslations.get(c.getId()), resolvedLocale, defaultLocale, c),
+                        c.getSlug()))
             .toList();
     boolean inStock =
         inventoryRepoFactory
@@ -607,19 +617,31 @@ public class StorefrontService {
     return toView(listings, listing, inStock, categories, content);
   }
 
+  /** Nav read without an explicit locale — resolves to the org's default locale. */
   public List<CategoryNav> listCategories(String orgSlug) {
-    UUID orgId = resolveOrg(orgSlug).getId();
+    return listCategories(orgSlug, null);
+  }
+
+  public List<CategoryNav> listCategories(String orgSlug, String locale) {
+    Org org = resolveOrg(orgSlug);
+    UUID orgId = org.getId();
+    String defaultLocale = defaultLocaleOf(org);
+    String resolvedLocale = resolveRequestedLocale(locale, defaultLocale);
     CategoryRepository repo = categoryRepoFactory.create(rootDsl);
     List<Category> all = repo.findAllByOrg(orgId);
     Map<UUID, String> slugById = new HashMap<>();
     for (Category c : all) {
       slugById.put(c.getId(), c.getSlug());
     }
+    // Batch the per-language names and resolve each node to the requested locale (L3).
+    Map<UUID, List<CategoryTranslation>> translations =
+        repo.findTranslationsForCategories(all.stream().map(Category::getId).toList());
     return all.stream()
         .map(
             c ->
                 new CategoryNav(
-                    c.getName(),
+                    resolveCategoryName(
+                        translations.get(c.getId()), resolvedLocale, defaultLocale, c),
                     c.getSlug(),
                     c.getParentCategoryId() == null ? null : slugById.get(c.getParentCategoryId())))
         .toList();
@@ -791,6 +813,30 @@ public class StorefrontService {
       return a;
     }
     return b != null ? b : c;
+  }
+
+  /**
+   * Resolve a category's name to one locale (L3): the requested locale's row, else the default
+   * locale's, else the legacy {@code category.name} — never null.
+   */
+  private static String resolveCategoryName(
+      List<CategoryTranslation> translations,
+      String preferred,
+      String defaultLocale,
+      Category fallback) {
+    String pref = null;
+    String def = null;
+    if (translations != null) {
+      for (CategoryTranslation t : translations) {
+        if (t.language().equals(preferred)) {
+          pref = t.name();
+        }
+        if (t.language().equals(defaultLocale)) {
+          def = t.name();
+        }
+      }
+    }
+    return coalesce(pref, def, fallback.getName());
   }
 
   /** One-decimal string average (epic §10 — never fabricated precision); null when no aggregate. */

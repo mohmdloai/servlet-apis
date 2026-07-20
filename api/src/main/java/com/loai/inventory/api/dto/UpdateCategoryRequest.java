@@ -1,5 +1,6 @@
 package com.loai.inventory.api.dto;
 
+import java.util.List;
 import java.util.UUID;
 
 public class UpdateCategoryRequest {
@@ -7,7 +8,22 @@ public class UpdateCategoryRequest {
   private String slug;
   private UUID parentCategoryId;
 
+  /**
+   * Per-language names (content-localization slice L3). When present, supersedes the single {@code
+   * name} and replaces the whole set; the org's default-locale entry is required. When absent,
+   * {@code name} becomes the default-locale row (backward-compatible).
+   */
+  private List<CategoryTranslationDto> translations;
+
   public UpdateCategoryRequest() {}
+
+  public List<CategoryTranslationDto> getTranslations() {
+    return translations;
+  }
+
+  public void setTranslations(List<CategoryTranslationDto> translations) {
+    this.translations = translations;
+  }
 
   public String getName() {
     return name;
