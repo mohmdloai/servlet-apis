@@ -10,6 +10,11 @@
 #   docker compose -f docker-compose.prod.yml up -d
 # The CI deploy job then only refreshes the backend.
 
+# Pinned so `com.docker.compose.project` labels are deterministic (Dozzle filters on this) rather
+# than derived from the launch directory. /opt/ststore already yields this name — a no-op today,
+# but it guarantees the DOZZLE_FILTER match survives a rename/relocation of the deploy dir.
+name: ststore
+
 networks:
   internal:
     driver: bridge
@@ -158,6 +163,24 @@ services:
       - ./caddy.d:/etc/caddy/conf.d:ro
       - caddy_data:/data
       - caddy_config:/config
+
+  # ── Log viewer (private, SSH-tunnel only) — see docs/dozzle-log-viewer-plan.md ──
+  # Live container logs for this stack. NOT public: no networks, no Caddy route, no DNS.
+  # Reached only over the SSH tunnel we already use (protection = the SSH key).
+  dozzle:
+    image: amir20/dozzle:latest
+    restart: unless-stopped
+    # Loopback-only publish → reachable from the VPS itself, never from the internet.
+    # Host port 8899 avoids the 8080 the neighbouring proxy on this shared box already binds.
+    ports:
+      - "127.0.0.1:8899:8080"
+    environment:
+      # Only this stack's containers — not the whole host (keeps the neighbour app private).
+      # Matches the pinned compose project name below; do not remove on this shared host.
+      DOZZLE_FILTER: "label=com.docker.compose.project=ststore"
+    volumes:
+      # Read-only socket — Dozzle only needs to read logs.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
 volumes:
   postgres_data:
