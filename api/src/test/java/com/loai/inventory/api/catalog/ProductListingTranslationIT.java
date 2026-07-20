@@ -248,15 +248,8 @@ class ProductListingTranslationIT {
     assertEquals(2, t.size());
     assertTrue(t.stream().anyMatch(x -> x.language().equals("ar") && x.title().equals("كوب")));
     assertTrue(t.stream().anyMatch(x -> x.language().equals("en") && x.title().equals("Mug")));
-
-    // Dual-write: the legacy product_listing.title/marketing_copy carry the default-locale (ar)
-    // copy.
-    String legacyTitle =
-        (String) dsl.fetchOne("select title from product_listing where id = ?", id).get(0);
-    String legacyCopy =
-        (String) dsl.fetchOne("select marketing_copy from product_listing where id = ?", id).get(0);
-    assertEquals("كوب", legacyTitle);
-    assertEquals("وصف", legacyCopy);
+    // (The legacy product_listing.title/marketing_copy dual-write assertion was removed at L6 — the
+    // columns are dropped and product_listing_translation is the single source of truth.)
   }
 
   @Test

@@ -90,8 +90,8 @@ public class StorefrontPageService {
 
           StorefrontPageRepository repo = pageRepoFactory.create(tx);
           StorefrontPage saved = repo.upsert(page);
-          // Dual-write per-language rows (slice L4); legacy paired columns stay authoritative until
-          // L6. One row per non-null body side (the default-locale row is guaranteed by validate).
+          // Per-language rows are the authoritative store now (L6). One row per non-null body side
+          // (the default-locale row is guaranteed by validate).
           List<StorefrontPageTranslation> rows = new java.util.ArrayList<>(2);
           if (bodyAr != null) {
             rows.add(new StorefrontPageTranslation("ar", bodyAr));
@@ -100,6 +100,10 @@ public class StorefrontPageService {
             rows.add(new StorefrontPageTranslation("en", bodyEn));
           }
           repo.replaceTranslations(saved.getId(), rows);
+          // The upsert RETURNING no longer carries the paired body columns (dropped at L6); surface
+          // the written bodies on the returned shell for the response.
+          saved.setBodyAr(bodyAr);
+          saved.setBodyEn(bodyEn);
           log.info("Upserted storefront_page kind={} orgId={}", kind.wire(), orgId);
           return saved;
         });
@@ -147,8 +151,9 @@ public class StorefrontPageService {
         repo.findByKind(org.getId(), kind)
             .orElseThrow(() -> new NotFoundException("Page not found: " + kind.wire()));
     List<StorefrontPageTranslation> ts = repo.findTranslations(page.getId());
-    String legacyDefault = "en".equals(defaultLocale) ? page.getBodyEn() : page.getBodyAr();
-    String body = coalesce(bodyOf(ts, resolvedLocale), bodyOf(ts, defaultLocale), legacyDefault);
+    // Requested locale, else the default-locale row (guaranteed present by the write rule + L1
+    // backfill). The legacy paired-column fallback was dropped at L6.
+    String body = coalesce(bodyOf(ts, resolvedLocale), bodyOf(ts, defaultLocale));
     return new PublicPageView(kind.wire(), body, page.getUpdatedAt());
   }
 
@@ -223,11 +228,8 @@ public class StorefrontPageService {
     return loc;
   }
 
-  private static String coalesce(String a, String b, String c) {
-    if (a != null) {
-      return a;
-    }
-    return b != null ? b : c;
+  private static String coalesce(String a, String b) {
+    return a != null ? a : b;
   }
 
   private Org resolveOrg(String orgSlug) {

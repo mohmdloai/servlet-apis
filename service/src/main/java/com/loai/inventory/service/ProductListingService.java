@@ -277,9 +277,6 @@ public class ProductListingService {
           ProductListing listing = new ProductListing();
           listing.setOrgId(orgId);
           listing.setProductId(productId);
-          // Dual-write the default-locale copy onto the legacy columns (rollback safe until L6).
-          listing.setTitle(defaultRow.title());
-          listing.setMarketingCopy(defaultRow.marketingCopy());
           listing.setSlug(slug);
           listing.setSalesPrice(salesPrice);
           listing.setStatus(ListingStatus.DRAFT);
@@ -287,6 +284,10 @@ public class ProductListingService {
 
           ProductListing saved = repo.insert(listing);
           repo.replaceTranslations(saved.getId(), translations);
+          // The insert RETURNING no longer carries a title/marketing_copy column (dropped at L6);
+          // surface the default-locale copy on the returned object for the response scalar.
+          saved.setTitle(defaultRow.title());
+          saved.setMarketingCopy(defaultRow.marketingCopy());
           log.info(
               "Created product_listing id={} orgId={} productId={} langs={}",
               saved.getId(),
@@ -317,13 +318,15 @@ public class ProductListingService {
               normalizeTranslations(orgId, content, txDsl);
           ProductListingTranslation defaultRow = translations.get(0);
 
-          existing.setTitle(defaultRow.title());
-          existing.setMarketingCopy(defaultRow.marketingCopy());
           existing.setSlug(slug);
           existing.setSalesPrice(salesPrice);
 
           ProductListing updated = repo.update(existing);
           repo.replaceTranslations(id, translations); // PUT replaces the whole set
+          // The update RETURNING no longer carries a title/marketing_copy column (dropped at L6);
+          // surface the default-locale copy on the returned object for the response scalar.
+          updated.setTitle(defaultRow.title());
+          updated.setMarketingCopy(defaultRow.marketingCopy());
           log.info(
               "Updated product_listing id={} orgId={} langs={}", id, orgId, translations.size());
           return updated;
@@ -394,6 +397,11 @@ public class ProductListingService {
                   .orElseThrow(() -> new NotFoundException("ProductListing", id));
           mutate.accept(listing);
           ProductListing updated = repo.updateStatus(listing);
+          // updateStatus' RETURNING no longer carries a title/marketing_copy column (dropped at
+          // L6);
+          // carry the default-locale scalar from the joined findById read onto the response object.
+          updated.setTitle(listing.getTitle());
+          updated.setMarketingCopy(listing.getMarketingCopy());
           log.info("Listing id={} orgId={} → {}", id, orgId, updated.getStatus());
           return updated;
         });

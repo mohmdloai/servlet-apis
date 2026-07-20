@@ -2,6 +2,7 @@ package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.CATEGORY;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
+import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_CATEGORY;
@@ -45,11 +46,42 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     this.dsl = dsl;
   }
 
+  /**
+   * The default-locale translation row, aliased for the base reads. Since L6 dropped the legacy
+   * {@code product_listing.title}/{@code marketing_copy} columns, the domain object's single {@code
+   * title}/{@code marketingCopy} (the admin-plane display value, the comment-notification payload,
+   * …) is sourced here: the row whose {@code language} equals the org's {@code default_locale} (NOT
+   * NULL since V52; a default-locale row is guaranteed to exist by the write rule + L1 backfill). A
+   * {@code LEFT} join keeps a listing visible even in the impossible case of a missing row (title
+   * then null).
+   */
+  private static final com.loai.inventory.repository.generated.tables.ProductListingTranslation
+      DEFAULT_T = PRODUCT_LISTING_TRANSLATION.as("default_t");
+
+  /**
+   * {@code SELECT product_listing.*, default_t.title, default_t.marketing_copy} joined to the org's
+   * default-locale translation row — the base read shape behind every listing fetch that maps to a
+   * {@link ProductListing}. {@link #toListing(Record)} reads the resolved scalar from it.
+   */
+  private SelectJoinStep<Record> selectListing() {
+    return dsl.select(PRODUCT_LISTING.fields())
+        .select(DEFAULT_T.TITLE, DEFAULT_T.MARKETING_COPY)
+        .from(PRODUCT_LISTING)
+        .join(ORG)
+        .on(ORG.ID.eq(PRODUCT_LISTING.ORG_ID))
+        .leftJoin(DEFAULT_T)
+        .on(
+            DEFAULT_T
+                .LISTING_ID
+                .eq(PRODUCT_LISTING.ID)
+                .and(DEFAULT_T.LANGUAGE.eq(ORG.DEFAULT_LOCALE)));
+  }
+
   // --- listing CRUD ---
 
   @Override
   public Optional<ProductListing> findById(UUID orgId, UUID id) {
-    return dsl.selectFrom(PRODUCT_LISTING)
+    return selectListing()
         .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.ID.eq(id)))
         .fetchOptional()
         .map(this::toListing);
@@ -66,16 +98,15 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       return List.of();
     }
     // Resolve the title to the checkout locale (L2b): the requested-locale translation row, else
-    // the
-    // default-locale row, else the legacy product_listing.title — via two LEFT JOINs + COALESCE,
-    // one
-    // query, mirroring the L2 read resolver. When locale == defaultLocale both joins hit the same
-    // row
-    // (harmless — COALESCE still lands on it).
+    // the default-locale row — via two LEFT JOINs + COALESCE, one query, mirroring the L2 read
+    // resolver. When locale == defaultLocale both joins hit the same row (harmless — COALESCE still
+    // lands on it). A default-locale row is guaranteed (write rule + L1 backfill), so title is
+    // never
+    // null. (The legacy product_listing.title fallback arm was dropped at L6.)
     var reqT = PRODUCT_LISTING_TRANSLATION.as("req_t");
     var defT = PRODUCT_LISTING_TRANSLATION.as("def_t");
     org.jooq.Field<String> resolvedTitle =
-        org.jooq.impl.DSL.coalesce(reqT.TITLE, defT.TITLE, PRODUCT_LISTING.TITLE).as("title");
+        org.jooq.impl.DSL.coalesce(reqT.TITLE, defT.TITLE).as("title");
     return dsl.select(
             PRODUCT_LISTING.SLUG,
             PRODUCT_LISTING.PRODUCT_ID,
@@ -152,13 +183,24 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
             .coalesce(
                 INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY), org.jooq.impl.DSL.inline(0))
             .as("available");
+    // The reorder label is the listing title in the org's default locale (L6 — sourced from the
+    // default-locale translation row now that product_listing.title is gone). A default-locale row
+    // is guaranteed, so the title is never null.
     return dsl.select(
             PRODUCT_LISTING.PRODUCT_ID,
             PRODUCT_LISTING.SLUG,
-            PRODUCT_LISTING.TITLE,
+            DEFAULT_T.TITLE,
             PRODUCT_LISTING.SALES_PRICE,
             available)
         .from(PRODUCT_LISTING)
+        .join(ORG)
+        .on(ORG.ID.eq(PRODUCT_LISTING.ORG_ID))
+        .leftJoin(DEFAULT_T)
+        .on(
+            DEFAULT_T
+                .LISTING_ID
+                .eq(PRODUCT_LISTING.ID)
+                .and(DEFAULT_T.LANGUAGE.eq(ORG.DEFAULT_LOCALE)))
         .leftJoin(INVENTORY)
         .on(
             INVENTORY
@@ -176,7 +218,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                 new ReorderResolution(
                     r.get(PRODUCT_LISTING.PRODUCT_ID),
                     r.get(PRODUCT_LISTING.SLUG),
-                    r.get(PRODUCT_LISTING.TITLE),
+                    r.get(DEFAULT_T.TITLE),
                     r.get(PRODUCT_LISTING.SALES_PRICE),
                     r.get(available) == null ? 0 : r.get(available)));
   }
@@ -184,7 +226,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   @Override
   public Optional<ProductListing> findBySlugAndStatus(
       UUID orgId, String slug, ListingStatus status) {
-    return dsl.selectFrom(PRODUCT_LISTING)
+    return selectListing()
         .where(
             PRODUCT_LISTING
                 .ORG_ID
@@ -197,7 +239,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
 
   @Override
   public Optional<ProductListing> findBySlug(UUID orgId, String slug) {
-    return dsl.selectFrom(PRODUCT_LISTING)
+    return selectListing()
         .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.SLUG.eq(slug)))
         .fetchOptional()
         .map(this::toListing);
@@ -228,8 +270,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       ListingSort sort,
       int offset,
       int limit) {
-    SelectJoinStep<Record> step = dsl.select(PRODUCT_LISTING.fields()).from(PRODUCT_LISTING);
-    return joinCategoryIfNeeded(step, categoryId)
+    return joinCategoryIfNeeded(selectListing(), categoryId)
         .where(
             filterConditions(
                 orgId,
@@ -244,7 +285,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
         .orderBy(orderFields(sort))
         .offset(offset)
         .limit(limit)
-        .fetchInto(PRODUCT_LISTING)
+        .fetch()
         .map(this::toListing);
   }
 
@@ -316,15 +357,10 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       c = c.and(PRODUCT_LISTING.FEATURED_SORT.isNotNull());
     }
     if (q != null) {
-      // Dual-write era: match the per-language translation rows (Arabic-folded) OR the legacy
-      // default-locale columns — so a listing that predates its translation backfill (or a raw-
-      // inserted fixture) still matches on its legacy title/copy. The legacy arm is dropped at L6.
-      String pattern = "%" + q + "%";
-      c =
-          c.and(
-              translationSearchExists(q, locale, defaultLocale)
-                  .or(PRODUCT_LISTING.TITLE.likeIgnoreCase(pattern))
-                  .or(PRODUCT_LISTING.MARKETING_COPY.likeIgnoreCase(pattern)));
+      // Match the per-language translation rows (Arabic-folded title_search OR marketing_copy
+      // substring) in the resolved locales. The legacy product_listing.title/marketing_copy OR-arms
+      // were dropped at L6 — the translation table is the only text source now.
+      c = c.and(translationSearchExists(q, locale, defaultLocale));
     }
     if (minPrice != null) {
       c = c.and(PRODUCT_LISTING.SALES_PRICE.ge(minPrice));
@@ -390,7 +426,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
 
   @Override
   public List<ProductListing> findAll(UUID orgId, int offset, int limit) {
-    return dsl.selectFrom(PRODUCT_LISTING)
+    return selectListing()
         .where(PRODUCT_LISTING.ORG_ID.eq(orgId))
         .orderBy(PRODUCT_LISTING.CREATED_AT.desc())
         .offset(offset)
@@ -402,7 +438,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   @Override
   public List<ProductListing> findAllByStatus(
       UUID orgId, ListingStatus status, int offset, int limit) {
-    return dsl.selectFrom(PRODUCT_LISTING)
+    return selectListing()
         .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.STATUS.eq(toGenerated(status))))
         .orderBy(PRODUCT_LISTING.CREATED_AT.desc())
         .offset(offset)
@@ -431,7 +467,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
 
   @Override
   public List<ProductListing> findFeatured(UUID orgId) {
-    return dsl.selectFrom(PRODUCT_LISTING)
+    return selectListing()
         .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.FEATURED_SORT.isNotNull()))
         .orderBy(PRODUCT_LISTING.FEATURED_SORT.asc(), PRODUCT_LISTING.SLUG.asc())
         .fetch()
@@ -474,8 +510,6 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
         dsl.insertInto(PRODUCT_LISTING)
             .set(PRODUCT_LISTING.ORG_ID, listing.getOrgId())
             .set(PRODUCT_LISTING.PRODUCT_ID, listing.getProductId())
-            .set(PRODUCT_LISTING.TITLE, listing.getTitle())
-            .set(PRODUCT_LISTING.MARKETING_COPY, listing.getMarketingCopy())
             .set(PRODUCT_LISTING.SLUG, listing.getSlug())
             .set(PRODUCT_LISTING.SALES_PRICE, listing.getSalesPrice())
             .set(PRODUCT_LISTING.STATUS, toGenerated(listing.getStatus()))
@@ -493,8 +527,6 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   public ProductListing update(ProductListing listing) {
     ProductListingRecord record =
         dsl.update(PRODUCT_LISTING)
-            .set(PRODUCT_LISTING.TITLE, listing.getTitle())
-            .set(PRODUCT_LISTING.MARKETING_COPY, listing.getMarketingCopy())
             .set(PRODUCT_LISTING.SLUG, listing.getSlug())
             .set(PRODUCT_LISTING.SALES_PRICE, listing.getSalesPrice())
             .set(PRODUCT_LISTING.UPDATED_AT, OffsetDateTime.now())
@@ -798,19 +830,29 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     return com.loai.inventory.repository.generated.enums.ListingStatus.valueOf(status.name());
   }
 
-  private ProductListing toListing(ProductListingRecord r) {
+  /**
+   * Map a listing row. The single {@code title}/{@code marketingCopy} is the org's default-locale
+   * translation, joined in by {@link #selectListing()} (and {@code default_t} aliased columns): a
+   * joined read carries them; a bare {@code product_listing} record from an INSERT/UPDATE {@code
+   * RETURNING} does not, so {@code field(...) == null} → scalar null (the service fills those
+   * return values from the write's default-locale row — the columns themselves are gone since L6).
+   */
+  private ProductListing toListing(Record r) {
+    String title = r.field(DEFAULT_T.TITLE) == null ? null : r.get(DEFAULT_T.TITLE);
+    String marketingCopy =
+        r.field(DEFAULT_T.MARKETING_COPY) == null ? null : r.get(DEFAULT_T.MARKETING_COPY);
     return new ProductListing(
-        r.getId(),
-        r.getOrgId(),
-        r.getProductId(),
-        r.getTitle(),
-        r.getMarketingCopy(),
-        r.getSlug(),
-        r.getSalesPrice(),
-        ListingStatus.valueOf(r.getStatus().name()),
-        r.getPublishedAt(),
-        r.getCreatedAt(),
-        r.getUpdatedAt());
+        r.get(PRODUCT_LISTING.ID),
+        r.get(PRODUCT_LISTING.ORG_ID),
+        r.get(PRODUCT_LISTING.PRODUCT_ID),
+        title,
+        marketingCopy,
+        r.get(PRODUCT_LISTING.SLUG),
+        r.get(PRODUCT_LISTING.SALES_PRICE),
+        ListingStatus.valueOf(r.get(PRODUCT_LISTING.STATUS).name()),
+        r.get(PRODUCT_LISTING.PUBLISHED_AT),
+        r.get(PRODUCT_LISTING.CREATED_AT),
+        r.get(PRODUCT_LISTING.UPDATED_AT));
   }
 
   private ProductListingImage toImage(ProductListingImageRecord r) {

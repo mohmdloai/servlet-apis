@@ -1,6 +1,7 @@
 package com.loai.inventory.api.catalog;
 
 import static com.loai.inventory.repository.generated.Tables.CATEGORY;
+import static com.loai.inventory.repository.generated.Tables.CATEGORY_TRANSLATION;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -323,11 +324,20 @@ class StorefrontIT {
         .set(CATEGORY.ID, id)
         .set(CATEGORY.ORG_ID, orgId)
         .set(CATEGORY.PARENT_CATEGORY_ID, parentId)
-        .set(CATEGORY.NAME, name)
         .set(CATEGORY.SLUG, slug)
         .set(CATEGORY.CREATED_AT, createdAt)
         .set(CATEGORY.UPDATED_AT, createdAt)
         .execute();
+    // L6: the category name lives in the per-language translation table (both locales the same
+    // here,
+    // so the nav resolves it whatever the org's default_locale is).
+    for (String lang : new String[] {"ar", "en"}) {
+      dsl.insertInto(CATEGORY_TRANSLATION)
+          .set(CATEGORY_TRANSLATION.CATEGORY_ID, id)
+          .set(CATEGORY_TRANSLATION.LANGUAGE, lang)
+          .set(CATEGORY_TRANSLATION.NAME, name)
+          .execute();
+    }
     return id;
   }
 

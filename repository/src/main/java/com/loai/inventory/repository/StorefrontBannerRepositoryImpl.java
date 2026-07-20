@@ -35,19 +35,25 @@ public final class StorefrontBannerRepositoryImpl implements StorefrontBannerRep
 
   @Override
   public List<StorefrontBanner> findAllByOrg(UUID orgId) {
-    return dsl.selectFrom(STOREFRONT_BANNER)
-        .where(STOREFRONT_BANNER.ORG_ID.eq(orgId))
-        .orderBy(STOREFRONT_BANNER.SORT_ORDER.asc(), STOREFRONT_BANNER.CREATED_AT.asc())
-        .fetch()
-        .map(this::toBanner);
+    List<StorefrontBanner> rows =
+        dsl.selectFrom(STOREFRONT_BANNER)
+            .where(STOREFRONT_BANNER.ORG_ID.eq(orgId))
+            .orderBy(STOREFRONT_BANNER.SORT_ORDER.asc(), STOREFRONT_BANNER.CREATED_AT.asc())
+            .fetch()
+            .map(this::toBanner);
+    loadPairedTranslations(rows);
+    return rows;
   }
 
   @Override
   public Optional<StorefrontBanner> findById(UUID orgId, UUID id) {
-    return dsl.selectFrom(STOREFRONT_BANNER)
-        .where(STOREFRONT_BANNER.ORG_ID.eq(orgId).and(STOREFRONT_BANNER.ID.eq(id)))
-        .fetchOptional()
-        .map(this::toBanner);
+    Optional<StorefrontBanner> found =
+        dsl.selectFrom(STOREFRONT_BANNER)
+            .where(STOREFRONT_BANNER.ORG_ID.eq(orgId).and(STOREFRONT_BANNER.ID.eq(id)))
+            .fetchOptional()
+            .map(this::toBanner);
+    found.ifPresent(b -> loadPairedTranslations(List.of(b)));
+    return found;
   }
 
   @Override
@@ -55,10 +61,6 @@ public final class StorefrontBannerRepositoryImpl implements StorefrontBannerRep
     StorefrontBannerRecord record =
         dsl.insertInto(STOREFRONT_BANNER)
             .set(STOREFRONT_BANNER.ORG_ID, b.getOrgId())
-            .set(STOREFRONT_BANNER.HEADLINE_AR, b.getHeadlineAr())
-            .set(STOREFRONT_BANNER.HEADLINE_EN, b.getHeadlineEn())
-            .set(STOREFRONT_BANNER.SUBHEADING_AR, b.getSubheadingAr())
-            .set(STOREFRONT_BANNER.SUBHEADING_EN, b.getSubheadingEn())
             .set(STOREFRONT_BANNER.IMAGE_OBJECT_KEY, b.getImageObjectKey())
             .set(STOREFRONT_BANNER.TARGET_TYPE, b.getTargetType().wire())
             .set(STOREFRONT_BANNER.TARGET_SLUG, b.getTargetSlug())
@@ -78,10 +80,6 @@ public final class StorefrontBannerRepositoryImpl implements StorefrontBannerRep
   public StorefrontBanner update(StorefrontBanner b) {
     StorefrontBannerRecord record =
         dsl.update(STOREFRONT_BANNER)
-            .set(STOREFRONT_BANNER.HEADLINE_AR, b.getHeadlineAr())
-            .set(STOREFRONT_BANNER.HEADLINE_EN, b.getHeadlineEn())
-            .set(STOREFRONT_BANNER.SUBHEADING_AR, b.getSubheadingAr())
-            .set(STOREFRONT_BANNER.SUBHEADING_EN, b.getSubheadingEn())
             .set(STOREFRONT_BANNER.IMAGE_OBJECT_KEY, b.getImageObjectKey())
             .set(STOREFRONT_BANNER.TARGET_TYPE, b.getTargetType().wire())
             .set(STOREFRONT_BANNER.TARGET_SLUG, b.getTargetSlug())
@@ -186,17 +184,45 @@ public final class StorefrontBannerRepositoryImpl implements StorefrontBannerRep
                                 .and(PRODUCT_LISTING.SLUG.eq(STOREFRONT_BANNER.TARGET_SLUG))
                                 .and(PRODUCT_LISTING.STATUS.eq(ListingStatus.PUBLISHED)))));
 
-    return dsl.selectFrom(STOREFRONT_BANNER)
-        .where(
-            STOREFRONT_BANNER
-                .ORG_ID
-                .eq(orgId)
-                .and(STOREFRONT_BANNER.ACTIVE.isTrue())
-                .and(inWindow)
-                .and(categoryResolves.or(listingResolves)))
-        .orderBy(STOREFRONT_BANNER.SORT_ORDER.asc(), STOREFRONT_BANNER.CREATED_AT.asc())
-        .fetch()
-        .map(this::toBanner);
+    List<StorefrontBanner> rows =
+        dsl.selectFrom(STOREFRONT_BANNER)
+            .where(
+                STOREFRONT_BANNER
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(STOREFRONT_BANNER.ACTIVE.isTrue())
+                    .and(inWindow)
+                    .and(categoryResolves.or(listingResolves)))
+            .orderBy(STOREFRONT_BANNER.SORT_ORDER.asc(), STOREFRONT_BANNER.CREATED_AT.asc())
+            .fetch()
+            .map(this::toBanner);
+    loadPairedTranslations(rows);
+    return rows;
+  }
+
+  /**
+   * Fill each banner's paired {@code headlineAr/En}/{@code subheadingAr/En} from its per-language
+   * translation rows (L6 — the legacy paired columns are gone, so the admin-plane view and the
+   * public resolver's default-locale pick are sourced from {@code storefront_banner_translation}).
+   * One batched query for the whole set; a banner with no rows keeps null sides.
+   */
+  private void loadPairedTranslations(List<StorefrontBanner> banners) {
+    if (banners.isEmpty()) {
+      return;
+    }
+    Map<UUID, List<StorefrontBannerTranslation>> byBanner =
+        findTranslationsForBanners(banners.stream().map(StorefrontBanner::getId).toList());
+    for (StorefrontBanner b : banners) {
+      for (StorefrontBannerTranslation t : byBanner.getOrDefault(b.getId(), List.of())) {
+        if ("ar".equals(t.language())) {
+          b.setHeadlineAr(t.headline());
+          b.setSubheadingAr(t.subheading());
+        } else if ("en".equals(t.language())) {
+          b.setHeadlineEn(t.headline());
+          b.setSubheadingEn(t.subheading());
+        }
+      }
+    }
   }
 
   // --- translations (content-localization slice L4) ---
@@ -244,14 +270,16 @@ public final class StorefrontBannerRepositoryImpl implements StorefrontBannerRep
     return byBanner;
   }
 
+  /**
+   * Map a banner row. The paired {@code headline/subheading} sides are NOT read here since L6
+   * dropped the legacy columns — {@link #loadPairedTranslations} fills them from the translation
+   * table on the read paths, and the write paths carry them from the input (see {@code
+   * StorefrontBannerService}). A bare RETURNING record therefore maps with null sides.
+   */
   private StorefrontBanner toBanner(StorefrontBannerRecord r) {
     StorefrontBanner b = new StorefrontBanner();
     b.setId(r.getId());
     b.setOrgId(r.getOrgId());
-    b.setHeadlineAr(r.getHeadlineAr());
-    b.setHeadlineEn(r.getHeadlineEn());
-    b.setSubheadingAr(r.getSubheadingAr());
-    b.setSubheadingEn(r.getSubheadingEn());
     b.setImageObjectKey(r.getImageObjectKey());
     b.setTargetType(BannerTargetType.fromWire(r.getTargetType()));
     b.setTargetSlug(r.getTargetSlug());

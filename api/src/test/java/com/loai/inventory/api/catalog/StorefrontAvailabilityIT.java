@@ -208,7 +208,6 @@ class StorefrontAvailabilityIT {
         .set(PRODUCT_LISTING.ID, UUID.randomUUID())
         .set(PRODUCT_LISTING.ORG_ID, org)
         .set(PRODUCT_LISTING.PRODUCT_ID, product)
-        .set(PRODUCT_LISTING.TITLE, slug + " title")
         .set(PRODUCT_LISTING.SLUG, slug)
         .set(PRODUCT_LISTING.SALES_PRICE, new BigDecimal("12.00"))
         .set(PRODUCT_LISTING.STATUS, status)

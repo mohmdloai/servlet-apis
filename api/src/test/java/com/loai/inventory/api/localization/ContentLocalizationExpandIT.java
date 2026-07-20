@@ -77,11 +77,14 @@ class ContentLocalizationExpandIT {
 
     seedLegacy();
 
-    // 2. Apply V63 -> creates *_translation tables and backfills the seeded legacy data.
+    // 2. Apply V63 -> creates *_translation tables and backfills the seeded legacy data. Pinned to
+    // V63: this test validates the EXPAND step against still-present legacy columns, so it must not
+    // roll on to V64 (the L6 CONTRACT drop), which would remove the columns it seeds and asserts.
     Flyway.configure()
         .dataSource(PG.getJdbcUrl(), PG.getUsername(), PG.getPassword())
         .schemas("inventorydb")
         .locations("classpath:db/migration")
+        .target(MigrationVersion.fromVersion("63"))
         .load()
         .migrate();
   }

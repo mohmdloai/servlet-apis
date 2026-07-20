@@ -4,6 +4,7 @@ import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.LISTING_REVIEW;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -210,6 +211,15 @@ class ReviewModerationIT {
     l.setStatus(ListingStatus.PUBLISHED);
     l.setPublishedAt(OffsetDateTime.now());
     UUID listingId = new ProductListingRepositoryFactoryImpl().create(dsl).insert(l).getId();
+    // The worklist title is resolved from the default-locale translation row (L6 — the legacy
+    // product_listing.title column is gone). Seed both locales the same value.
+    for (String lang : new String[] {"ar", "en"}) {
+      dsl.insertInto(PRODUCT_LISTING_TRANSLATION)
+          .set(PRODUCT_LISTING_TRANSLATION.LISTING_ID, listingId)
+          .set(PRODUCT_LISTING_TRANSLATION.LANGUAGE, lang)
+          .set(PRODUCT_LISTING_TRANSLATION.TITLE, "kettle title")
+          .execute();
+    }
     return new Seed(orgId, slug, customerId, productId, listingId);
   }
 

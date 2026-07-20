@@ -4,7 +4,9 @@ import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.FULFILLMENT;
 import static com.loai.inventory.repository.generated.Tables.FULFILLMENT_LINE;
 import static com.loai.inventory.repository.generated.Tables.LISTING_REVIEW;
+import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 
@@ -27,6 +29,15 @@ import org.jooq.impl.DSL;
 public final class ListingReviewRepositoryImpl implements ListingReviewRepository {
 
   private final DSLContext dsl;
+
+  /**
+   * The listing's default-locale title, aliased for the worklist reads. Since L6 dropped {@code
+   * product_listing.title}, the merchant-facing display title (My reviews, the moderation queue) is
+   * resolved from the {@code product_listing_translation} row whose {@code language} equals the
+   * org's {@code default_locale} (NOT NULL since V52; a default-locale row is guaranteed).
+   */
+  private static final com.loai.inventory.repository.generated.tables.ProductListingTranslation
+      DEFAULT_T = PRODUCT_LISTING_TRANSLATION.as("default_t");
 
   public ListingReviewRepositoryImpl(DSLContext dsl) {
     this.dsl = dsl;
@@ -108,10 +119,18 @@ public final class ListingReviewRepositoryImpl implements ListingReviewRepositor
   @Override
   public List<MyReview> findMine(UUID orgId, UUID customerId) {
     return dsl.select(LISTING_REVIEW.fields())
-        .select(PRODUCT_LISTING.SLUG, PRODUCT_LISTING.TITLE)
+        .select(PRODUCT_LISTING.SLUG, DEFAULT_T.TITLE)
         .from(LISTING_REVIEW)
         .join(PRODUCT_LISTING)
         .on(PRODUCT_LISTING.ID.eq(LISTING_REVIEW.PRODUCT_LISTING_ID))
+        .join(ORG)
+        .on(ORG.ID.eq(LISTING_REVIEW.ORG_ID))
+        .leftJoin(DEFAULT_T)
+        .on(
+            DEFAULT_T
+                .LISTING_ID
+                .eq(PRODUCT_LISTING.ID)
+                .and(DEFAULT_T.LANGUAGE.eq(ORG.DEFAULT_LOCALE)))
         .where(LISTING_REVIEW.ORG_ID.eq(orgId).and(LISTING_REVIEW.CUSTOMER_ID.eq(customerId)))
         .orderBy(LISTING_REVIEW.CREATED_AT.desc(), LISTING_REVIEW.ID.desc())
         .fetch(
@@ -119,7 +138,7 @@ public final class ListingReviewRepositoryImpl implements ListingReviewRepositor
                 new MyReview(
                     toReview(rec.into(LISTING_REVIEW)),
                     rec.get(PRODUCT_LISTING.SLUG),
-                    rec.get(PRODUCT_LISTING.TITLE)));
+                    rec.get(DEFAULT_T.TITLE)));
   }
 
   @Override
@@ -155,12 +174,20 @@ public final class ListingReviewRepositoryImpl implements ListingReviewRepositor
   public List<AdminReview> findAdminPage(UUID orgId, ReviewStatus status, int offset, int limit) {
     var query =
         dsl.select(LISTING_REVIEW.fields())
-            .select(CUSTOMER.NAME, CUSTOMER.EMAIL, PRODUCT_LISTING.TITLE)
+            .select(CUSTOMER.NAME, CUSTOMER.EMAIL, DEFAULT_T.TITLE)
             .from(LISTING_REVIEW)
             .join(CUSTOMER)
             .on(CUSTOMER.ID.eq(LISTING_REVIEW.CUSTOMER_ID))
             .join(PRODUCT_LISTING)
             .on(PRODUCT_LISTING.ID.eq(LISTING_REVIEW.PRODUCT_LISTING_ID))
+            .join(ORG)
+            .on(ORG.ID.eq(LISTING_REVIEW.ORG_ID))
+            .leftJoin(DEFAULT_T)
+            .on(
+                DEFAULT_T
+                    .LISTING_ID
+                    .eq(PRODUCT_LISTING.ID)
+                    .and(DEFAULT_T.LANGUAGE.eq(ORG.DEFAULT_LOCALE)))
             .where(LISTING_REVIEW.ORG_ID.eq(orgId));
     if (status != null) {
       query = query.and(LISTING_REVIEW.STATUS.eq(status.name()));
@@ -179,7 +206,7 @@ public final class ListingReviewRepositoryImpl implements ListingReviewRepositor
                     toReview(rec.into(LISTING_REVIEW)),
                     rec.get(CUSTOMER.NAME),
                     rec.get(CUSTOMER.EMAIL),
-                    rec.get(PRODUCT_LISTING.TITLE)));
+                    rec.get(DEFAULT_T.TITLE)));
   }
 
   @Override
