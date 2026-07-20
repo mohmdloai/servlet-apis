@@ -1,5 +1,33 @@
 # Slice L4 — banner + page translation cutover (paired → table)
 
+> **Status: SHIPPED (core) 2026-07-20** — local-only on branch
+> `83_feat/content-localization-banners-pages` (off master at merged L2b, PR #82). As built, keeping
+> the **paired admin API** and adapting internally (the story's allowed "implementer's call"): admin
+> writes still take the paired `BannerInput`/`PageInput` (`headline_ar/en`, `body_ar/en`) and the
+> admin reads still embed both locales via the paired `BannerResponse`/`StorefrontPageResponse` — so
+> AC4's "embed all translations" is satisfied by the unchanged paired shape. On every write the
+> services **dual-write** per-language rows to `storefront_banner_translation` /
+> `storefront_page_translation` (one row per non-empty side, reproducing the L1 backfill), legacy
+> paired columns staying authoritative until L6.
+>
+> **The reversal (C1/C4):** the public reads now resolve to a **single** value by `?locale=`:
+> `StorefrontService.banners(orgSlug, ?locale=)` collapses `PublicBannerView` to `headline`/
+> `subheading` (per-field: requested row → default row → legacy default column); `StorefrontPageService.publicPage(orgSlug, kind, ?locale=)` returns a new `PublicPageView(kind, body,
+> updatedAt)` resolved the same way. `PublicBannerResponse`/`PublicPageResponse` lost their `_ar`/
+> `_en` keys (single `headline`/`subheading`/`body`). Unknown locale → 400; unset → org default. The
+> servlet passes `?locale=` to both reads (cache naturally per-(org,locale) via the URL). Repos gained
+> `replaceTranslations` + `findTranslationsForBanners` (banner) / `findTranslations` (page).
+>
+> **Render parity** (AC3) holds by construction: the dual-write rows equal the paired columns, and the
+> per-field resolver reproduces the old client-side per-field fallback. Locale-less overloads kept for
+> pre-L4 callers.
+>
+> Tests: `PublicBannersIT` (+unsupported-locale-400, single-value shape, per-locale resolution) and
+> `StorefrontPagesIT` (3-arg `publicPage`, per-locale body, fallback, no paired keys) adapted;
+> `StorefrontIT`/`StorefrontBannerAdminIT`/`PublicOgImageIT` regression-green. **L5 must ship the
+> storefront's `?locale=` pass-through + single-value read in the same release** (coordinated public
+> contract change).
+>
 > Cutover slice of [`content_localization.md`](content_localization.md). Converts the two paired-column
 > entities — `storefront_banner` (`headline_ar/en`, `subheading_ar/en`) and `storefront_page`
 > (`body_ar/en`) — onto their `*_translation` tables (L1). **This slice reverses the shipped C1/C4

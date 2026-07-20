@@ -2,6 +2,7 @@ package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.PageKind;
 import com.loai.inventory.domain.model.StorefrontPage;
+import com.loai.inventory.domain.model.StorefrontPageTranslation;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,4 +34,12 @@ public interface StorefrontPageRepository {
    * just doesn't exist).
    */
   boolean deleteByKind(UUID orgId, PageKind kind);
+
+  // --- translations (content-localization slice L4) ---
+
+  /** Replace the whole per-language translation set for a page (delete-then-insert). */
+  void replaceTranslations(UUID pageId, List<StorefrontPageTranslation> translations);
+
+  /** Every language's body for one page, ordered by language. */
+  List<StorefrontPageTranslation> findTranslations(UUID pageId);
 }

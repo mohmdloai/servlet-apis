@@ -3,15 +3,22 @@ package com.loai.inventory.repository;
 import static com.loai.inventory.repository.generated.Tables.CATEGORY;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
 import static com.loai.inventory.repository.generated.Tables.STOREFRONT_BANNER;
+import static com.loai.inventory.repository.generated.Tables.STOREFRONT_BANNER_TRANSLATION;
 
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.BannerTargetType;
 import com.loai.inventory.domain.model.StorefrontBanner;
+import com.loai.inventory.domain.model.StorefrontBannerTranslation;
 import com.loai.inventory.domain.repository.StorefrontBannerRepository;
 import com.loai.inventory.repository.generated.enums.ListingStatus;
 import com.loai.inventory.repository.generated.tables.records.StorefrontBannerRecord;
+import com.loai.inventory.repository.generated.tables.records.StorefrontBannerTranslationRecord;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.Condition;
@@ -190,6 +197,51 @@ public final class StorefrontBannerRepositoryImpl implements StorefrontBannerRep
         .orderBy(STOREFRONT_BANNER.SORT_ORDER.asc(), STOREFRONT_BANNER.CREATED_AT.asc())
         .fetch()
         .map(this::toBanner);
+  }
+
+  // --- translations (content-localization slice L4) ---
+
+  @Override
+  public void replaceTranslations(UUID bannerId, List<StorefrontBannerTranslation> translations) {
+    dsl.deleteFrom(STOREFRONT_BANNER_TRANSLATION)
+        .where(STOREFRONT_BANNER_TRANSLATION.BANNER_ID.eq(bannerId))
+        .execute();
+    if (translations == null || translations.isEmpty()) {
+      return;
+    }
+    List<StorefrontBannerTranslationRecord> rows = new ArrayList<>(translations.size());
+    for (StorefrontBannerTranslation t : translations) {
+      StorefrontBannerTranslationRecord r = dsl.newRecord(STOREFRONT_BANNER_TRANSLATION);
+      r.setBannerId(bannerId);
+      r.setLanguage(t.language());
+      r.setHeadline(t.headline());
+      r.setSubheading(t.subheading());
+      rows.add(r);
+    }
+    dsl.batchInsert(rows).execute();
+  }
+
+  @Override
+  public Map<UUID, List<StorefrontBannerTranslation>> findTranslationsForBanners(
+      Collection<UUID> bannerIds) {
+    if (bannerIds == null || bannerIds.isEmpty()) {
+      return Map.of();
+    }
+    Map<UUID, List<StorefrontBannerTranslation>> byBanner = new HashMap<>();
+    dsl.selectFrom(STOREFRONT_BANNER_TRANSLATION)
+        .where(STOREFRONT_BANNER_TRANSLATION.BANNER_ID.in(bannerIds))
+        .orderBy(
+            STOREFRONT_BANNER_TRANSLATION.BANNER_ID.asc(),
+            STOREFRONT_BANNER_TRANSLATION.LANGUAGE.asc())
+        .fetch()
+        .forEach(
+            r ->
+                byBanner
+                    .computeIfAbsent(r.getBannerId(), k -> new ArrayList<>())
+                    .add(
+                        new StorefrontBannerTranslation(
+                            r.getLanguage(), r.getHeadline(), r.getSubheading())));
+    return byBanner;
   }
 
   private StorefrontBanner toBanner(StorefrontBannerRecord r) {

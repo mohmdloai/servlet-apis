@@ -159,13 +159,18 @@ public class PublicStorefrontServlet extends HttpServlet {
           writeJson(resp, 200, data, CACHE_LISTINGS);
         }
         case "availability" -> doAvailability(req, resp, orgSlug, parts);
-        case "pages" -> doPages(resp, orgSlug, parts);
+        case "pages" -> doPages(req, resp, orgSlug, parts);
         case "banners" -> {
           if (parts.length != 2) {
             throw new ValidationException("Unknown route");
           }
+          // L4: ?locale= resolves each banner's headline/subheading server-side (unknown → 400);
+          // the
+          // locale is part of the URL, so the max-age cache is naturally per-(org,locale).
           List<PublicBannerResponse> data =
-              service.banners(orgSlug).stream().map(PublicBannerResponse::from).toList();
+              service.banners(orgSlug, req.getParameter("locale")).stream()
+                  .map(PublicBannerResponse::from)
+                  .toList();
           writeJson(resp, 200, data, CACHE_LISTINGS);
         }
         case "og-image" -> {
@@ -244,7 +249,8 @@ public class PublicStorefrontServlet extends HttpServlet {
     }
   }
 
-  private void doPages(HttpServletResponse resp, String orgSlug, String[] parts)
+  private void doPages(
+      HttpServletRequest req, HttpServletResponse resp, String orgSlug, String[] parts)
       throws IOException {
     if (parts.length == 2) {
       // The footer's link source: which kinds exist, with updated_at — no bodies.
@@ -252,11 +258,14 @@ public class PublicStorefrontServlet extends HttpServlet {
           pageService.publicList(orgSlug).stream().map(PublicPageSummaryResponse::from).toList();
       writeJson(resp, 200, data, CACHE_PAGES);
     } else if (parts.length == 3) {
-      // One page, both bodies verbatim. Unknown kind → 400, never-written → 404 (service-decided).
+      // One page, body resolved to ?locale= (L4). Unknown kind → 400, never-written → 404, unknown
+      // locale → 400 (service-decided). The locale is in the URL, so CACHE_PAGES is
+      // per-(org,locale).
       writeJson(
           resp,
           200,
-          PublicPageResponse.from(pageService.publicPage(orgSlug, parts[2])),
+          PublicPageResponse.from(
+              pageService.publicPage(orgSlug, parts[2], req.getParameter("locale"))),
           CACHE_PAGES);
     } else {
       throw new ValidationException("Unknown route");

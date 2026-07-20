@@ -3,7 +3,6 @@ package com.loai.inventory.api.catalog;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -88,7 +87,7 @@ class StorefrontPagesIT {
     dsl.execute("TRUNCATE storefront_page, org RESTART IDENTITY CASCADE");
   }
 
-  // ───────── AC1: upsert idempotency + validation ─────────
+  // AC1: upsert idempotency + validation
 
   @Test
   void putCreatesThenReplacesIdempotently() {
@@ -99,7 +98,7 @@ class StorefrontPagesIT {
     service.upsert(org, "about", new PageInput(null, "We are the new Acme."));
 
     assertEquals(1, service.list(org).size());
-    assertEquals("We are the new Acme.", service.publicPage("acme", "about").getBodyEn());
+    assertEquals("We are the new Acme.", service.publicPage("acme", "about", "en").body());
   }
 
   @Test
@@ -140,7 +139,7 @@ class StorefrontPagesIT {
         () -> service.upsert(org, "faq", new PageInput(null, "hi"))); // PUT
     assertThrows(ValidationException.class, () -> service.delete(org, "faq")); // DELETE
     assertThrows(
-        ValidationException.class, () -> service.publicPage("acme", "faq")); // public detail
+        ValidationException.class, () -> service.publicPage("acme", "faq", null)); // public detail
   }
 
   @Test
@@ -151,13 +150,12 @@ class StorefrontPagesIT {
 
     assertTrue(service.list(org).isEmpty());
     // A valid-but-never-written kind → 404 (distinct from the unknown-kind 400 above).
-    assertThrows(NotFoundException.class, () -> service.publicPage("acme", "about"));
+    assertThrows(NotFoundException.class, () -> service.publicPage("acme", "about", null));
     // Deleting an already-absent (valid) kind → 404.
     assertThrows(NotFoundException.class, () -> service.delete(org, "about"));
   }
 
-  // ───────── AC2: list = existing kinds; detail = both bodies verbatim (newline round-trip)
-  // ─────────
+  // AC2: list = existing kinds; detail = both bodies verbatim (newline round-trip)
 
   @Test
   void publicList_returnsExactlyExistingKinds_withUpdatedAt() {
@@ -179,55 +177,61 @@ class StorefrontPagesIT {
     String en = "Line 1\nLine 2\n\n<b>test</b> https://example.com";
     service.upsert(org, "about", new PageInput(ar, en));
 
-    var page = service.publicPage("acme", "about");
+    // L4: each locale resolves to its own single body, byte-identical (no HTML stripping).
     assertEquals(
-        ar, page.getBodyAr(), "AR body must round-trip byte-identical (no HTML stripping)");
-    assertEquals(en, page.getBodyEn(), "EN body must round-trip byte-identical");
+        ar,
+        service.publicPage("acme", "about", "ar").body(),
+        "AR body must round-trip byte-identical (no HTML stripping)");
+    assertEquals(
+        en,
+        service.publicPage("acme", "about", "en").body(),
+        "EN body must round-trip byte-identical");
   }
 
-  // ───────── AC3: whitelist — no id/org_id, both bodies + kind + updated_at only ─────────
+  // AC3: whitelist — no id/org_id, both bodies + kind + updated_at only
 
   @Test
   void publicDetail_isWhitelisted() throws Exception {
     UUID org = insertOrg("acme", "en", true);
     service.upsert(org, "policies", new PageInput("سياسة", "Returns within 14 days."));
 
-    PublicPageResponse dto = PublicPageResponse.from(service.publicPage("acme", "policies"));
+    PublicPageResponse dto = PublicPageResponse.from(service.publicPage("acme", "policies", "en"));
     String json = JSON.writeValueAsString(dto);
 
-    assertTrue(json.contains("body_ar"), json);
-    assertTrue(json.contains("body_en"), json);
+    // L4: single resolved body, no paired _ar/_en keys.
+    assertTrue(json.contains("\"body\""), json);
     assertTrue(json.contains("\"kind\""), json);
     assertTrue(json.contains("updated_at"), json);
+    assertFalse(json.contains("body_ar"), json);
+    assertFalse(json.contains("body_en"), json);
     for (String forbidden : new String[] {"\"id\"", "org_id"}) {
       assertFalse(json.contains(forbidden), "leaked: " + forbidden + " in " + json);
     }
   }
 
   @Test
-  void unwrittenLocale_dropsFromJson() throws Exception {
+  void missingLocale_fallsBackToDefault_singleBody() {
     UUID org = insertOrg("acme", "ar", true);
-    service.upsert(org, "about", new PageInput("عنا", null));
-    String json =
-        JSON.writeValueAsString(PublicPageResponse.from(service.publicPage("acme", "about")));
-    assertTrue(json.contains("body_ar"), json);
-    assertFalse(json.contains("body_en"), json); // NON_NULL omission — the client falls back
-    // And the domain body_en is genuinely null (not an empty string).
-    assertNull(service.publicPage("acme", "about").getBodyEn());
+    service.upsert(org, "about", new PageInput("عنا", null)); // ar-only on an ar-default org
+    // en request has no en body → falls back to the default (ar) body, never null.
+    assertEquals("عنا", service.publicPage("acme", "about", "en").body());
+    assertEquals("عنا", service.publicPage("acme", "about", "ar").body());
+    // Unsupported locale → 400.
+    assertThrows(ValidationException.class, () -> service.publicPage("acme", "about", "fr"));
   }
 
-  // ───────── AC3: opaque org 404 ─────────
+  // AC3: opaque org 404
 
   @Test
   void unknownOrInactiveOrg_is404_bothReads() {
     insertOrg("suspended", "en", false);
     assertThrows(NotFoundException.class, () -> service.publicList("suspended"));
-    assertThrows(NotFoundException.class, () -> service.publicPage("suspended", "about"));
+    assertThrows(NotFoundException.class, () -> service.publicPage("suspended", "about", null));
     assertThrows(NotFoundException.class, () -> service.publicList("ghost"));
-    assertThrows(NotFoundException.class, () -> service.publicPage("ghost", "about"));
+    assertThrows(NotFoundException.class, () -> service.publicPage("ghost", "about", null));
   }
 
-  // ───────── AC4: cross-org isolation (UNIQUE (org_id, kind)) ─────────
+  // AC4: cross-org isolation (UNIQUE (org_id, kind))
 
   @Test
   void orgAWrite_neverAffectsOrgBRead() {
@@ -236,13 +240,13 @@ class StorefrontPagesIT {
     service.upsert(a, "about", new PageInput(null, "Acme about"));
 
     // B has its own namespace: same kind, independent row (and B's about is absent → 404).
-    assertThrows(NotFoundException.class, () -> service.publicPage("nile", "about"));
+    assertThrows(NotFoundException.class, () -> service.publicPage("nile", "about", null));
     service.upsert(b, "about", new PageInput(null, "Nile about"));
-    assertEquals("Acme about", service.publicPage("acme", "about").getBodyEn());
-    assertEquals("Nile about", service.publicPage("nile", "about").getBodyEn());
+    assertEquals("Acme about", service.publicPage("acme", "about", "en").body());
+    assertEquals("Nile about", service.publicPage("nile", "about", "en").body());
   }
 
-  // ───────── fixtures ─────────
+  // fixtures
 
   private void insertOrgWritesAbout(UUID orgId) {
     service.upsert(orgId, "about", new PageInput(null, "About"));

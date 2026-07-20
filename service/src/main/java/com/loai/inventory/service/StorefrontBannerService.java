@@ -7,6 +7,7 @@ import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.BannerTargetType;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.StorefrontBanner;
+import com.loai.inventory.domain.model.StorefrontBannerTranslation;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
@@ -88,14 +89,14 @@ public class StorefrontBannerService {
   /** A presigned banner-image upload: where to PUT, and the key to attach afterward. */
   public record PresignResult(String uploadUrl, String objectKey, long expiresInSeconds) {}
 
-  // ───────── reads (admin: all rows, incl. inactive/out-of-window) ─────────
+  // reads (admin: all rows, incl. inactive/out-of-window)
 
   public List<BannerView> list(UUID orgId) {
     StorefrontBannerRepository repo = bannerRepoFactory.create(rootDsl);
     return repo.findAllByOrg(orgId).stream().map(this::toView).toList();
   }
 
-  // ───────── writes ─────────
+  // writes
 
   public BannerView create(UUID orgId, BannerInput in) {
     if (in == null) {
@@ -130,7 +131,11 @@ public class StorefrontBannerService {
                 "an org may have at most " + MAX_ACTIVE_BANNERS + " active banners");
           }
 
-          BannerView view = toView(repo.insert(b));
+          StorefrontBanner saved = repo.insert(b);
+          // Dual-write per-language rows (slice L4); legacy paired columns stay authoritative until
+          // L6. The default-locale row is guaranteed non-empty by the headline rule above.
+          repo.replaceTranslations(saved.getId(), translationRows(saved));
+          BannerView view = toView(saved);
           log.info("Created storefront_banner id={} orgId={}", view.banner().getId(), orgId);
           return view;
         });
@@ -174,7 +179,9 @@ public class StorefrontBannerService {
                 "an org may have at most " + MAX_ACTIVE_BANNERS + " active banners");
           }
 
-          BannerView view = toView(repo.update(b));
+          StorefrontBanner saved = repo.update(b);
+          repo.replaceTranslations(saved.getId(), translationRows(saved)); // L4 dual-write
+          BannerView view = toView(saved);
           log.info("Updated storefront_banner id={} orgId={}", id, orgId);
           return view;
         });
@@ -238,7 +245,7 @@ public class StorefrontBannerService {
         storage.presignPut(objectKey, contentType), objectKey, storage.presignTtlSeconds());
   }
 
-  // ───────── helpers ─────────
+  // helpers
 
   private void applyTarget(StorefrontBanner b, String type, String slug) {
     BannerTargetType t;
@@ -294,6 +301,21 @@ public class StorefrontBannerService {
             .orElseThrow(() -> new NotFoundException("Org", orgId));
     String loc = org.getDefaultLocale();
     return loc == null || loc.isBlank() ? "ar" : loc.trim().toLowerCase(Locale.ROOT);
+  }
+
+  /**
+   * The per-language rows to persist from a banner's paired columns (slice L4): one row per
+   * non-empty locale side, reproducing the L1 backfill exactly (headline OR subheading present).
+   */
+  private static List<StorefrontBannerTranslation> translationRows(StorefrontBanner b) {
+    List<StorefrontBannerTranslation> rows = new java.util.ArrayList<>(2);
+    if (b.getHeadlineAr() != null || b.getSubheadingAr() != null) {
+      rows.add(new StorefrontBannerTranslation("ar", b.getHeadlineAr(), b.getSubheadingAr()));
+    }
+    if (b.getHeadlineEn() != null || b.getSubheadingEn() != null) {
+      rows.add(new StorefrontBannerTranslation("en", b.getHeadlineEn(), b.getSubheadingEn()));
+    }
+    return rows;
   }
 
   private BannerView toView(StorefrontBanner b) {

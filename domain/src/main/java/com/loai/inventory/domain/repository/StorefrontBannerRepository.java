@@ -1,8 +1,11 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.StorefrontBanner;
+import com.loai.inventory.domain.model.StorefrontBannerTranslation;
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -48,4 +51,13 @@ public interface StorefrontBannerRepository {
    * not appear (and reappears when the target is restored).
    */
   List<StorefrontBanner> findPublicResolved(UUID orgId, OffsetDateTime now);
+
+  // --- translations (content-localization slice L4) ---
+
+  /** Replace the whole per-language translation set for a banner (delete-then-insert). */
+  void replaceTranslations(UUID bannerId, List<StorefrontBannerTranslation> translations);
+
+  /** Batch-load translations for a set of banners (avoids N+1), keyed by banner id. */
+  Map<UUID, List<StorefrontBannerTranslation>> findTranslationsForBanners(
+      Collection<UUID> bannerIds);
 }
