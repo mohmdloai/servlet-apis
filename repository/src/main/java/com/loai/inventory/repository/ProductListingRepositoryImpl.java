@@ -57,16 +57,35 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
 
   @Override
   public List<CheckoutLineResolution> resolveForCheckout(
-      UUID orgId, java.util.Collection<String> slugs, ListingStatus status) {
+      UUID orgId,
+      java.util.Collection<String> slugs,
+      ListingStatus status,
+      String locale,
+      String defaultLocale) {
     if (slugs == null || slugs.isEmpty()) {
       return List.of();
     }
+    // Resolve the title to the checkout locale (L2b): the requested-locale translation row, else
+    // the
+    // default-locale row, else the legacy product_listing.title — via two LEFT JOINs + COALESCE,
+    // one
+    // query, mirroring the L2 read resolver. When locale == defaultLocale both joins hit the same
+    // row
+    // (harmless — COALESCE still lands on it).
+    var reqT = PRODUCT_LISTING_TRANSLATION.as("req_t");
+    var defT = PRODUCT_LISTING_TRANSLATION.as("def_t");
+    org.jooq.Field<String> resolvedTitle =
+        org.jooq.impl.DSL.coalesce(reqT.TITLE, defT.TITLE, PRODUCT_LISTING.TITLE).as("title");
     return dsl.select(
             PRODUCT_LISTING.SLUG,
             PRODUCT_LISTING.PRODUCT_ID,
             PRODUCT_LISTING.SALES_PRICE,
-            PRODUCT_LISTING.TITLE)
+            resolvedTitle)
         .from(PRODUCT_LISTING)
+        .leftJoin(reqT)
+        .on(reqT.LISTING_ID.eq(PRODUCT_LISTING.ID).and(reqT.LANGUAGE.eq(locale)))
+        .leftJoin(defT)
+        .on(defT.LISTING_ID.eq(PRODUCT_LISTING.ID).and(defT.LANGUAGE.eq(defaultLocale)))
         .where(
             PRODUCT_LISTING
                 .ORG_ID
@@ -79,7 +98,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                     r.get(PRODUCT_LISTING.SLUG),
                     r.get(PRODUCT_LISTING.PRODUCT_ID),
                     r.get(PRODUCT_LISTING.SALES_PRICE),
-                    r.get(PRODUCT_LISTING.TITLE)));
+                    r.get(resolvedTitle)));
   }
 
   @Override

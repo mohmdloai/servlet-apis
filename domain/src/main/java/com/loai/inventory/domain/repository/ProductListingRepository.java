@@ -18,8 +18,9 @@ public interface ProductListingRepository {
   /**
    * One PUBLISHED listing resolved for anonymous checkout: the public {@code slug} mapped to the
    * internal {@code productId} and the published {@code salesPrice} the shopper is charged, plus
-   * the display {@code title}. The slug→product mapping never crosses the public boundary — it
-   * stays inside {@link #resolveForCheckout}. See {@code stories/public_checkout.md}.
+   * the {@code title} <b>resolved to the checkout locale</b> (slice L2b). The slug→product mapping
+   * never crosses the public boundary — it stays inside {@link #resolveForCheckout}. See {@code
+   * stories/public_checkout.md}.
    */
   record CheckoutLineResolution(
       String slug, UUID productId, java.math.BigDecimal salesPrice, String title) {}
@@ -29,9 +30,18 @@ public interface ProductListingRepository {
    * the given status (PUBLISHED for checkout) and {@code orgId}. A slug that is unknown or not in
    * {@code status} is simply absent from the result — the caller detects the miss and answers an
    * opaque 404 without distinguishing "no such slug" from "exists but DRAFT/ARCHIVED".
+   *
+   * <p>The {@code title} is resolved per the checkout locale (slice L2b): the {@code locale} row's
+   * {@code product_listing_translation.title}, else the {@code defaultLocale} row's, else the
+   * legacy {@code product_listing.title} — so the title snapshotted onto the order line matches the
+   * locale the shopper checked out in, never the internal {@code product.name}.
    */
   List<CheckoutLineResolution> resolveForCheckout(
-      UUID orgId, Collection<String> slugs, ListingStatus status);
+      UUID orgId,
+      Collection<String> slugs,
+      ListingStatus status,
+      String locale,
+      String defaultLocale);
 
   /**
    * One PUBLISHED listing's advisory availability: the public {@code slug} mapped to its {@code

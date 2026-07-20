@@ -316,7 +316,7 @@ public class PublicStorefrontServlet extends HttpServlet {
                 l == null ? null : l.getListingSlug(), l == null ? 0 : l.getQuantity()));
       }
     }
-    CheckoutInput input = new CheckoutInput(customer, lines, body.getNotes());
+    CheckoutInput input = new CheckoutInput(customer, lines, body.getNotes(), body.getLocale());
 
     CheckoutResult result = service.checkout(orgSlug, input, idempotencyKey.trim());
     // 201 on a fresh order; 200 when a duplicate Idempotency-Key replayed the prior order.

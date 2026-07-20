@@ -101,13 +101,23 @@ class ProductListingHandlerAuthTest {
             ORG,
             "");
     assertEquals(403, resp.status);
-    verify(service, never()).create(any(), any(), any(), any(), any(), any());
+    verify(service, never())
+        .create(
+            any(), any(), any(), any(), any(ProductListingService.TranslatedContentInput.class));
   }
 
   @Test
   void create_allowedForStaff() throws IOException {
     ProductListingService service = Mockito.mock(ProductListingService.class);
-    when(service.create(any(), any(), any(), any(), any(), any())).thenReturn(aListing());
+    // The handler calls the 5-arg create (slug, price, TranslatedContentInput) then re-reads
+    // getById for the full-language embed (slice L2) — both must be stubbed.
+    when(service.create(
+            any(), any(), any(), any(), any(ProductListingService.TranslatedContentInput.class)))
+        .thenReturn(aListing());
+    when(service.getById(any(), any()))
+        .thenReturn(
+            new ProductListingService.ListingView(
+                aListing(), java.util.List.of(), java.util.List.of(), java.util.List.of()));
     Resp resp = new Resp();
     handler(service)
         .handle(
@@ -121,7 +131,9 @@ class ProductListingHandlerAuthTest {
             ORG,
             "");
     assertEquals(201, resp.status);
-    verify(service).create(any(), any(), any(), any(), any(), any());
+    verify(service)
+        .create(
+            any(), any(), any(), any(), any(ProductListingService.TranslatedContentInput.class));
   }
 
   @Test

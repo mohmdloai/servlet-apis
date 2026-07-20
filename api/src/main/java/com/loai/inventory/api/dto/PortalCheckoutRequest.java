@@ -20,8 +20,22 @@ public class PortalCheckoutRequest {
   private PortalAddressRequest address;
   private Boolean saveAddress;
 
+  /**
+   * Optional checkout language (slice L2b): the locale the order line's title is snapshotted in
+   * (unset → org default; unknown → 400). The storefront sends its route locale.
+   */
+  private String locale;
+
   public List<LineBody> getLines() {
     return lines;
+  }
+
+  public String getLocale() {
+    return locale;
+  }
+
+  public void setLocale(String locale) {
+    this.locale = locale;
   }
 
   public void setLines(List<LineBody> lines) {
