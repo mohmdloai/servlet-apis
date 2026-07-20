@@ -102,9 +102,15 @@ public class SalesOrderService {
   /**
    * Storefront order line: like {@link OrderLineInput} but carries the {@code unitPrice} the line
    * is snapshotted at — the resolved {@code product_listing.sales_price}, not {@code
-   * product.base_price}. See {@code stories/public_checkout.md} §Placement variant.
+   * product.base_price} — and (slice L2b) the {@code description} to snapshot: the locale-resolved
+   * {@code product_listing.title} the shopper saw, so a bilingual customer's invoice/receipt line
+   * reads in their checkout language rather than the internal {@code product.name}. A null {@code
+   * description} falls back to the product-name snapshot (the online/in-store default). See {@code
+   * stories/public_checkout.md} §Placement variant and {@code
+   * stories/content_localization_2b_orderline_title.md}.
    */
-  public record StorefrontLineInput(UUID productId, int quantity, BigDecimal unitPrice) {}
+  public record StorefrontLineInput(
+      UUID productId, int quantity, BigDecimal unitPrice, String description) {}
 
   /**
    * The result of an anonymous storefront placement: the placed order + lines + customer, the
@@ -120,9 +126,12 @@ public class SalesOrderService {
       boolean created) {}
 
   /**
-   * Internal unified line — an optional {@code unitPriceOverride} (storefront) or null (online).
+   * Internal unified line — optional {@code unitPriceOverride} + {@code descriptionOverride}
+   * (storefront) or null (online/in-store, which snapshot {@code product.base_price} / {@code
+   * product.name}).
    */
-  private record ResolvedLine(UUID productId, int quantity, BigDecimal unitPriceOverride) {}
+  private record ResolvedLine(
+      UUID productId, int quantity, BigDecimal unitPriceOverride, String descriptionOverride) {}
 
   /**
    * Delivery contact for a known-customer (portal) placement — slice P6, {@code
@@ -178,7 +187,7 @@ public class SalesOrderService {
 
     validateOnlineInputs(customer, lines);
     List<ResolvedLine> resolved =
-        lines.stream().map(l -> new ResolvedLine(l.productId(), l.quantity(), null)).toList();
+        lines.stream().map(l -> new ResolvedLine(l.productId(), l.quantity(), null, null)).toList();
     PlacementResult r = placeReserved(orgId, customer, resolved, idempotencyKey, notes, actor);
     return new Placed(r.order(), r.lines(), r.customer());
   }
@@ -203,7 +212,7 @@ public class SalesOrderService {
     validateOnlineInputs(customer, toOrderLineInputs(lines));
     List<ResolvedLine> resolved =
         lines.stream()
-            .map(l -> new ResolvedLine(l.productId(), l.quantity(), l.unitPrice()))
+            .map(l -> new ResolvedLine(l.productId(), l.quantity(), l.unitPrice(), l.description()))
             .toList();
     PlacementResult r = placeReserved(orgId, customer, resolved, idempotencyKey, notes, actor);
     return new StorefrontPlaced(r.order(), r.lines(), r.customer(), r.trackUrl(), r.created());
@@ -235,7 +244,7 @@ public class SalesOrderService {
     validateLines(toOrderLineInputs(lines));
     List<ResolvedLine> resolved =
         lines.stream()
-            .map(l -> new ResolvedLine(l.productId(), l.quantity(), l.unitPrice()))
+            .map(l -> new ResolvedLine(l.productId(), l.quantity(), l.unitPrice(), l.description()))
             .toList();
     PlacementResult r =
         placeReservedInTx(
@@ -439,7 +448,7 @@ public class SalesOrderService {
                   OrderChannel.IN_STORE,
                   resolveCustomer(repo, orgId, customer, false),
                   lines.stream()
-                      .map(l -> new ResolvedLine(l.productId(), l.quantity(), null))
+                      .map(l -> new ResolvedLine(l.productId(), l.quantity(), null, null))
                       .toList(),
                   idempotencyKey,
                   notes,
@@ -694,12 +703,16 @@ public class SalesOrderService {
       // online/in-store lines snapshot product.base_price.
       BigDecimal unitPrice =
           in.unitPriceOverride() != null ? in.unitPriceOverride() : snap.unitPrice();
+      // Storefront lines also carry a description override — the locale-resolved listing title the
+      // shopper saw (slice L2b); online/in-store lines snapshot the internal product.name.
+      String description =
+          in.descriptionOverride() != null ? in.descriptionOverride() : snap.description();
       SalesOrderLine line =
           SalesOrderLine.create(
               UUID.randomUUID(),
               orderId,
               snap.productId(),
-              snap.description(),
+              description,
               in.quantity(),
               unitPrice,
               DEFAULT_TAX_RATE);

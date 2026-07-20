@@ -32,7 +32,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -399,7 +401,18 @@ public class CustomerPortalService {
       String notes,
       UUID addressId,
       AddressInput address,
-      boolean saveAddress) {}
+      boolean saveAddress,
+      String locale) {
+    /** Locale-less convenience (→ org default) — pre-L2b callers. */
+    public CheckoutInput(
+        List<CheckoutLine> lines,
+        String notes,
+        UUID addressId,
+        AddressInput address,
+        boolean saveAddress) {
+      this(lines, notes, addressId, address, saveAddress, null);
+    }
+  }
 
   /**
    * Place an order as the logged-in customer ({@code POST /api/portal/checkout} — slice P6, {@code
@@ -451,10 +464,14 @@ public class CustomerPortalService {
             .create(rootDsl)
             .findById(orgId)
             .orElseThrow(() -> new NotFoundException("Org", orgId));
+    // L2b: resolve the checkout locale (unknown → 400) so the order line's snapshotted title is in
+    // the language the customer checked out in, not the internal product.name.
+    String defaultLocale = defaultLocaleOf(org);
+    String resolvedLocale = resolveRequestedLocale(input.locale(), defaultLocale);
 
-    // Resolve every cart slug → product_id + published sales_price, PUBLISHED-only, one query —
-    // the same server-side resolution as the anonymous checkout (an unknown or unpublished slug is
-    // an opaque 404, never saying which).
+    // Resolve every cart slug → product_id + published sales_price + locale-resolved title,
+    // PUBLISHED-only, one query — the same server-side resolution as the anonymous checkout (an
+    // unknown or unpublished slug is an opaque 404, never saying which).
     LinkedHashSet<String> requestedSlugs = new LinkedHashSet<>();
     for (CheckoutLine line : input.lines()) {
       requestedSlugs.add(line.listingSlug());
@@ -462,7 +479,8 @@ public class CustomerPortalService {
     ProductListingRepository listings = productListingRepositoryFactory.create(rootDsl);
     Map<String, CheckoutLineResolution> bySlug = new HashMap<>();
     for (CheckoutLineResolution r :
-        listings.resolveForCheckout(orgId, requestedSlugs, ListingStatus.PUBLISHED)) {
+        listings.resolveForCheckout(
+            orgId, requestedSlugs, ListingStatus.PUBLISHED, resolvedLocale, defaultLocale)) {
       bySlug.put(r.slug(), r);
     }
     List<SalesOrderService.StorefrontLineInput> orderLines = new ArrayList<>(input.lines().size());
@@ -475,7 +493,7 @@ public class CustomerPortalService {
       }
       orderLines.add(
           new SalesOrderService.StorefrontLineInput(
-              res.productId(), line.quantity(), res.salesPrice()));
+              res.productId(), line.quantity(), res.salesPrice(), res.title()));
       titleByProduct.put(res.productId(), res.title());
       slugByProduct.put(res.productId(), res.slug());
     }
@@ -576,6 +594,32 @@ public class CustomerPortalService {
     checkLength("name", update.name());
     checkLength("phone", update.phone());
     checkLength("address", update.address());
+  }
+
+  /**
+   * The BCP-47 languages the storefront serves (mirrors StorefrontService); L2b locale resolution.
+   */
+  private static final Set<String> SUPPORTED_LOCALES = Set.of("ar", "en");
+
+  private static String defaultLocaleOf(Org org) {
+    String loc = org.getDefaultLocale();
+    return loc == null || loc.isBlank() ? FALLBACK_LOCALE : loc.trim().toLowerCase(Locale.ROOT);
+  }
+
+  /**
+   * The requested checkout {@code locale} resolved to a served language (slice L2b): blank/unset →
+   * the org default; anything outside the supported set → 400 (cause-naming, same convention as the
+   * public read {@code ?locale=}).
+   */
+  private static String resolveRequestedLocale(String requested, String defaultLocale) {
+    if (requested == null || requested.isBlank()) {
+      return defaultLocale;
+    }
+    String loc = requested.trim().toLowerCase(Locale.ROOT);
+    if (!SUPPORTED_LOCALES.contains(loc)) {
+      throw new ValidationException("unsupported locale: " + loc);
+    }
+    return loc;
   }
 
   private static void checkLength(String field, String value) {

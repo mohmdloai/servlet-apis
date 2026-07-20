@@ -1,5 +1,29 @@
 # Slice L2b — Snapshot the resolved listing title onto the order line
 
+> **Status: SHIPPED (core) 2026-07-20** — local-only on branch
+> `82_feat/content-localization-orderline-title` (off master at merged L3, PR #81). As built:
+> `ProductListingRepository.resolveForCheckout` gained `(locale, defaultLocale)` and now resolves
+> `CheckoutLineResolution.title` via two LEFT JOINs on `product_listing_translation` + COALESCE
+> (requested → default → legacy `product_listing.title`), mirroring the L2 read resolver.
+> `SalesOrderService.StorefrontLineInput` gained a `description`; the internal `ResolvedLine` gained a
+> `descriptionOverride`; `buildDraftOrder` uses it as the order-line `description` when present, else
+> the `product.name` snapshot (so ONLINE + in-store lines are unchanged — verified by a regression
+> test). Both checkout callers (`StorefrontService.checkout`, `CustomerPortalService.checkout`)
+> resolve the checkout locale (unset → org default, unknown → 400) and pass the resolved title as the
+> line description. Anonymous (`PublicCheckoutRequest`) and portal (`PortalCheckoutRequest`) bodies
+> gained an optional `locale`; both servlets pass it through; both service `CheckoutInput` records
+> gained `locale` with a locale-less convenience constructor for pre-L2b callers.
+>
+> **Also fixed here (pre-existing, surfaced by the full-suite run):**
+> `ProductListingHandlerAuthTest.create_allowedForStaff` stubbed the wrong `create` overload (6-arg
+> legacy) and no `getById`, so it 500'd against the L2 handler's 5-arg-create + getById-re-read — it
+> had only ever been stale-green under filtered runs. Fixed the mock (5-arg create + `getById` stub),
+> mirroring the L3 `CategoryHandlerAuthTest` fix.
+>
+> Tests: `OrderLineTitleSnapshotIT` (api module, 5 green — anon per-locale, fallback, `fr` 400,
+> online-regression keeps `product.name`, portal per-locale) + the **full api suite green (832 tests,
+> 0 failures)**.
+>
 > Small companion to [`content_localization_2_listings.md`](content_localization_2_listings.md).
 > **Confirmed necessary** (2026-07-20): the storefront/portal checkout persists the **internal
 > `product.name`** as the order-line `description`, not the listing title — so after L2 a bilingual

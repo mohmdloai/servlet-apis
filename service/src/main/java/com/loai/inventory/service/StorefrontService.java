@@ -278,9 +278,22 @@ public class StorefrontService {
   /** One cart line at checkout: a public listing slug + quantity. */
   public record CheckoutLine(String listingSlug, int quantity) {}
 
-  /** The anonymous checkout request: customer form + cart lines + optional notes. */
+  /**
+   * The anonymous checkout request: customer form + cart lines + optional notes + optional {@code
+   * locale} (slice L2b — the language the order line's title is snapshotted in; unset → org
+   * default, unknown → 400).
+   */
   public record CheckoutInput(
-      SalesOrderService.CustomerInput customer, List<CheckoutLine> lines, String notes) {}
+      SalesOrderService.CustomerInput customer,
+      List<CheckoutLine> lines,
+      String notes,
+      String locale) {
+    /** Locale-less convenience (→ org default) — pre-L2b callers. */
+    public CheckoutInput(
+        SalesOrderService.CustomerInput customer, List<CheckoutLine> lines, String notes) {
+      this(customer, lines, notes, null);
+    }
+  }
 
   /** A re-keyed shortage — slug + title, never {@code product_id}. */
   public record StorefrontShortage(
@@ -332,6 +345,11 @@ public class StorefrontService {
     }
     Org org = resolveOrg(orgSlug);
     UUID orgId = org.getId();
+    // L2b: resolve the checkout locale (unknown → 400) so the order line's snapshotted title
+    // matches
+    // the language the shopper checked out in.
+    String defaultLocale = defaultLocaleOf(org);
+    String resolvedLocale = resolveRequestedLocale(input.locale(), defaultLocale);
 
     // One query resolves all requested (deduplicated) slugs, PUBLISHED-only.
     LinkedHashSet<String> requestedSlugs = new LinkedHashSet<>();
@@ -341,13 +359,14 @@ public class StorefrontService {
     ProductListingRepository listings = listingRepoFactory.create(rootDsl);
     Map<String, CheckoutLineResolution> bySlug = new HashMap<>();
     for (CheckoutLineResolution r :
-        listings.resolveForCheckout(orgId, requestedSlugs, ListingStatus.PUBLISHED)) {
+        listings.resolveForCheckout(
+            orgId, requestedSlugs, ListingStatus.PUBLISHED, resolvedLocale, defaultLocale)) {
       bySlug.put(r.slug(), r);
     }
 
     // Build placement lines in request order; carry the slug/title per product for response labels
     // and 409 re-keying. Any unresolved slug is an opaque 404 (never distinguishes unknown vs
-    // draft).
+    // draft). The resolved title is snapshotted onto the order line (L2b) and reused as the label.
     List<SalesOrderService.StorefrontLineInput> orderLines = new ArrayList<>(input.lines().size());
     Map<UUID, String> titleByProduct = new HashMap<>();
     Map<UUID, String> slugByProduct = new HashMap<>();
@@ -358,7 +377,7 @@ public class StorefrontService {
       }
       orderLines.add(
           new SalesOrderService.StorefrontLineInput(
-              res.productId(), line.quantity(), res.salesPrice()));
+              res.productId(), line.quantity(), res.salesPrice(), res.title()));
       titleByProduct.put(res.productId(), res.title());
       slugByProduct.put(res.productId(), res.slug());
     }
