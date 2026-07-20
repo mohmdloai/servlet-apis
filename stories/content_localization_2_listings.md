@@ -1,5 +1,17 @@
 # Slice L2 — product_listing translation cutover
 
+> **Status: SHIPPED (core) 2026-07-20** — local-only on branch `80_feat/content-localization-listings`
+> (L1 merged as PR #79; this is its own branch off master). As built: admin writes accept `translations:[{language,title,marketing_copy}]` **or**
+> the legacy single `title`/`marketing_copy` (synthesized into the default-locale row — backward-compat,
+> so existing callers/tests are untouched); admin reads embed all languages; the public
+> `?locale=ar|en` resolves per-field (unknown → 400); search matches the folded per-language
+> `title_search` **OR** the legacy columns (the legacy arm is a dual-write-era crutch for listings whose
+> translation rows predate them — dropped at L6); legacy `title`/`marketing_copy` are dual-written from
+> the default-locale row. `marketing_copy` is substring-matched (not folded — no generated column for it)
+> and there is no alphabetical title-sort endpoint, so the ICU collation is structural only. The
+> order-line snapshot is **L2b**. Tests: `ProductListingTranslationIT` (api module, 7 green) + the seven
+> existing catalog ITs regression-green (66 total).
+>
 > Cutover slice of [`content_localization.md`](content_localization.md). Flips `product_listing`'s
 > localized fields (`title`, `marketing_copy`) onto `product_listing_translation` (L1): admin
 > reads/writes **all** languages, the public storefront resolves to **one** by `?locale=`, and search
@@ -38,11 +50,13 @@ listing — mirroring `ProductRepositoryImpl.searchCondition` (which folds the t
 `ProductListingRepositoryImpl.filterConditions`. `ORDER BY` on `title` uses the ICU-collated column
 within the locale.
 
-**⚠️ Order-line item-name flag (verify before shipping):** confirm what the sales-order line snapshots as
-the item name today. The customer-facing invoice/receipt/PDF line must render the **resolved listing
-title**, not internal `product.name` — else a bilingual customer gets an English item line on an Arabic
-invoice. If checkout already snapshots the listing title, nothing to do; otherwise snapshot the resolved
-`listing.title` onto the order line at placement (small, targeted — not full product localization).
+**⚠️ Order-line item-name flag — VERIFIED, carved to [L2b](content_localization_2b_orderline_title.md).**
+Confirmed 2026-07-20: the checkout persists the **internal `product.name`** as the order-line
+`description` (`SalesOrderService.buildLines` ← `fetchProductSnapshots` = `PRODUCT.NAME`), not the listing
+title — so a bilingual customer could get an internal-language item name on their invoice. The fix
+(snapshot the resolved listing title at checkout) touches the checkout/placement contract, a different
+subsystem than listing storage, so it ships as the small companion slice **L2b**. L2 itself leaves
+`resolveForCheckout` returning the legacy default-locale title unchanged.
 
 ## Scope
 
