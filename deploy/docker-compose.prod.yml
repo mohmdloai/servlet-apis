@@ -141,6 +141,17 @@ services:
       BACKEND_API_URL: http://backend:8080
       # NEXT_PUBLIC_STOREFRONT_ORIGIN is baked at build time (frontst CI), not read here.
 
+  # The marketing site (frontst story 54) — the platform's own front door at the apex yabta3.com.
+  # Fully static SSG: no backend, no /api proxy, no depends_on backend — a backend outage can't take
+  # it down. Only PORT is read at runtime.
+  marketing:
+    image: ${MARKETING_IMAGE:-ghcr.io/mohmdloai/marketing:latest}
+    restart: unless-stopped
+    networks: [internal]
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -149,6 +160,7 @@ services:
       - backend
       - admin
       - storefront
+      - marketing
     ports:
       - "80:80"
       - "443:443"
