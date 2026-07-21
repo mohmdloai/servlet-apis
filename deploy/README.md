@@ -20,8 +20,8 @@ Docker image to GHCR → SSHes into the VPS → pulls & restarts the backend.**
 | `../Dockerfile` | Runtime image (JRE + `EmbeddedTomcatLauncher`). Built from the CI-produced classpath. |
 | `../.github/workflows/ci.yml` | PRs: `mvn -Pcodegen verify` against a Postgres service. |
 | `../.github/workflows/deploy.yml` | `master`: build+test, push image to GHCR, SSH-deploy. |
-| `docker-compose.prod.yml` | This stack: caddy + backend + db + redis + minio. |
-| `Caddyfile` | Edge proxy config: api. + files. |
+| `docker-compose.prod.yml` | This stack: caddy + backend + db + redis + minio + the frontst images (admin/storefront/marketing). |
+| `Caddyfile` | Edge proxy config: apex (marketing) + www + api. + files. + admin. + store. |
 | `env.prod.example` | Template for the server-side `.env` (secrets; never commit it). |
 | `backup.sh` | Nightly `pg_dump` + retention, for cron. |
 
@@ -33,12 +33,17 @@ migrated Postgres**, which CI provides as a service container.
 On the `yabta3.com` zone, these A records → the VPS IP (`207.180.249.108`), **DNS only (grey
 cloud)** so Caddy can complete the Let's Encrypt HTTP-01 challenge (already created ✓):
 
-| Type | Name | Content | Proxy |
-|------|------|---------|-------|
-| A | `api` | `207.180.249.108` | DNS only |
-| A | `files` | `207.180.249.108` | DNS only |
+| Type | Name | Content | Proxy | Serves |
+|------|------|---------|-------|--------|
+| A | `api` | `207.180.249.108` | DNS only | backend |
+| A | `files` | `207.180.249.108` | DNS only | minio |
+| A | `admin` | `207.180.249.108` | DNS only | admin app |
+| A | `store` | `207.180.249.108` | DNS only | storefront app |
+| A | `@` | `207.180.249.108` | DNS only | marketing site (apex) |
+| A | `www` | `207.180.249.108` | DNS only | → redirects to apex |
 
-Records must resolve before first boot. (Frontend phase later adds `admin`, `store`, `@`/`www`.)
+Records must resolve before first boot (Caddy fetches a cert per host). The `admin`/`store` rows land
+with the frontend deploy stack; `@`/`www` with the marketing site (frontst story 54).
 
 ## One-time VPS setup
 

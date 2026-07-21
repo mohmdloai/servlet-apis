@@ -2,6 +2,7 @@
 # Compose environment.
 #
 # Routes:
+#   {$DOMAIN}        → marketing:3000  (apex: the yabta3.com marketing site; www redirects here)
 #   api.{$DOMAIN}    → backend:8080
 #   files.{$DOMAIN}  → minio:9000     (presigned image URLs)
 #   admin.{$DOMAIN}  → admin:3000     (admin Next app)
@@ -12,6 +13,16 @@
 {
 	# Contact address for Let's Encrypt expiry notices.
 	email admin@{$DOMAIN}
+}
+
+# The marketing site is the platform's front door — apex is canonical, www redirects to it.
+{$DOMAIN} {
+	reverse_proxy marketing:3000
+	encode gzip
+}
+
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
 }
 
 api.{$DOMAIN} {
