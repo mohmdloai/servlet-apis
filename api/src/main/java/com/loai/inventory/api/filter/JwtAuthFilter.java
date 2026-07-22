@@ -42,6 +42,16 @@ public class JwtAuthFilter implements Filter {
   private AuthService authService;
   private ObjectMapper objectMapper;
 
+  /** No-arg constructor for the servlet container; config is read in {@link #init}. */
+  public JwtAuthFilter() {}
+
+  /** Test constructor: inject the collaborators directly (bypasses {@link #init}). */
+  JwtAuthFilter(JwtUtil jwtUtil, AuthService authService, ObjectMapper objectMapper) {
+    this.jwtUtil = jwtUtil;
+    this.authService = authService;
+    this.objectMapper = objectMapper;
+  }
+
   @Override
   public void init(FilterConfig filterConfig) {
     AppConfig config =
@@ -68,6 +78,11 @@ public class JwtAuthFilter implements Filter {
         || path.equals("/api/auth/forgot-password")
         || path.equals("/api/auth/reset-password")
         || path.equals("/api/auth/activate")
+        // Story 88's verify-to-activate pair (fix 90): both are anonymous by design — the caller
+        // has no session yet (verification is what unlocks login). Omitting them here 401'd both
+        // in prod before the servlet ever saw the request.
+        || path.equals("/api/auth/verify-email")
+        || path.equals("/api/auth/resend-verification")
         || path.startsWith("/api/public/")
         // The customer plane is guarded by CustomerAuthFilter with a different signing key — the
         // staff key must never even parse a portal token (epic decision #3).
