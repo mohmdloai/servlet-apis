@@ -19,6 +19,7 @@ import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.auth.AuthService.LoginResult;
 import com.loai.inventory.service.email.EmailAddresses;
 import com.loai.inventory.service.email.EmailGate;
+import com.loai.inventory.service.platform.OrgStatusService;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -53,6 +54,7 @@ public class AccountService {
   private final AuthMailer mailer;
   private final AuthService authService;
   private final EmailGate emailGate;
+  private final OrgStatusService orgStatusService;
 
   public AccountService(
       DSLContext rootDsl,
@@ -61,7 +63,8 @@ public class AccountService {
       CredentialTokenService tokenService,
       AuthMailer mailer,
       AuthService authService,
-      EmailGate emailGate) {
+      EmailGate emailGate,
+      OrgStatusService orgStatusService) {
     this.rootDsl = rootDsl;
     this.userRepoFactory = userRepoFactory;
     this.orgRepoFactory = orgRepoFactory;
@@ -69,6 +72,7 @@ public class AccountService {
     this.mailer = mailer;
     this.authService = authService;
     this.emailGate = emailGate;
+    this.orgStatusService = orgStatusService;
   }
 
   /**
@@ -124,7 +128,10 @@ public class AccountService {
                 Org org = new Org();
                 org.setName(normalizedOrgName);
                 org.setSlug(uniqueSlug(orgRepo, normalizedOrgName));
-                org.setActive(true);
+                // Born INACTIVE (story 89): active=true would serve a live public storefront at
+                // the slug with zero inbox proof. verifyEmail activates it (suspended_at stays
+                // NULL — that stamp is the admin-suspension marker, keeping the states distinct).
+                org.setActive(false);
                 Org saved = orgRepo.insert(org);
                 userRepo.insertOrgRole(user.getId(), saved.getId(), OrgRole.OWNER);
               }
@@ -150,7 +157,7 @@ public class AccountService {
    */
   public LoginResult verifyEmail(
       String rawToken, OffsetDateTime now, String deviceInfo, String sourceIp) {
-    AppUser user =
+    Verified verified =
         rootDsl.transactionResult(
             cfg -> {
               DSLContext tx = DSL.using(cfg);
@@ -168,11 +175,25 @@ public class AccountService {
               }
               userRepo.markEmailVerified(userId, now);
               found.setEmailVerifiedAt(now);
-              return found;
+              // Story 89: the org(s) born inactive at this user's registration go live with the
+              // same click — but never an admin-suspended one (suspended_at guard in the repo).
+              List<UUID> activatedOrgIds =
+                  orgRepoFactory.create(tx).activateRegistrationPendingOrgs(userId);
+              return new Verified(found, activatedOrgIds);
             });
-    log.info("Email verified for user id={}", user.getId());
-    return authService.issueSession(user, deviceInfo, sourceIp);
+    // Post-commit: drop the load-through org-status mirror entries so enforcement and the public
+    // storefront see the activation immediately, not after the cache TTL.
+    for (UUID orgId : verified.activatedOrgIds()) {
+      orgStatusService.invalidate(orgId);
+    }
+    log.info(
+        "Email verified for user id={} ({} org(s) activated)",
+        verified.user().getId(),
+        verified.activatedOrgIds().size());
+    return authService.issueSession(verified.user(), deviceInfo, sourceIp);
   }
+
+  private record Verified(AppUser user, List<UUID> activatedOrgIds) {}
 
   /**
    * Re-send the verification link. Enumeration-safe like {@link #requestPasswordReset}: only an

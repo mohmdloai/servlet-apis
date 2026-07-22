@@ -73,6 +73,7 @@ class AccountServiceIT {
 
   static HikariDataSource dataSource;
   static DSLContext dsl;
+  static JedisPool jedisPool;
   static AccountService accountService;
   static AuthService authService;
   static CredentialTokenService credentialTokenService;
@@ -96,7 +97,7 @@ class AccountServiceIT {
     dataSource = new HikariDataSource(cfg);
     dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
 
-    JedisPool jedisPool = new JedisPool(REDIS.getHost(), REDIS.getMappedPort(6379));
+    jedisPool = new JedisPool(REDIS.getHost(), REDIS.getMappedPort(6379));
     RefreshTokenStore refreshTokenStore = new RefreshTokenStore(jedisPool);
     JwtUtil jwtUtil = new JwtUtil(Base64.getEncoder().encodeToString(new byte[48]), 900_000L);
     authService =
@@ -123,7 +124,9 @@ class AccountServiceIT {
             credentialTokenService,
             new AuthMailer(emailSender),
             authService,
-            com.loai.inventory.api.support.TestWiring.permissiveEmailGate());
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
+            new com.loai.inventory.service.platform.OrgStatusService(
+                jedisPool, dsl, new OrgRepositoryFactoryImpl()));
   }
 
   @AfterAll
@@ -231,7 +234,7 @@ class AccountServiceIT {
   }
 
   @Test
-  void register_withOrg_makesOwner() {
+  void register_withOrg_makesOwner_bornInactive() {
     AppUser created = accountService.register("owner@x.io", "password1", "My Shop");
     UUID userId = created.getId();
     assertEquals(1, dsl.fetchCount(DSL.table("org")));
@@ -243,6 +246,50 @@ class AccountServiceIT {
             DSL.table("user_org_role"),
             DSL.condition(
                 "user_id = ? and org_id = ? and role = ?::org_role", userId, orgId, "OWNER")));
+    // Story 89: born INACTIVE (no live public storefront before inbox proof), not suspended.
+    assertEquals(
+        1,
+        dsl.fetchCount(
+            DSL.table("org"),
+            DSL.condition("id = ? and active = false and suspended_at is null", orgId)));
+  }
+
+  @Test
+  void verifyEmail_activatesTheRegistrationOrg_andInvalidatesTheMirror() {
+    accountService.register("shopkeeper@x.io", "password1", "Go Live Shop");
+    UUID orgId = dsl.select(DSL.field("id", UUID.class)).from("org").fetchOne(0, UUID.class);
+    // Seed a stale "inactive" mirror entry — activation must drop it, not wait out the TTL.
+    try (var jedis = jedisPool.getResource()) {
+      jedis.set("org:active:" + orgId, "0");
+    }
+    String token = extractToken(emailSender.messages.get(0).html());
+
+    accountService.verifyEmail(token, OffsetDateTime.now(), "junit", "1.2.3.4");
+
+    assertEquals(
+        1, dsl.fetchCount(DSL.table("org"), DSL.condition("id = ? and active = true", orgId)));
+    try (var jedis = jedisPool.getResource()) {
+      assertEquals(null, jedis.get("org:active:" + orgId), "the status mirror was invalidated");
+    }
+  }
+
+  @Test
+  void verifyEmail_neverResurrectsAnAdminSuspendedOrg() {
+    accountService.register("suspended@x.io", "password1", "Sketchy Shop");
+    UUID orgId = dsl.select(DSL.field("id", UUID.class)).from("org").fetchOne(0, UUID.class);
+    // Admin suspends before the owner verifies: suspended_at stamps the state as admin-owned.
+    dsl.execute(
+        "UPDATE org SET suspended_at = now(), suspended_reason = 'spam' WHERE id = ?", orgId);
+    String token = extractToken(emailSender.messages.get(0).html());
+
+    accountService.verifyEmail(token, OffsetDateTime.now(), "junit", "1.2.3.4");
+
+    assertEquals(
+        1,
+        dsl.fetchCount(
+            DSL.table("org"),
+            DSL.condition("id = ? and active = false and suspended_at is not null", orgId)),
+        "a verify click must never undo an admin suspension");
   }
 
   @Test
