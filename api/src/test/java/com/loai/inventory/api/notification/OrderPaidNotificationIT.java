@@ -200,7 +200,8 @@ class OrderPaidNotificationIT {
             invoiceService,
             refundService,
             notificationService,
-            magicLink);
+            magicLink,
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate());
   }
 
   @AfterAll

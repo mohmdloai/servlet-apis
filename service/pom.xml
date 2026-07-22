@@ -54,6 +54,12 @@
       <artifactId>angus-mail</artifactId>
   </dependency>
 
+  <!-- DNS MX lookups — the email quality gate's deliverability check (story 87). -->
+  <dependency>
+      <groupId>dnsjava</groupId>
+      <artifactId>dnsjava</artifactId>
+  </dependency>
+
   <!-- PDF rendering for printable invoice / credit-note / receipt documents. -->
   <dependency>
       <groupId>com.github.librepdf</groupId>

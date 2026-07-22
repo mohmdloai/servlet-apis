@@ -3,6 +3,7 @@ package com.loai.inventory.api.filter;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -80,6 +81,61 @@ class RateLimitFilterTest {
     when(refresh.jedis.incr("rl:refresh:9.9.9.9")).thenReturn(1L);
     refresh.filter.doFilter(refresh.request, refresh.response, refresh.chain);
     verify(refresh.jedis).incr("rl:refresh:9.9.9.9");
+  }
+
+  // ── self-serve auth buckets (story 87 — previously fail-open) ─────────────
+
+  @Test
+  void register_selectsItsOwnBucket_andPassesUnderLimit() throws Exception {
+    Fixture f = new Fixture(120, 5, false);
+    f.req("POST", "/api/auth", "/register", "4.4.4.4");
+    when(f.jedis.incr("rl:auth-register:4.4.4.4")).thenReturn(1L);
+
+    f.filter.doFilter(f.request, f.response, f.chain);
+
+    verify(f.jedis).incr("rl:auth-register:4.4.4.4");
+    verify(f.jedis).expire("rl:auth-register:4.4.4.4", 60);
+    verify(f.chain).doFilter(f.request, f.response);
+  }
+
+  @Test
+  void register_fourthRequestInWindow_trips429() throws Exception {
+    Fixture f = new Fixture(120, 5, false);
+    f.req("POST", "/api/auth", "/register", "4.4.4.4");
+    when(f.jedis.incr("rl:auth-register:4.4.4.4")).thenReturn(4L); // default limit 3
+
+    f.filter.doFilter(f.request, f.response, f.chain);
+
+    verify(f.response).setStatus(429);
+    verify(f.chain, never()).doFilter(f.request, f.response);
+  }
+
+  @Test
+  void forgotPassword_selectsItsOwnBucket_andSixthRequestTrips() throws Exception {
+    Fixture ok = new Fixture(120, 5, false);
+    ok.req("POST", "/api/auth", "/forgot-password", "5.5.5.5");
+    when(ok.jedis.incr("rl:auth-forgot:5.5.5.5")).thenReturn(5L); // default limit 5 — at the edge
+    ok.filter.doFilter(ok.request, ok.response, ok.chain);
+    verify(ok.chain).doFilter(ok.request, ok.response);
+
+    Fixture over = new Fixture(120, 5, false);
+    over.req("POST", "/api/auth", "/forgot-password", "5.5.5.5");
+    when(over.jedis.incr("rl:auth-forgot:5.5.5.5")).thenReturn(6L);
+    over.filter.doFilter(over.request, over.response, over.chain);
+    verify(over.response).setStatus(429);
+    verify(over.chain, never()).doFilter(over.request, over.response);
+  }
+
+  @Test
+  void resetPasswordAndActivate_stayUnbucketed_failOpen() throws Exception {
+    // Deliberate: they redeem 256-bit single-use tokens — the token space is the rate limit.
+    for (String path : new String[] {"/reset-password", "/activate"}) {
+      Fixture f = new Fixture(120, 5, false);
+      f.req("POST", "/api/auth", path, "6.6.6.6");
+      f.filter.doFilter(f.request, f.response, f.chain);
+      verify(f.chain).doFilter(f.request, f.response);
+      verify(f.jedis, never()).incr(anyString());
+    }
   }
 
   // ── counter mechanics ──────────────────────────────────────────────────────

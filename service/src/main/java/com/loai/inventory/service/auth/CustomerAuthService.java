@@ -9,6 +9,7 @@ import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.service.email.EmailAddresses;
+import com.loai.inventory.service.email.EmailGate;
 import com.loai.inventory.service.email.EmailMessage;
 import com.loai.inventory.service.email.EmailSender;
 import java.time.Instant;
@@ -50,6 +51,7 @@ public class CustomerAuthService {
   private final CustomerSessionStore sessionStore;
   private final JwtUtil customerJwtUtil;
   private final EmailSender emailSender;
+  private final EmailGate emailGate;
   private final int perEmailSendLimit;
   private final int perEmailWindowSeconds;
 
@@ -61,6 +63,7 @@ public class CustomerAuthService {
       CustomerSessionStore sessionStore,
       JwtUtil customerJwtUtil,
       EmailSender emailSender,
+      EmailGate emailGate,
       int perEmailSendLimit,
       int perEmailWindowSeconds) {
     this.rootDsl = rootDsl;
@@ -70,6 +73,7 @@ public class CustomerAuthService {
     this.sessionStore = sessionStore;
     this.customerJwtUtil = customerJwtUtil;
     this.emailSender = emailSender;
+    this.emailGate = emailGate;
     this.perEmailSendLimit = perEmailSendLimit;
     this.perEmailWindowSeconds = perEmailWindowSeconds;
   }
@@ -91,6 +95,14 @@ public class CustomerAuthService {
     String normalized = normalizeEmail(email);
     if (normalized == null) {
       return; // malformed — silently no-op (uniform response)
+    }
+    // MX leg only (story 87) — a code sent to an undeliverable domain could never arrive, so
+    // skipping the send changes nothing observable while saving the synchronous SMTP call. The
+    // blocklist is deliberately NOT consulted here: a disposable-email customer can exist via
+    // lenient checkout and must still be able to log in. Same uniform response either way.
+    if (emailGate.undeliverable(normalized)) {
+      log.info("OTP send skipped for an undeliverable email domain");
+      return;
     }
     Optional<Customer> customer =
         customerRepositoryFactory.create(rootDsl).findByEmail(org.getId(), normalized);

@@ -134,6 +134,7 @@ class PortalAuthIT {
             sessionStore,
             customerJwtUtil,
             emailSender,
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
             /* perEmailSendLimit= */ 5,
             /* perEmailWindowSeconds= */ 60);
   }

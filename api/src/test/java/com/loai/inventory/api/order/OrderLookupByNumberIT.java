@@ -187,7 +187,8 @@ class OrderLookupByNumberIT {
                 new LoggingEmailSender(),
                 magicLink,
                 NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS),
-            magicLink);
+            magicLink,
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate());
   }
 
   @AfterAll

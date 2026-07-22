@@ -26,6 +26,12 @@ import redis.clients.jedis.JedisPool;
  * <ul>
  *   <li>{@code /login} → {@code rl:login:} (10/min), {@code /refresh} → {@code rl:refresh:}
  *       (30/min) — the pre-existing auth buckets, untouched.
+ *   <li>{@code POST /api/auth/register} → {@code rl:auth-register:} (strict, {@code
+ *       AUTH_REGISTER_LIMIT}, default 3/min) and {@code /api/auth/forgot-password} → {@code
+ *       rl:auth-forgot:} ({@code AUTH_FORGOT_LIMIT}, default 5/min) — story 87; both previously
+ *       fell through the fail-open else. {@code /reset-password} and {@code /activate} stay
+ *       unbucketed on purpose: they redeem 256-bit single-use tokens — the token space is the rate
+ *       limit.
  *   <li>{@code POST /api/public/**​/checkout} → {@code rl:pub-checkout:} (strict, {@code
  *       PUBLIC_CHECKOUT_LIMIT}, default 5/min) — a checkout is an expensive anonymous write
  *       (customer upsert + stock reservation + magic link + email).
@@ -68,6 +74,11 @@ public class RateLimitFilter implements Filter {
   static final int DEFAULT_PORTAL_REVIEW_LIMIT = 10;
   // Comment writes (slice R2): same shape — every ask lands in the merchant's answer queue.
   static final int DEFAULT_PORTAL_COMMENT_LIMIT = 10;
+  // Self-serve auth writes (story 87): register mints a live account + org per call, and
+  // forgot-password emails an arbitrary address per call — both previously fell through the
+  // final fail-open else, i.e. completely unthrottled.
+  static final int DEFAULT_AUTH_REGISTER_LIMIT = 3;
+  static final int DEFAULT_AUTH_FORGOT_LIMIT = 5;
 
   private JedisPool jedisPool;
   private ObjectMapper objectMapper;
@@ -78,6 +89,8 @@ public class RateLimitFilter implements Filter {
   private int portalRefreshLimit = DEFAULT_PORTAL_REFRESH_LIMIT;
   private int portalReviewLimit = DEFAULT_PORTAL_REVIEW_LIMIT;
   private int portalCommentLimit = DEFAULT_PORTAL_COMMENT_LIMIT;
+  private int authRegisterLimit = DEFAULT_AUTH_REGISTER_LIMIT;
+  private int authForgotLimit = DEFAULT_AUTH_FORGOT_LIMIT;
   private boolean trustProxy;
 
   /** No-arg constructor for the servlet container; config is read in {@link #init}. */
@@ -114,6 +127,8 @@ public class RateLimitFilter implements Filter {
         envIntOrDefault("PORTAL_OTP_VERIFY_LIMIT", DEFAULT_PORTAL_OTP_VERIFY_LIMIT);
     this.portalReviewLimit = envIntOrDefault("PORTAL_REVIEW_LIMIT", DEFAULT_PORTAL_REVIEW_LIMIT);
     this.portalCommentLimit = envIntOrDefault("PORTAL_COMMENT_LIMIT", DEFAULT_PORTAL_COMMENT_LIMIT);
+    this.authRegisterLimit = envIntOrDefault("AUTH_REGISTER_LIMIT", DEFAULT_AUTH_REGISTER_LIMIT);
+    this.authForgotLimit = envIntOrDefault("AUTH_FORGOT_LIMIT", DEFAULT_AUTH_FORGOT_LIMIT);
     this.trustProxy = Boolean.parseBoolean(System.getenv("TRUST_PROXY"));
     log.info(
         "RateLimitFilter: pub-read={}/min, pub-checkout={}/min, trustProxy={}",
@@ -161,6 +176,13 @@ public class RateLimitFilter implements Filter {
     } else if (path.startsWith("/api/portal/")) {
       keyPrefix = "rl:portal-read:";
       limit = publicReadLimit;
+    } else if (path.equals("/api/auth/register")) {
+      // Story 87: register/forgot-password previously fell through the fail-open else below.
+      keyPrefix = "rl:auth-register:";
+      limit = authRegisterLimit;
+    } else if (path.equals("/api/auth/forgot-password")) {
+      keyPrefix = "rl:auth-forgot:";
+      limit = authForgotLimit;
     } else if (path.endsWith("/login")) {
       keyPrefix = "rl:login:";
       limit = LOGIN_LIMIT;

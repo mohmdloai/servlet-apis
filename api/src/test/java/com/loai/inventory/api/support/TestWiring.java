@@ -8,9 +8,12 @@ import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.NotificationService;
+import com.loai.inventory.service.email.EmailGate;
 import com.loai.inventory.service.email.EmailSender;
 import com.loai.inventory.service.email.LoggingEmailSender;
+import com.loai.inventory.service.email.MxResolver;
 import java.time.Duration;
+import java.util.Set;
 import org.jooq.DSLContext;
 
 /**
@@ -21,6 +24,11 @@ import org.jooq.DSLContext;
 public final class TestWiring {
 
   private TestWiring() {}
+
+  /** A pass-everything {@link EmailGate} (story 87) for ITs that aren't about email quality. */
+  public static EmailGate permissiveEmailGate() {
+    return new EmailGate(Set.of(), domain -> MxResolver.MxResult.UNKNOWN, false);
+  }
 
   public static MagicLinkService magicLinkService(DSLContext dsl) {
     return new MagicLinkService(
