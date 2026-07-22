@@ -105,4 +105,32 @@ public interface UserRepository {
    * called on a transaction-bound repository.
    */
   Set<UUID> activeAdminIdsForUpdate();
+
+  // ── Register verify-to-activate (story 88) ──
+
+  /**
+   * Stamp {@code email_verified_at = at} iff it is still NULL (idempotent — a later inbox proof
+   * never rewrites the first). Returns rows updated (0 = already verified or unknown user).
+   */
+  int markEmailVerified(UUID userId, java.time.OffsetDateTime at);
+
+  /**
+   * Ids of unverified accounts the purge job may delete: {@code email_verified_at IS NULL}, created
+   * before {@code cutoff}, and holding <b>no live EMAIL_VERIFY token</b> (never yank an account
+   * whose emailed link could still be clicked). Oldest first, capped at {@code limit}.
+   */
+  List<UUID> findPurgeableUnverified(java.time.OffsetDateTime cutoff, int limit);
+
+  /**
+   * Ids of orgs where {@code userId} is the <em>only</em> member (no other user holds any role
+   * there). The purge job deletes these alongside the account — an org whose sole owner never
+   * logged in can hold no business data.
+   */
+  List<UUID> soleMemberOrgIds(UUID userId);
+
+  /**
+   * Hard-delete an app_user row (magic tokens cascade via FK). Returns rows deleted. Purge-job only
+   * — everywhere else deactivation is the correct verb.
+   */
+  int deleteUser(UUID userId);
 }

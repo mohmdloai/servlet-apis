@@ -21,6 +21,7 @@ import com.loai.inventory.service.email.EmailAddresses;
 import com.loai.inventory.service.email.EmailGate;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -71,12 +72,14 @@ public class AccountService {
   }
 
   /**
-   * Register a new USER self-service. Creates the account (and, when {@code orgName} is given, an
-   * org with the registrant as its OWNER) in one transaction, then logs them in. 409 if the email
-   * is already registered.
+   * Register a new USER self-service — <b>verify-to-activate</b> (story 88). Creates the account
+   * <em>unverified</em> (and, when {@code orgName} is given, an org with the registrant as its
+   * OWNER) plus an EMAIL_VERIFY token, all in one transaction; the verification link is emailed
+   * after commit. No session is issued — login stays 403-blocked until the link is redeemed ({@link
+   * #verifyEmail}), which is what signs the user in. 409 if the email is already registered. A send
+   * failure is logged, never thrown — {@link #resendVerification} is the recovery path.
    */
-  public LoginResult register(
-      String email, String rawPassword, String orgName, String deviceInfo, String sourceIp) {
+  public AppUser register(String email, String rawPassword, String orgName) {
     String normalizedEmail = Text.normalizeEmail(email);
     if (!EmailAddresses.isSingleValid(normalizedEmail)) {
       throw new ValidationException("a valid email is required");
@@ -96,7 +99,8 @@ public class AccountService {
       OrgService.validateName(normalizedOrgName);
     }
 
-    AppUser created =
+    OffsetDateTime now = OffsetDateTime.now();
+    Registered registered =
         rootDsl.transactionResult(
             cfg -> {
               DSLContext tx = DSL.using(cfg);
@@ -124,11 +128,75 @@ public class AccountService {
                 Org saved = orgRepo.insert(org);
                 userRepo.insertOrgRole(user.getId(), saved.getId(), OrgRole.OWNER);
               }
-              return user;
+              // Minted inside the txn — a rolled-back registration leaves no orphan token.
+              String rawToken =
+                  tokenService.mint(tx, user.getId(), AppUserTokenPurpose.EMAIL_VERIFY, now);
+              return new Registered(user, rawToken);
             });
 
-    log.info("User registered: id={} withOrg={}", created.getId(), withOrg);
-    return authService.issueSession(created, deviceInfo, sourceIp);
+    // Post-commit, best-effort (AuthMailer never throws): resend-verification is the recovery.
+    mailer.sendVerifyEmail(normalizedEmail, tokenService.verifyUrl(registered.rawToken()));
+    log.info("User registered (unverified): id={} withOrg={}", registered.user().getId(), withOrg);
+    return registered.user();
+  }
+
+  private record Registered(AppUser user, String rawToken) {}
+
+  /**
+   * Redeem an EMAIL_VERIFY link: stamp {@code email_verified_at} and sign the user in — the click
+   * is the activation <em>and</em> the login (story 88), mirroring reset/activate redemption. No
+   * {@code token_version} bump: no credential changed, and an unverified account can hold no prior
+   * sessions to revoke.
+   */
+  public LoginResult verifyEmail(
+      String rawToken, OffsetDateTime now, String deviceInfo, String sourceIp) {
+    AppUser user =
+        rootDsl.transactionResult(
+            cfg -> {
+              DSLContext tx = DSL.using(cfg);
+              UUID userId =
+                  tokenService
+                      .consume(tx, AppUserTokenPurpose.EMAIL_VERIFY, rawToken, now)
+                      .orElseThrow(() -> new ValidationException("invalid or expired token"));
+              UserRepository userRepo = userRepoFactory.create(tx);
+              AppUser found =
+                  userRepo
+                      .findById(userId)
+                      .orElseThrow(() -> new NotFoundException("User", userId));
+              if (!found.isActive()) {
+                throw new AuthenticationException("Account is disabled");
+              }
+              userRepo.markEmailVerified(userId, now);
+              found.setEmailVerifiedAt(now);
+              return found;
+            });
+    log.info("Email verified for user id={}", user.getId());
+    return authService.issueSession(user, deviceInfo, sourceIp);
+  }
+
+  /**
+   * Re-send the verification link. Enumeration-safe like {@link #requestPasswordReset}: only an
+   * existing, active, still-unverified account gets a fresh token (superseding any live prior one
+   * so exactly the latest emailed link redeems); every caller gets the same uniform response.
+   */
+  public void resendVerification(String email, OffsetDateTime now) {
+    try {
+      String normalizedEmail = Text.normalizeEmail(email);
+      if (!EmailAddresses.isSingleValid(normalizedEmail)) {
+        return;
+      }
+      Optional<AppUser> user = userRepoFactory.create(rootDsl).findByEmail(normalizedEmail);
+      if (user.isEmpty() || !user.get().isActive() || user.get().getEmailVerifiedAt() != null) {
+        return;
+      }
+      UUID userId = user.get().getId();
+      tokenService.invalidateActive(userId, AppUserTokenPurpose.EMAIL_VERIFY, now);
+      String rawToken = tokenService.mintAutonomous(userId, AppUserTokenPurpose.EMAIL_VERIFY, now);
+      mailer.sendVerifyEmail(normalizedEmail, tokenService.verifyUrl(rawToken));
+    } catch (RuntimeException e) {
+      // Never let an internal error reveal that the email did/didn't exist.
+      log.warn("resend-verification failed", e);
+    }
   }
 
   /**
@@ -206,6 +274,11 @@ public class AccountService {
                 throw new AuthenticationException("Account is disabled");
               }
               userRepo.updatePasswordHash(userId, PasswordHasher.hash(newPassword));
+              // Self-heal (story 88): redeeming an emailed reset/invite link proves the inbox —
+              // stamp email_verified_at if never proven, so this account is never 403-blocked.
+              userRepo.markEmailVerified(userId, now);
+              user.setEmailVerifiedAt(
+                  user.getEmailVerifiedAt() == null ? now : user.getEmailVerifiedAt());
               AppUser effective = user;
               if (activating && !user.isActive()) {
                 effective = userRepo.setActive(userId, true);
@@ -221,6 +294,43 @@ public class AccountService {
   }
 
   private record Redeemed(AppUser user, int newVersion) {}
+
+  /**
+   * Delete never-verified accounts older than {@code cutoff} (story 88) — the register-spam garbage
+   * collector. A live EMAIL_VERIFY token shields an account (its emailed link could still be
+   * clicked — the repository query excludes it). Each candidate purges in its own txn: delete the
+   * orgs where the user is the sole member (an owner who never logged in can have put no data in
+   * them; roles and tokens cascade), then the user row. Anything unexpectedly referenced (an FK
+   * violation) skips that user with a WARN rather than failing the sweep. Returns accounts purged.
+   */
+  public int purgeUnverified(OffsetDateTime cutoff, int limit) {
+    List<UUID> candidates = userRepoFactory.create(rootDsl).findPurgeableUnverified(cutoff, limit);
+    int purged = 0;
+    for (UUID userId : candidates) {
+      try {
+        rootDsl.transaction(
+            cfg -> {
+              DSLContext tx = DSL.using(cfg);
+              UserRepository userRepo = userRepoFactory.create(tx);
+              OrgRepository orgRepo = orgRepoFactory.create(tx);
+              for (UUID orgId : userRepo.soleMemberOrgIds(userId)) {
+                orgRepo.deleteById(orgId); // user_org_role rows cascade with the org
+              }
+              userRepo.deleteUser(userId); // magic tokens + remaining roles cascade
+            });
+        purged++;
+      } catch (RuntimeException e) {
+        // Defensive — not expected (an unverified user never logged in), but never let one odd
+        // account fail the whole sweep.
+        log.warn(
+            "Skipping unverified-account purge for user {} (unexpected references)", userId, e);
+      }
+    }
+    if (purged > 0) {
+      log.info("Purged {} never-verified account(s) older than {}", purged, cutoff);
+    }
+    return purged;
+  }
 
   private static void validatePassword(String rawPassword) {
     if (rawPassword == null || rawPassword.length() < MIN_PASSWORD_LENGTH) {

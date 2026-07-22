@@ -79,6 +79,12 @@ public class AuthService {
       throw new AuthenticationException("Invalid email or password");
     }
 
+    // Verify-to-activate (story 88) — AFTER the password check, so this is never a password
+    // oracle. 403 is reserved on /login for exactly this state; the frontend keys on the status.
+    if (user.getEmailVerifiedAt() == null) {
+      throw new AuthorizationException("Email not verified");
+    }
+
     log.info("User logged in: id={} email={}", user.getId(), user.getEmail());
     return issueSession(user, deviceInfo, sourceIp);
   }

@@ -27,7 +27,7 @@ class AccountServiceTest {
     ValidationException e =
         assertThrows(
             ValidationException.class,
-            () -> service.register("spam@mailinator.com", "password123", null, "ua", "1.2.3.4"));
+            () -> service.register("spam@mailinator.com", "password123", null));
     assertEquals("disposable email addresses are not accepted", e.getMessage());
   }
 
@@ -38,7 +38,7 @@ class AccountServiceTest {
     ValidationException e =
         assertThrows(
             ValidationException.class,
-            () -> service.register("x@nosuchdomain.example", "password123", null, "ua", "1.2.3.4"));
+            () -> service.register("x@nosuchdomain.example", "password123", null));
     assertEquals("email domain cannot receive mail", e.getMessage());
   }
 
@@ -49,6 +49,6 @@ class AccountServiceTest {
     AccountService service = serviceWith(new EmailGate(Set.of(), d -> MxResult.UNKNOWN, true));
     assertThrows(
         NullPointerException.class,
-        () -> service.register("x@flaky-dns.example", "password123", null, "ua", "1.2.3.4"));
+        () -> service.register("x@flaky-dns.example", "password123", null));
   }
 }

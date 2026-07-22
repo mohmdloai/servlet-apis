@@ -131,8 +131,12 @@ public class UserAdminService {
           if (userRepo.findByEmail(normalizedEmail).isPresent()) {
             throw new ConflictException("A user with that email already exists");
           }
-          AppUser created =
-              userRepo.insert(new AppUser(null, normalizedEmail, hash, type, true, 0, null, null));
+          AppUser toInsert = new AppUser(null, normalizedEmail, hash, type, true, 0, null, null);
+          // Born verified (story 88): the admin plane vouches, and the reset/invite flow that
+          // hands over the password re-proves the inbox anyway. Platform-created users must
+          // never be 403-blocked at login.
+          toInsert.setEmailVerifiedAt(java.time.OffsetDateTime.now());
+          AppUser created = userRepo.insert(toInsert);
           audit.recordInTx(
               tx,
               actor,

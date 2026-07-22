@@ -98,7 +98,8 @@ class PlatformOrgServiceIT {
             new AppUserMagicTokenRepositoryFactoryImpl(),
             "http://localhost:8080",
             Duration.ofMinutes(120),
-            Duration.ofDays(7));
+            Duration.ofDays(7),
+            Duration.ofHours(48));
     AuthMailer authMailer = new AuthMailer(msg -> {}); // no-op sender; the IT asserts the token row
     service =
         new PlatformOrgService(

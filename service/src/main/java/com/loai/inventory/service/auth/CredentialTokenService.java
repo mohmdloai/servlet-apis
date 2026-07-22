@@ -31,18 +31,21 @@ public class CredentialTokenService {
   private final String publicBaseUrl;
   private final Duration resetTtl;
   private final Duration inviteTtl;
+  private final Duration verifyTtl;
 
   public CredentialTokenService(
       DSLContext rootDsl,
       AppUserMagicTokenRepositoryFactory tokenRepoFactory,
       String publicBaseUrl,
       Duration resetTtl,
-      Duration inviteTtl) {
+      Duration inviteTtl,
+      Duration verifyTtl) {
     this.rootDsl = rootDsl;
     this.tokenRepoFactory = tokenRepoFactory;
     this.publicBaseUrl = stripTrailingSlash(publicBaseUrl);
     this.resetTtl = resetTtl;
     this.inviteTtl = inviteTtl;
+    this.verifyTtl = verifyTtl;
   }
 
   /**
@@ -90,8 +93,25 @@ public class CredentialTokenService {
     return publicBaseUrl + "/activate?token=" + rawToken;
   }
 
+  /** Absolute link a self-registered user follows to prove their inbox and sign in (story 88). */
+  public String verifyUrl(String rawToken) {
+    return publicBaseUrl + "/verify-email?token=" + rawToken;
+  }
+
+  /**
+   * Supersede every live token of {@code purpose} for {@code userId} — resend-verification mints a
+   * fresh link and only the latest one may redeem.
+   */
+  public void invalidateActive(UUID userId, AppUserTokenPurpose purpose, OffsetDateTime now) {
+    tokenRepoFactory.create(rootDsl).invalidateActive(userId, purpose, now);
+  }
+
   private Duration ttlFor(AppUserTokenPurpose purpose) {
-    return purpose == AppUserTokenPurpose.INVITE ? inviteTtl : resetTtl;
+    return switch (purpose) {
+      case INVITE -> inviteTtl;
+      case PASSWORD_RESET -> resetTtl;
+      case EMAIL_VERIFY -> verifyTtl;
+    };
   }
 
   private static String generateRawToken() {

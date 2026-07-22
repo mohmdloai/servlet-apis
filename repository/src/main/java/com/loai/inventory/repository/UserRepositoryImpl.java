@@ -1,11 +1,13 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.APP_USER;
+import static com.loai.inventory.repository.generated.Tables.APP_USER_MAGIC_TOKEN;
 import static com.loai.inventory.repository.generated.Tables.USER_ORG_ROLE;
 import static com.loai.inventory.repository.generated.Tables.USER_SYSTEM_ROLE;
 
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.AppUser;
+import com.loai.inventory.domain.model.AppUserTokenPurpose;
 import com.loai.inventory.domain.model.OrgMember;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SystemRole;
@@ -60,6 +62,9 @@ public final class UserRepositoryImpl implements UserRepository {
                     user.getActorType().name()))
             .set(APP_USER.ACTIVE, user.isActive())
             .set(APP_USER.TOKEN_VERSION, user.getTokenVersion())
+            // Null for self-serve registration (login blocked until the emailed link is redeemed);
+            // stamped by the admin plane at creation (story 88).
+            .set(APP_USER.EMAIL_VERIFIED_AT, user.getEmailVerifiedAt())
             .returning()
             .fetchOne();
     if (record == null) {
@@ -399,6 +404,58 @@ public final class UserRepositoryImpl implements UserRepository {
         .fetchSet(USER_SYSTEM_ROLE.USER_ID);
   }
 
+  // ── Register verify-to-activate (story 88) ──
+
+  @Override
+  public int markEmailVerified(UUID userId, OffsetDateTime at) {
+    // Idempotent: only the first inbox proof stamps; a later reset/invite redemption is a no-op.
+    return dsl.update(APP_USER)
+        .set(APP_USER.EMAIL_VERIFIED_AT, at)
+        .set(APP_USER.UPDATED_AT, OffsetDateTime.now())
+        .where(APP_USER.ID.eq(userId))
+        .and(APP_USER.EMAIL_VERIFIED_AT.isNull())
+        .execute();
+  }
+
+  @Override
+  public List<UUID> findPurgeableUnverified(OffsetDateTime cutoff, int limit) {
+    // A live (unconsumed, unexpired) EMAIL_VERIFY token shields the account — its emailed link
+    // could still be clicked. Everyone else past the cutoff is fair game for the purge job.
+    return dsl.select(APP_USER.ID)
+        .from(APP_USER)
+        .where(APP_USER.EMAIL_VERIFIED_AT.isNull())
+        .and(APP_USER.CREATED_AT.lt(cutoff))
+        .andNotExists(
+            DSL.selectOne()
+                .from(APP_USER_MAGIC_TOKEN)
+                .where(APP_USER_MAGIC_TOKEN.USER_ID.eq(APP_USER.ID))
+                .and(APP_USER_MAGIC_TOKEN.PURPOSE.eq(AppUserTokenPurpose.EMAIL_VERIFY.name()))
+                .and(APP_USER_MAGIC_TOKEN.CONSUMED_AT.isNull())
+                .and(APP_USER_MAGIC_TOKEN.EXPIRES_AT.gt(DSL.currentOffsetDateTime())))
+        .orderBy(APP_USER.CREATED_AT.asc())
+        .limit(limit)
+        .fetch(APP_USER.ID);
+  }
+
+  @Override
+  public List<UUID> soleMemberOrgIds(UUID userId) {
+    var other = USER_ORG_ROLE.as("other_member");
+    return dsl.selectDistinct(USER_ORG_ROLE.ORG_ID)
+        .from(USER_ORG_ROLE)
+        .where(USER_ORG_ROLE.USER_ID.eq(userId))
+        .andNotExists(
+            DSL.selectOne()
+                .from(other)
+                .where(other.ORG_ID.eq(USER_ORG_ROLE.ORG_ID))
+                .and(other.USER_ID.ne(userId)))
+        .fetch(USER_ORG_ROLE.ORG_ID);
+  }
+
+  @Override
+  public int deleteUser(UUID userId) {
+    return dsl.deleteFrom(APP_USER).where(APP_USER.ID.eq(userId)).execute();
+  }
+
   private AppUser toAppUser(AppUserRecord r) {
     AppUser user =
         new AppUser(
@@ -411,6 +468,7 @@ public final class UserRepositoryImpl implements UserRepository {
             r.getCreatedAt(),
             r.getUpdatedAt());
     user.setDisplayName(r.getDisplayName());
+    user.setEmailVerifiedAt(r.getEmailVerifiedAt());
     return user;
   }
 

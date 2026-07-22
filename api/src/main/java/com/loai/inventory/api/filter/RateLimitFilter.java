@@ -183,6 +183,12 @@ public class RateLimitFilter implements Filter {
     } else if (path.equals("/api/auth/forgot-password")) {
       keyPrefix = "rl:auth-forgot:";
       limit = authForgotLimit;
+    } else if (path.equals("/api/auth/resend-verification")) {
+      // Story 88: same shape as forgot-password (an anonymous email-send trigger) — own bucket,
+      // shared AUTH_FORGOT_LIMIT budget. /verify-email stays unbucketed like the other
+      // token-redemption endpoints (256-bit single-use tokens).
+      keyPrefix = "rl:auth-resend:";
+      limit = authForgotLimit;
     } else if (path.endsWith("/login")) {
       keyPrefix = "rl:login:";
       limit = LOGIN_LIMIT;

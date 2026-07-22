@@ -53,6 +53,17 @@ public final class AppUserMagicTokenRepositoryImpl implements AppUserMagicTokenR
         .map(org.jooq.Record1::value1);
   }
 
+  @Override
+  public int invalidateActive(UUID userId, AppUserTokenPurpose purpose, OffsetDateTime now) {
+    return dsl.update(APP_USER_MAGIC_TOKEN)
+        .set(APP_USER_MAGIC_TOKEN.CONSUMED_AT, now)
+        .where(APP_USER_MAGIC_TOKEN.USER_ID.eq(userId))
+        .and(APP_USER_MAGIC_TOKEN.PURPOSE.eq(purpose.name()))
+        .and(APP_USER_MAGIC_TOKEN.CONSUMED_AT.isNull())
+        .and(APP_USER_MAGIC_TOKEN.EXPIRES_AT.gt(now))
+        .execute();
+  }
+
   private AppUserMagicToken toToken(AppUserMagicTokenRecord r) {
     return new AppUserMagicToken(
         r.getId(),
