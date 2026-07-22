@@ -1,6 +1,7 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.ORG;
+import static com.loai.inventory.repository.generated.Tables.USER_ORG_ROLE;
 
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.Org;
@@ -140,6 +141,34 @@ public final class OrgRepositoryImpl implements OrgRepository {
     }
     log.debug("Org id={} suspension set to {}", orgId, suspended);
     return toOrg(record);
+  }
+
+  @Override
+  public List<UUID> activateRegistrationPendingOrgs(UUID ownerId) {
+    // Only orgs born inactive at self-serve registration: active=false AND never admin-suspended
+    // (suspended_at IS NULL — setSuspension always stamps it, so the two states can't be
+    // confused), where ownerId holds OWNER and nobody else holds anything.
+    var other = USER_ORG_ROLE.as("other_member");
+    return dsl.update(ORG)
+        .set(ORG.ACTIVE, true)
+        .set(ORG.UPDATED_AT, OffsetDateTime.now())
+        .where(ORG.ACTIVE.isFalse())
+        .and(ORG.SUSPENDED_AT.isNull())
+        .andExists(
+            DSL.selectOne()
+                .from(USER_ORG_ROLE)
+                .where(USER_ORG_ROLE.ORG_ID.eq(ORG.ID))
+                .and(USER_ORG_ROLE.USER_ID.eq(ownerId))
+                .and(
+                    USER_ORG_ROLE.ROLE.eq(
+                        com.loai.inventory.repository.generated.enums.OrgRole.OWNER)))
+        .andNotExists(
+            DSL.selectOne()
+                .from(other)
+                .where(other.ORG_ID.eq(ORG.ID))
+                .and(other.USER_ID.ne(ownerId)))
+        .returningResult(ORG.ID)
+        .fetch(ORG.ID);
   }
 
   @Override

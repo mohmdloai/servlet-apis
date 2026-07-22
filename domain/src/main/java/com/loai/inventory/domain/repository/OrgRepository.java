@@ -36,4 +36,13 @@ public interface OrgRepository {
   void deleteById(UUID id);
 
   boolean existsBySlug(String slug);
+
+  /**
+   * Activate the registration-pending orgs of a freshly-verified owner (story 89): every org where
+   * {@code ownerId} is the <em>sole</em> member holding OWNER, that is {@code active=false} with
+   * {@code suspended_at IS NULL} — i.e. born inactive at self-serve registration, never
+   * admin-suspended. Returns the activated ids (for status-mirror invalidation). An admin-suspended
+   * org ({@code suspended_at} stamped) is never resurrected here.
+   */
+  List<UUID> activateRegistrationPendingOrgs(UUID ownerId);
 }

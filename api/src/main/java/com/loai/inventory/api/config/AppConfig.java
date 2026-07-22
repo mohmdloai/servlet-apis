@@ -343,8 +343,13 @@ public class AppConfig {
             jwtUtil,
             impersonationEventRepository,
             impersonationTtl);
-    // Base URL for emailed auth links (shared with MagicLinkService below).
+    // Base URL for emailed CUSTOMER links (order view, unsubscribe — MagicLinkService below):
+    // the storefront app in prod.
     String publicBaseUrl = getenvOrDefault("PUBLIC_BASE_URL", "http://localhost:8080");
+    // Base URL for emailed CREDENTIAL links (reset / activate / verify-email): those pages live in
+    // the ADMIN app (admin.<domain> in prod, story 89) — a link built on the storefront base 404s.
+    // Falls back to PUBLIC_BASE_URL so single-host dev setups need nothing.
+    String adminBaseUrl = getenvOrDefault("ADMIN_BASE_URL", publicBaseUrl);
     long resetTtlMinutes = parseLong(System.getenv("PASSWORD_RESET_TTL_MINUTES"), 120L);
     long inviteTtlDays = parseLong(System.getenv("INVITE_TTL_DAYS"), 7L);
     long verifyTtlHours = parseLong(System.getenv("EMAIL_VERIFY_TTL_HOURS"), 48L);
@@ -352,7 +357,7 @@ public class AppConfig {
         new CredentialTokenService(
             dsl,
             appUserMagicTokenRepositoryFactory,
-            publicBaseUrl,
+            adminBaseUrl,
             Duration.ofMinutes(resetTtlMinutes),
             Duration.ofDays(inviteTtlDays),
             Duration.ofHours(verifyTtlHours));
@@ -368,6 +373,10 @@ public class AppConfig {
             EmailGate.loadBlocklist(System.getenv("EMAIL_BLOCKLIST_PATH")),
             new CachingMxResolver(new DnsJavaMxResolver(mxTimeoutMs), jedisPool),
             mxCheckEnabled);
+    // Before accountService — verifyEmail invalidates the org-status mirror on activation (89).
+    this.orgStatusService = new OrgStatusService(jedisPool, dsl, orgRepositoryFactory);
+    // Enforce org suspension on the hot authorization path, backed by the Redis-mirrored gate.
+    AuthzHelper.configureOrgStatusGate(orgStatusService::isActive);
     this.accountService =
         new AccountService(
             dsl,
@@ -376,16 +385,14 @@ public class AppConfig {
             credentialTokenService,
             authMailer,
             authService,
-            emailGate);
+            emailGate,
+            orgStatusService);
     this.orgService =
         new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory, objectStorage);
     this.orgHealthService = new OrgHealthService(orgHealthRepository);
     this.reportService = new ReportService(reportRepository);
     this.memberService = new MemberService(dsl, userRepositoryFactory, authService);
     this.platformAuditService = new PlatformAuditService(dsl, platformAuditRepositoryFactory);
-    this.orgStatusService = new OrgStatusService(jedisPool, dsl, orgRepositoryFactory);
-    // Enforce org suspension on the hot authorization path, backed by the Redis-mirrored gate.
-    AuthzHelper.configureOrgStatusGate(orgStatusService::isActive);
     this.platformOrgService =
         new PlatformOrgService(
             dsl,

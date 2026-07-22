@@ -104,7 +104,11 @@ services:
       COOKIE_SECURE: "true"
       TRUST_PROXY: "true"
       CORS_ALLOWED_ORIGINS: https://admin.${DOMAIN},https://store.${DOMAIN}
+      # Customer links (order view / unsubscribe) → the storefront.
       PUBLIC_BASE_URL: https://store.${DOMAIN}
+      # Credential links (reset / activate / verify-email) → the ADMIN app, where those pages
+      # live (story 89 — without this they 404 on the storefront).
+      ADMIN_BASE_URL: https://admin.${DOMAIN}
       JWT_SECRET: ${JWT_SECRET}
       CUSTOMER_JWT_SECRET: ${CUSTOMER_JWT_SECRET}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
