@@ -80,6 +80,9 @@ class CustomerResolutionAtPlacementIT {
   static HikariDataSource dataSource;
   static DSLContext dsl;
   static SalesOrderService service;
+  // Same wiring, but with a gate that flags everything it sees — story 87 AC5: a flagged email
+  // must never block a placement (lenient mode logs and proceeds).
+  static SalesOrderService flaggingService;
 
   @BeforeAll
   static void startInfra() {
@@ -167,7 +170,24 @@ class CustomerResolutionAtPlacementIT {
                 new com.loai.inventory.service.email.LoggingEmailSender(),
                 magicLink,
                 NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS),
-            magicLink);
+            magicLink,
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate());
+    flaggingService =
+        new SalesOrderService(
+            dsl,
+            new SalesOrderRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            reservationService,
+            fulfillmentService,
+            paymentService,
+            invoiceService,
+            refundService,
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            magicLink,
+            new com.loai.inventory.service.email.EmailGate(
+                java.util.Set.of("mailinator.com"),
+                domain -> com.loai.inventory.service.email.MxResolver.MxResult.UNDELIVERABLE,
+                true));
   }
 
   @AfterAll
@@ -211,6 +231,28 @@ class CustomerResolutionAtPlacementIT {
     assertEquals(placed.customer().getId(), placed.order().getCustomerId());
     assertEquals("nadia@acme.test", customerEmail(placed.order().getCustomerId()));
     assertEquals("Nadia", customerName(placed.order().getCustomerId()));
+  }
+
+  /** Story 87 AC5: a disposable/undeliverable email is flagged (logged) but never blocks a sale. */
+  @Test
+  void onlineOrder_flaggedEmail_isAcceptedLeniently() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("staff@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 0);
+
+    Placed placed =
+        flaggingService.placeOnlineOrder(
+            org,
+            new CustomerInput("Ghost", "throwaway@mailinator.com", null, null),
+            List.of(new OrderLineInput(product, 1)),
+            UUID.randomUUID().toString(),
+            null,
+            actor(staff));
+
+    assertNotNull(placed.order().getCustomerId(), "the order placed despite the flagged email");
+    assertEquals(1, customerCount(org), "the CRM row was still upserted");
+    assertEquals("throwaway@mailinator.com", customerEmail(placed.order().getCustomerId()));
   }
 
   /** Second order, same email/org → merges into the same customer row (no duplicate). */

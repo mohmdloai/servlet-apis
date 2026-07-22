@@ -18,6 +18,7 @@ import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.auth.AuthService.LoginResult;
 import com.loai.inventory.service.email.EmailAddresses;
+import com.loai.inventory.service.email.EmailGate;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.Optional;
@@ -50,6 +51,7 @@ public class AccountService {
   private final CredentialTokenService tokenService;
   private final AuthMailer mailer;
   private final AuthService authService;
+  private final EmailGate emailGate;
 
   public AccountService(
       DSLContext rootDsl,
@@ -57,13 +59,15 @@ public class AccountService {
       OrgRepositoryFactory orgRepoFactory,
       CredentialTokenService tokenService,
       AuthMailer mailer,
-      AuthService authService) {
+      AuthService authService,
+      EmailGate emailGate) {
     this.rootDsl = rootDsl;
     this.userRepoFactory = userRepoFactory;
     this.orgRepoFactory = orgRepoFactory;
     this.tokenService = tokenService;
     this.mailer = mailer;
     this.authService = authService;
+    this.emailGate = emailGate;
   }
 
   /**
@@ -76,6 +80,14 @@ public class AccountService {
     String normalizedEmail = Text.normalizeEmail(email);
     if (!EmailAddresses.isSingleValid(normalizedEmail)) {
       throw new ValidationException("a valid email is required");
+    }
+    // Quality gate (story 87) — registration is the strict flow: a throwaway or provably
+    // undeliverable address never mints an account. Cause-naming 400s, matching the syntax gate.
+    switch (emailGate.check(normalizedEmail)) {
+      case DISPOSABLE ->
+          throw new ValidationException("disposable email addresses are not accepted");
+      case UNDELIVERABLE -> throw new ValidationException("email domain cannot receive mail");
+      case OK -> {}
     }
     validatePassword(rawPassword);
     String normalizedOrgName = Text.normalizeText(orgName);

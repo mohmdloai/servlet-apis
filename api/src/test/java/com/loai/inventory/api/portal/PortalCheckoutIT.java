@@ -173,7 +173,8 @@ class PortalCheckoutIT {
             invoiceService,
             refundService,
             com.loai.inventory.api.support.TestWiring.notificationService(dsl),
-            magicLink);
+            magicLink,
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate());
     portal =
         new CustomerPortalService(
             dsl,

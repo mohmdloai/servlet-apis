@@ -116,6 +116,9 @@ import com.loai.inventory.service.auth.CustomerSessionStore;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.loai.inventory.service.document.DocumentRenderService;
 import com.loai.inventory.service.document.PresignedLogoSource;
+import com.loai.inventory.service.email.CachingMxResolver;
+import com.loai.inventory.service.email.DnsJavaMxResolver;
+import com.loai.inventory.service.email.EmailGate;
 import com.loai.inventory.service.email.EmailSender;
 import com.loai.inventory.service.email.EmailSenderFactory;
 import com.loai.inventory.service.platform.OrgStatusService;
@@ -350,6 +353,17 @@ public class AppConfig {
             Duration.ofMinutes(resetTtlMinutes),
             Duration.ofDays(inviteTtlDays));
     this.authMailer = new AuthMailer(emailSender);
+    // Email quality gate (story 87): vendored disposable-domain blocklist (EMAIL_BLOCKLIST_PATH
+    // overrides the classpath snapshot) + a Redis-cached dnsjava MX check. The MX leg ships dark
+    // (EMAIL_MX_CHECK_ENABLED default false); every failure mode passes rather than blocks.
+    boolean mxCheckEnabled =
+        Boolean.parseBoolean(getenvOrDefault("EMAIL_MX_CHECK_ENABLED", "false"));
+    int mxTimeoutMs = (int) parseLong(System.getenv("EMAIL_MX_TIMEOUT_MS"), 2000L);
+    EmailGate emailGate =
+        new EmailGate(
+            EmailGate.loadBlocklist(System.getenv("EMAIL_BLOCKLIST_PATH")),
+            new CachingMxResolver(new DnsJavaMxResolver(mxTimeoutMs), jedisPool),
+            mxCheckEnabled);
     this.accountService =
         new AccountService(
             dsl,
@@ -357,7 +371,8 @@ public class AppConfig {
             orgRepositoryFactory,
             credentialTokenService,
             authMailer,
-            authService);
+            authService,
+            emailGate);
     this.orgService =
         new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory, objectStorage);
     this.orgHealthService = new OrgHealthService(orgHealthRepository);
@@ -422,6 +437,7 @@ public class AppConfig {
             customerSessionStore,
             customerJwtUtil,
             emailSender,
+            emailGate,
             portalOtpRequestLimit,
             60);
     this.productListingService =
@@ -534,7 +550,8 @@ public class AppConfig {
             invoiceService,
             refundService,
             notificationService,
-            magicLinkService);
+            magicLinkService,
+            emailGate);
     this.storefrontService =
         new StorefrontService(
             dsl,

@@ -118,7 +118,8 @@ class AccountServiceIT {
             new OrgRepositoryFactoryImpl(),
             credentialTokenService,
             new AuthMailer(emailSender),
-            authService);
+            authService,
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate());
   }
 
   @AfterAll

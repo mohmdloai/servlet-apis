@@ -23,6 +23,7 @@ import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.service.email.EmailAddresses;
+import com.loai.inventory.service.email.EmailGate;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -69,6 +70,7 @@ public class SalesOrderService {
   private final RefundService refundService;
   private final NotificationService notificationService;
   private final MagicLinkService magicLinkService;
+  private final EmailGate emailGate;
 
   public SalesOrderService(
       DSLContext rootDsl,
@@ -80,7 +82,8 @@ public class SalesOrderService {
       InvoiceService invoiceService,
       RefundService refundService,
       NotificationService notificationService,
-      MagicLinkService magicLinkService) {
+      MagicLinkService magicLinkService,
+      EmailGate emailGate) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.orgRepoFactory = orgRepoFactory;
@@ -91,6 +94,7 @@ public class SalesOrderService {
     this.refundService = refundService;
     this.notificationService = notificationService;
     this.magicLinkService = magicLinkService;
+    this.emailGate = emailGate;
   }
 
   /** Input contact info; {@code name} required, others optional. */
@@ -763,6 +767,17 @@ public class SalesOrderService {
     String normalizedEmail = Text.normalizeEmail(customer.email());
     if (!EmailAddresses.isSingleValid(normalizedEmail)) {
       throw new ValidationException("customer.email is not a valid single email address");
+    }
+    // Quality gate (story 87), lenient mode: a checkout is never blocked on email quality — a sale
+    // with a throwaway email beats no sale. Flag it for ops (domain only, not the address) and
+    // proceed; the only cost of a bad address is a dead order-view link.
+    EmailGate.Verdict verdict = emailGate.check(normalizedEmail);
+    if (verdict != EmailGate.Verdict.OK) {
+      log.warn(
+          "Checkout email flagged {} (domain {}) for org {} — accepted (lenient mode)",
+          verdict,
+          EmailGate.domainOf(normalizedEmail),
+          orgId);
     }
     return repo.upsertCustomerByEmail(
         orgId,

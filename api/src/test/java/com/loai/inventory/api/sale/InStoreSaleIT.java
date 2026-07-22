@@ -171,7 +171,8 @@ class InStoreSaleIT {
                 new com.loai.inventory.service.email.LoggingEmailSender(),
                 magicLink,
                 com.loai.inventory.service.NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS),
-            magicLink);
+            magicLink,
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate());
   }
 
   @AfterAll
