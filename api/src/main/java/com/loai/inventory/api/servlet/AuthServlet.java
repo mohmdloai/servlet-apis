@@ -11,6 +11,7 @@ import com.loai.inventory.api.dto.LoginRequest;
 import com.loai.inventory.api.dto.RegisterRequest;
 import com.loai.inventory.api.dto.SessionResponse;
 import com.loai.inventory.api.dto.TokenPasswordRequest;
+import com.loai.inventory.api.dto.VerifyEmailRequest;
 import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -58,6 +59,8 @@ public class AuthServlet extends HttpServlet {
       switch (path) {
         case "/login" -> handleLogin(req, resp);
         case "/register" -> handleRegister(req, resp);
+        case "/verify-email" -> handleVerifyEmail(req, resp);
+        case "/resend-verification" -> handleResendVerification(req, resp);
         case "/forgot-password" -> handleForgotPassword(req, resp);
         case "/reset-password" -> handleResetPassword(req, resp);
         case "/activate" -> handleActivate(req, resp);
@@ -151,14 +154,39 @@ public class AuthServlet extends HttpServlet {
     if (body.getEmail() == null || body.getPassword() == null) {
       throw new ValidationException("email and password are required");
     }
+    // Verify-to-activate (story 88): the account is created unverified and NO session is issued —
+    // the emailed link (POST /verify-email) is what activates login and signs the user in.
+    var created = accountService.register(body.getEmail(), body.getPassword(), body.getOrgName());
+    writeJson(resp, 201, Map.of("email", created.getEmail(), "verification", "sent"));
+  }
+
+  /** Redeem the emailed EMAIL_VERIFY link: stamps the account verified and signs the user in. */
+  private void handleVerifyEmail(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    VerifyEmailRequest body = readBody(req, VerifyEmailRequest.class);
+    if (body.getToken() == null || body.getToken().isBlank()) {
+      throw new ValidationException("token is required");
+    }
     AuthService.LoginResult result =
-        accountService.register(
-            body.getEmail(),
-            body.getPassword(),
-            body.getOrgName(),
+        accountService.verifyEmail(
+            body.getToken(),
+            OffsetDateTime.now(),
             req.getHeader("User-Agent"),
             req.getRemoteAddr());
-    writeSession(resp, result, 201);
+    writeSession(resp, result, 200);
+  }
+
+  /** Uniform 200 always — mirrors forgot-password (no account enumeration). */
+  private void handleResendVerification(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    ForgotPasswordRequest body = readBody(req, ForgotPasswordRequest.class);
+    accountService.resendVerification(body.getEmail(), OffsetDateTime.now());
+    writeJson(
+        resp,
+        200,
+        Map.of(
+            "message",
+            "If an unverified account exists for that email, a new link has been sent."));
   }
 
   private void handleForgotPassword(HttpServletRequest req, HttpServletResponse resp)

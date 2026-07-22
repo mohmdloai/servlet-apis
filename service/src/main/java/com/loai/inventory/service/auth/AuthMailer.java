@@ -48,6 +48,19 @@ public class AuthMailer {
             + "<p>The link expires soon.</p>");
   }
 
+  /** The registration verification link (story 88) — proves the inbox and signs the user in. */
+  public void sendVerifyEmail(String to, String url) {
+    send(
+        to,
+        "Confirm your email address",
+        "<p>Thanks for signing up! Confirm your email address to activate your account.</p>"
+            + "<p><a href=\""
+            + url
+            + "\">Confirm my email</a></p>"
+            + "<p>If you did not create this account, you can ignore this email. The link expires"
+            + " in 48 hours.</p>");
+  }
+
   private void send(String to, String subject, String html) {
     if (!EmailAddresses.isSingleValid(to)) {
       log.warn("Skipping auth email — recipient is not a single valid address");

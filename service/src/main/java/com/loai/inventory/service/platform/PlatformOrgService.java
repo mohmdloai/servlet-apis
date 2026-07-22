@@ -154,17 +154,20 @@ public class PlatformOrgService {
               boolean minted = existing.isEmpty();
               AppUser owner;
               if (minted) {
-                owner =
-                    userRepo.insert(
-                        new AppUser(
-                            null,
-                            email,
-                            PasswordHasher.hash("!" + UUID.randomUUID()), // unusable until invite
-                            ActorType.USER,
-                            true,
-                            0,
-                            null,
-                            null));
+                AppUser toMint =
+                    new AppUser(
+                        null,
+                        email,
+                        PasswordHasher.hash("!" + UUID.randomUUID()), // unusable until invite
+                        ActorType.USER,
+                        true,
+                        0,
+                        null,
+                        null);
+                // Born verified (story 88): provisioning is an admin act, and activating the
+                // invite link re-proves the inbox. Never 403-block a provisioned owner.
+                toMint.setEmailVerifiedAt(now);
+                owner = userRepo.insert(toMint);
               } else {
                 owner = existing.get();
                 if (owner.getActorType() != ActorType.USER) {

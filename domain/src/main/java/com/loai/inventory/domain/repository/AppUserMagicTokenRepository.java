@@ -19,4 +19,11 @@ public interface AppUserMagicTokenRepository {
    * -purpose token.
    */
   Optional<UUID> consume(String tokenHash, AppUserTokenPurpose purpose, OffsetDateTime now);
+
+  /**
+   * Invalidate every still-live token of {@code purpose} for {@code userId} (stamp {@code
+   * consumed_at = now}). Backs resend-verification: a fresh link supersedes the old ones so only
+   * the latest emailed token redeems. Returns rows invalidated.
+   */
+  int invalidateActive(UUID userId, AppUserTokenPurpose purpose, OffsetDateTime now);
 }

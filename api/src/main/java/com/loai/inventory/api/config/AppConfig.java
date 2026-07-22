@@ -3,6 +3,7 @@ package com.loai.inventory.api.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.job.NotificationDeliverySweeperJob;
 import com.loai.inventory.api.job.OrderTtlSweeperJob;
+import com.loai.inventory.api.job.UnverifiedAccountPurgeJob;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.DataSourceFactory;
 import com.loai.inventory.common.RedisFactory;
@@ -252,6 +253,7 @@ public class AppConfig {
   // Background JobRunr jobs + their lifecycle flag.
   public final OrderTtlSweeperJob orderTtlSweeperJob;
   public final NotificationDeliverySweeperJob notificationDeliverySweeperJob;
+  public final UnverifiedAccountPurgeJob unverifiedAccountPurgeJob;
   private final boolean jobRunrStarted;
 
   public AppConfig() {
@@ -345,13 +347,15 @@ public class AppConfig {
     String publicBaseUrl = getenvOrDefault("PUBLIC_BASE_URL", "http://localhost:8080");
     long resetTtlMinutes = parseLong(System.getenv("PASSWORD_RESET_TTL_MINUTES"), 120L);
     long inviteTtlDays = parseLong(System.getenv("INVITE_TTL_DAYS"), 7L);
+    long verifyTtlHours = parseLong(System.getenv("EMAIL_VERIFY_TTL_HOURS"), 48L);
     this.credentialTokenService =
         new CredentialTokenService(
             dsl,
             appUserMagicTokenRepositoryFactory,
             publicBaseUrl,
             Duration.ofMinutes(resetTtlMinutes),
-            Duration.ofDays(inviteTtlDays));
+            Duration.ofDays(inviteTtlDays),
+            Duration.ofHours(verifyTtlHours));
     this.authMailer = new AuthMailer(emailSender);
     // Email quality gate (story 87): vendored disposable-domain blocklist (EMAIL_BLOCKLIST_PATH
     // overrides the classpath snapshot) + a Redis-cached dnsjava MX check. The MX leg ships dark
@@ -623,6 +627,14 @@ public class AppConfig {
     this.notificationDeliverySweeperJob =
         new NotificationDeliverySweeperJob(notificationService, notifyBatchLimit);
 
+    // Never-verified account GC (story 88): grace window well beyond the 48h verify-token TTL, and
+    // a live token always shields its account regardless (the repository query excludes it).
+    long purgeGraceDays = parseLong(System.getenv("UNVERIFIED_PURGE_GRACE_DAYS"), 7L);
+    int purgeBatchLimit = (int) parseLong(System.getenv("UNVERIFIED_PURGE_BATCH_LIMIT"), 200L);
+    this.unverifiedAccountPurgeJob =
+        new UnverifiedAccountPurgeJob(
+            accountService, Duration.ofDays(purgeGraceDays), purgeBatchLimit);
+
     // The background scheduler is gated so tests (and any deployment that wants to drive expiry
     // only through POST /api/admin/sweep) can keep expiry deterministic. Default: enabled.
     boolean enableSweeper =
@@ -651,6 +663,9 @@ public class AppConfig {
             if (type.isInstance(notificationDeliverySweeperJob)) {
               return type.cast(notificationDeliverySweeperJob);
             }
+            if (type.isInstance(unverifiedAccountPurgeJob)) {
+              return type.cast(unverifiedAccountPurgeJob);
+            }
             throw new IllegalArgumentException("No JobRunr bean for " + type.getName());
           }
         };
@@ -672,6 +687,12 @@ public class AppConfig {
     scheduler.<NotificationDeliverySweeperJob>scheduleRecurrently(
         "notification-delivery-sweeper", notifyCron, NotificationDeliverySweeperJob::run);
     log.info("Notification-delivery sweeper scheduled (cron='{}')", notifyCron);
+
+    // Daily is plenty — the login gate already neutralizes unverified accounts; this only GCs rows.
+    String purgeCron = getenvOrDefault("UNVERIFIED_PURGE_INTERVAL", "0 0 4 * * *");
+    scheduler.<UnverifiedAccountPurgeJob>scheduleRecurrently(
+        "unverified-account-purge", purgeCron, UnverifiedAccountPurgeJob::run);
+    log.info("Unverified-account purge scheduled (cron='{}')", purgeCron);
     return true;
   }
 

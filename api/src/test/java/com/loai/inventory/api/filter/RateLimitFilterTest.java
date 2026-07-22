@@ -127,9 +127,20 @@ class RateLimitFilterTest {
   }
 
   @Test
+  void resendVerification_selectsItsOwnBucket_sharingTheForgotLimit() throws Exception {
+    // Story 88: same shape as forgot-password (anonymous email-send trigger), own bucket key.
+    Fixture f = new Fixture(120, 5, false);
+    f.req("POST", "/api/auth", "/resend-verification", "7.7.7.7");
+    when(f.jedis.incr("rl:auth-resend:7.7.7.7")).thenReturn(6L); // over AUTH_FORGOT_LIMIT (5)
+    f.filter.doFilter(f.request, f.response, f.chain);
+    verify(f.response).setStatus(429);
+    verify(f.chain, never()).doFilter(f.request, f.response);
+  }
+
+  @Test
   void resetPasswordAndActivate_stayUnbucketed_failOpen() throws Exception {
     // Deliberate: they redeem 256-bit single-use tokens — the token space is the rate limit.
-    for (String path : new String[] {"/reset-password", "/activate"}) {
+    for (String path : new String[] {"/reset-password", "/activate", "/verify-email"}) {
       Fixture f = new Fixture(120, 5, false);
       f.req("POST", "/api/auth", path, "6.6.6.6");
       f.filter.doFilter(f.request, f.response, f.chain);

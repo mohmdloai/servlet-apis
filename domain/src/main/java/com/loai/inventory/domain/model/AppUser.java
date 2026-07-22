@@ -14,6 +14,12 @@ public class AppUser {
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
+  /**
+   * When the inbox was proven (EMAIL_VERIFY/PASSWORD_RESET/INVITE redemption, or admin-plane
+   * creation — the admin vouches). NULL blocks login with a 403 (story 88).
+   */
+  private OffsetDateTime emailVerifiedAt;
+
   public AppUser() {}
 
   public AppUser(
@@ -105,6 +111,14 @@ public class AppUser {
 
   public void setUpdatedAt(OffsetDateTime updatedAt) {
     this.updatedAt = updatedAt;
+  }
+
+  public OffsetDateTime getEmailVerifiedAt() {
+    return emailVerifiedAt;
+  }
+
+  public void setEmailVerifiedAt(OffsetDateTime emailVerifiedAt) {
+    this.emailVerifiedAt = emailVerifiedAt;
   }
 
   @Override
