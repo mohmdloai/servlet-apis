@@ -1,0 +1,13 @@
+# label=before-v66 base=http://localhost:8081 org=ab9099a4-35a2-40ae-9af3-05535ec42e08 samples=100 warmup=15
+endpoint                          p50      p95      p99      max  (ms)
+order-detail (lines)            72.38   115.31   162.85   162.85
+order-money-story               37.42    56.80   205.08   205.08
+order-shipment-story           127.58   198.35   269.27   269.27
+order-billing-story             53.65    82.19   131.89   131.89
+payments ?DISPUTED              75.34   102.14   211.52   211.52
+payments ledger                 57.80    91.65   105.26   105.26
+transactions ledger             90.67   143.46   158.66   158.66
+fulfillments ?SHIPPED           53.29   112.06   188.80   188.80
+invoices ?ISSUED                 5.15     7.53    10.17    10.17
+refunds ?PENDING                 9.36    17.88    38.21    38.21
+health rollup                   35.10    53.92    73.48    73.48

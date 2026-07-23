@@ -264,8 +264,39 @@ sales_order_line 0→2. All inserts remain single-row per business event; bulk w
 (seed COPY) are not production paths. jOOQ codegen note: indexes don't change generated
 application code; `Indexes.java` refreshes on the next `-Pcodegen` run.
 
-Remaining phase-3 work: HTTP p50/p95 through the running app (the EXPLAIN layer is done),
-then the case-study write-up with before/after plan excerpts.
+## 5c. Phase 3b — HTTP p50/p95 through the full servlet stack
+
+`tools/bench/http_bench.py` (stdlib client: real login, warm keep-alive connection, 100
+sequential samples per endpoint) against the perfdb backend; V66 dropped for the before-run
+and re-applied after. Raw: `tools/seed/results/http_before.txt` / `http_after.txt`.
+
+| endpoint | before p50 / p95 | after p50 / p95 | p50 × |
+|---|---|---|---|
+| order shipment story | 127.6 / 198.4 | 5.1 / 8.1 | 25 |
+| transactions ledger | 90.7 / 143.5 | 4.5 / 6.3 | 20 |
+| payments `?DISPUTED` | 75.3 / 102.1 | 6.4 / 9.9 | 12 |
+| order detail (lines) | 72.4 / 115.3 | 5.3 / 8.7 | 14 |
+| payments ledger | 57.8 / 91.7 | 4.0 / 5.4 | 14 |
+| order billing story | 53.7 / 82.2 | 5.2 / 17.8 | 10 |
+| fulfillments `?SHIPPED` | 53.3 / 112.1 | 5.5 / 9.5 | 10 |
+| order money story | 37.4 / 56.8 | 5.0 / 7.7 | 7 |
+| health rollup | 35.1 / 53.9 | 14.1 / 32.7 | 2.5 |
+| invoices `?ISSUED` | 5.2 / 7.5 | 7.2 / 13.9 | ~1 (flat) |
+| refunds `?PENDING` | 9.4 / 17.9 | 9.8 / 45.5 | ~1 (flat) |
+
+Reading the two layers together:
+- The HTTP floor is ~4–5 ms (JWT filter + Redis token check + Jackson + Tomcat) — that is
+  the asymptote every indexed read now sits on. Endpoints that run several queries per
+  request (worklist = list + count; detail = header + lines + context) multiplied the win.
+- The shipment story is the biggest *felt* win (127→5 ms): it stacked two unindexed scans
+  (fulfillments-by-order over 771k + lines batch over 1.3M) in one request.
+- `EXPLAIN (ANALYZE)` inflated the worst scans (344 ms for order-lines vs ~72 ms real HTTP):
+  per-row timing instrumentation is expensive on multi-million-row scans. The HTTP layer is
+  the honest user-felt number; the EXPLAIN layer is the honest *diagnosis*. Report both.
+- Flats stay flat: invoices `?ISSUED` and refunds `?PENDING` were already fast (prefix-
+  served / small table) — at HTTP level the stack floor dominates them entirely.
+
+Remaining: the case-study write-up with before/after plan excerpts — the portfolio artifact.
 
 ## 5. What phase 2 must do before any index lands
 
