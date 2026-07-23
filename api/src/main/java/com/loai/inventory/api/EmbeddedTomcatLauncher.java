@@ -25,7 +25,8 @@ public class EmbeddedTomcatLauncher {
   public static void main(String[] args) throws Exception {
     try {
       Tomcat tomcat = new Tomcat();
-      tomcat.setPort(8080);
+      // SERVER_PORT lets a second instance (e.g. the perfdb benchmark stack) run beside dev.
+      tomcat.setPort(Integer.parseInt(System.getenv().getOrDefault("SERVER_PORT", "8080")));
 
       File baseDir = new File("target/tomcat");
       baseDir.mkdirs();
