@@ -234,6 +234,39 @@ The measurement re-ranks the static list — in both directions:
   nearly free, but they are not where the headline numbers live. Honest ranking: **FK line-table
   indexes and the payment/transaction/fulfillment status+ledger indexes first.**
 
+## 5b. Phase 3 — V66 applied, identical re-measurement
+
+`V66__Read_path_indexes.sql` (26 indexes, ~13s build over 16.3M rows). Same script, same org,
+warm run: `tools/seed/results/after_v66.txt`. Highlights (full table in the results files):
+
+| read | before | after | × |
+|---|---|---|---|
+| order lines (order detail) | 344.23 ms | 0.018 ms | 19,124 |
+| fulfillments `?status=SHIPPED` | 82.40 ms | 0.016 ms | 5,150 |
+| invoice lines | 85.46 ms | 0.023 ms | 3,716 |
+| payments `?status=DISPUTED` | 149.98 ms | 0.051 ms | 2,941 |
+| transaction ledger | 92.36 ms | 0.069 ms | 1,339 |
+| order money story | 31.56 ms | 0.035 ms | 902 |
+| order shipment story | 21.51 ms | 0.026 ms | 827 |
+| payments ledger | 30.18 ms | 0.048 ms | 629 |
+| health rollup aggregates | 30.34 ms | 0.833 ms | 36 |
+| refunds worklist | 3.72 ms | 0.109 ms | 34 |
+
+Honest flats — reported, not hidden: orders ledger 1.09→0.92 ms and invoices ledger
+0.76→1.23 ms (both were already prefix-served by their `(org_id, number)` uniques; an
+unfiltered `created_at` ledger cannot be ordered by a status-composite index — the invoice
+ledger's ±0.5 ms wobble is plan-choice noise at this cardinality, watch it, don't chase it).
+`user_org_role` and the notification fan-out are ~flat at 800 rows — the index is
+future-proofing, and the numbers say so.
+
+Write-side cost recorded: payment 2→5 secondary indexes, sales_order 4→6, fulfillment 1→4,
+sales_order_line 0→2. All inserts remain single-row per business event; bulk write paths
+(seed COPY) are not production paths. jOOQ codegen note: indexes don't change generated
+application code; `Indexes.java` refreshes on the next `-Pcodegen` run.
+
+Remaining phase-3 work: HTTP p50/p95 through the running app (the EXPLAIN layer is done),
+then the case-study write-up with before/after plan excerpts.
+
 ## 5. What phase 2 must do before any index lands
 
 Seed realistic volume (ABO-derived catalog + generated orders/ledgers), capture
