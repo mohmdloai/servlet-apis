@@ -133,6 +133,30 @@ candidate** — the one-review-per-customer-per-listing rule is currently app-en
 `platform_audit` actor/target filters (unfiltered ledger sort ⚠️ — add `(created_at, id)` only
 if measurement convicts), `impersonation_event` (insert-only).
 
+### Composite back-references (child rows located by a 2–3-column parent reference)
+Postgres never auto-indexes the referencing side, so each was verified explicitly:
+✅ all four V63 translation tables carry `UNIQUE (parent_id, language)` — the default-locale
+`default_t` join on every catalog/review/comment read is served; ✅
+`notification_delivery(notification_id, channel)` unique serves the in-app feed joins; ✅
+`inventory` is always referenced by its full `(org_id, product_id)` PK (overview join,
+availability, reservations release); ✅ `inventory_log(org_id, product_id)`; ✅ number
+counters `(org_id, year)` PK; ✅ `notification_preference` partial uniques
+`(org_id, user_id|customer_id, type, channel) WHERE subject_type=…` serve `resolveEnabled`
+(runs inside every `notify()`) as two probes for the `type IN (x,'ALL')` pair; ✅
+`product_listing_category` PK `(listing_id, category_id)` + `(category_id)` covers both
+directions. ❌ The failures of this exact pattern are already ranked below: `user_org_role`
+org-first (P1.6 — PK has the right columns in the wrong order), and the two-column
+child-references `payment/sales_invoice/fulfillment(org_id, sales_order_id)`,
+`credit_note(org_id, sales_invoice_id)`, `refund(org_id, credit_note_id|payment_id)`
+(P1/P2). ❌ New from this sweep: `sales_order_line.product_id` (line → product
+back-reference; drives `topProducts` grouping and offers the planner a product-side entry
+into the review purchase-gate EXISTS) — P3.19.
+
+Note on "reshape parent→child instead": in Postgres the *textual* direction of a join doesn't
+fix the plan — the planner chooses the driving side. Indexing both join endpoints (the
+preference here) is the correct fix; reshaping only pays when an expression (`COALESCE`) or an
+OR-chain makes one side unindexable no matter what.
+
 ---
 
 ## 3. The gap list, ranked
@@ -165,6 +189,8 @@ if measurement convicts), `impersonation_event` (insert-only).
 17. `platform_audit(created_at, id)`; `app_user(lower(email) text_pattern_ops)`.
 18. Reports: persisted `sale_ts` (or expression index on `COALESCE(placed_at, created_at)`)
     if report latency measures badly.
+19. `sales_order_line(product_id)` — top-products grouping + product-side entry into the
+    review purchase-gate EXISTS chain.
 
 ---
 
