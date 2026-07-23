@@ -1,0 +1,48 @@
+# Dependabot version updates (alerts + security-update PRs are repo-settings
+# toggles under Settings → Advanced Security, not configured here).
+#
+# - Maven: one entry at the root — the multi-module build shares one parent
+#   dependencyManagement, so root coverage is complete. Minor+patch grouped into
+#   one weekly PR; majors arrive individually for review.
+# - jOOQ is ignored: its artifact version is coupled to the codegen profile and
+#   the generated sources under repository/target — bump it deliberately, in a
+#   branch that also re-runs codegen, never via a bot PR.
+# - docker-compose: the prod stack's image tags (postgres:17-alpine, redis:7,
+#   caddy:2 …) in deploy/.
+version: 2
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Africa/Cairo"
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "org.jooq:*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+
+  # App image build.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+
+  # Prod stack service images (deploy/docker-compose.prod.yml).
+  - package-ecosystem: "docker-compose"
+    directory: "/deploy"
+    schedule:
+      interval: "weekly"
+      day: "monday"
