@@ -208,6 +208,32 @@ OR-chain makes one side unindexable no matter what.
 - **Inventory OUT/LOW** filter on computed `stock_qty − reserved_qty` — expression/partial
   index candidate only if the overview measures slow at scale.
 
+## 5a. Phase 2 baseline — measured (seeded perfdb: 1M orders, 16.3M rows total)
+
+`tools/seed/` harness + `measure_baseline.sql`, warm-cache run in `tools/seed/results/baseline.txt`.
+The measurement re-ranks the static list — in both directions:
+
+| ms | shape | why |
+|---|---|---|
+| 344.2 | `sales_order_line` by order (P2.8) | seq scan of 1.7M rows per order detail |
+| 150.0 | payments `?status=DISPUTED` (P1.3) | no usable index; partial predicates don't match |
+| 92.4 | transaction ledger (P1.7) | partials only; unfiltered scan |
+| 85.5 | `sales_invoice_line` by invoice (P2.10) | seq scan of 1.2M rows |
+| 82.4 | fulfillments `?status=SHIPPED` (P1.5) | partial covers PENDING only |
+| 30.3–31.6 | payment ledger / money story / health rollup (P1.3) | org-wide payment scans |
+| 21.5–23.7 | fulfillment ledger / shipment story (P1.5) | same shape |
+| 0.7–3.7 | **orders & invoices worklists, refunds** | see corrections below |
+
+**Corrections the measurement forced:**
+- `sales_order` and `sales_invoice` org-scoped reads are largely saved by their
+  `(org_id, order_number)` / `(org_id, invoice_number)` **uniques** — the org_id prefix gives an
+  index path and the per-org row set sorts in memory. Real but modest wins remain (sort removal);
+  they drop below the line-table FK indexes in priority.
+- `refund` (34.5k rows in this seed — refunds are rare events) and `user_org_role` (4 users/org)
+  measure sub-4ms *at this cardinality*. The gaps are structural, the indexes still correct and
+  nearly free, but they are not where the headline numbers live. Honest ranking: **FK line-table
+  indexes and the payment/transaction/fulfillment status+ledger indexes first.**
+
 ## 5. What phase 2 must do before any index lands
 
 Seed realistic volume (ABO-derived catalog + generated orders/ledgers), capture

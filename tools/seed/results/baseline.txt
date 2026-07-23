@@ -1,0 +1,552 @@
+SET
+Timing is on.
+===== pick fixture rows for the parameterized shapes
+Time: 4.226 ms
+Time: 0.943 ms
+Time: 0.739 ms
+Time: 0.677 ms
+Time: 1.367 ms
+===== P1.1 refunds worklist (?status=PENDING queue)
+                                                       QUERY PLAN                                                        
+-------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=1146.76..1146.82 rows=25 width=212) (actual time=3.696..3.699 rows=25 loops=1)
+   Buffers: shared hit=634
+   ->  Sort  (cost=1146.76..1146.83 rows=29 width=212) (actual time=3.695..3.697 rows=25 loops=1)
+         Sort Key: created_at, id
+         Sort Method: quicksort  Memory: 32kB
+         Buffers: shared hit=634
+         ->  Seq Scan on refund  (cost=0.00..1146.05 rows=29 width=212) (actual time=0.072..3.664 rows=31 loops=1)
+               Filter: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (status = 'PENDING'::refund_status))
+               Rows Removed by Filter: 34506
+               Buffers: shared hit=628
+ Planning:
+   Buffers: shared hit=95
+ Planning Time: 0.306 ms
+ Execution Time: 3.724 ms
+(14 rows)
+
+Time: 5.083 ms
+===== P1.1 refunds ledger (unfiltered)
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=1064.68..1064.74 rows=25 width=212) (actual time=1.314..1.317 rows=25 loops=1)
+   Buffers: shared hit=628
+   ->  Sort  (cost=1064.68..1065.12 rows=176 width=212) (actual time=1.314..1.315 rows=25 loops=1)
+         Sort Key: created_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 35kB
+         Buffers: shared hit=628
+         ->  Seq Scan on refund  (cost=0.00..1059.71 rows=176 width=212) (actual time=0.024..1.291 rows=173 loops=1)
+               Filter: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Rows Removed by Filter: 34364
+               Buffers: shared hit=628
+ Planning:
+   Buffers: shared hit=10
+ Planning Time: 0.065 ms
+ Execution Time: 1.331 ms
+(14 rows)
+
+Time: 1.519 ms
+===== P1.1 credit-note cap meter (sumExecutedByCreditNote)
+                                                                                       QUERY PLAN                                                                                       
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=1232.40..1232.41 rows=1 width=32) (actual time=1.564..1.564 rows=1 loops=1)
+   Buffers: shared hit=628
+   ->  Seq Scan on refund  (cost=0.00..1232.40 rows=1 width=8) (actual time=1.115..1.554 rows=1 loops=1)
+         Filter: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (credit_note_id = '0bae5db8-1010-4f43-b887-cf4d0d993331'::uuid) AND (status = 'EXECUTED'::refund_status))
+         Rows Removed by Filter: 34536
+         Buffers: shared hit=628
+ Planning:
+   Buffers: shared hit=9
+ Planning Time: 0.098 ms
+ Execution Time: 1.578 ms
+(10 rows)
+
+Time: 1.887 ms
+===== P1.1 refunds by payment
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=1146.06..1146.07 rows=1 width=212) (actual time=1.121..1.128 rows=0 loops=1)
+   Sort Key: created_at, id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=628
+   ->  Seq Scan on refund  (cost=0.00..1146.05 rows=1 width=212) (actual time=1.117..1.117 rows=0 loops=1)
+         Filter: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (payment_id = '8e4dfdab-bf4f-4731-96ee-976222ac6095'::uuid))
+         Rows Removed by Filter: 34537
+         Buffers: shared hit=628
+ Planning Time: 0.027 ms
+ Execution Time: 1.136 ms
+(10 rows)
+
+Time: 1.232 ms
+===== P1.2 orders worklist (?status=PENDING_PAYMENT tab)
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=801.07..801.14 rows=25 width=230) (actual time=0.667..0.670 rows=25 loops=1)
+   Buffers: shared hit=471
+   ->  Sort  (cost=801.07..802.17 rows=439 width=230) (actual time=0.667..0.668 rows=25 loops=1)
+         Sort Key: created_at, id
+         Sort Method: top-N heapsort  Memory: 35kB
+         Buffers: shared hit=471
+         ->  Index Scan using idx_so_pending on sales_order  (cost=0.42..788.69 rows=439 width=230) (actual time=0.024..0.594 rows=467 loops=1)
+               Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Buffers: shared hit=471
+ Planning:
+   Buffers: shared hit=69
+ Planning Time: 0.261 ms
+ Execution Time: 0.696 ms
+(13 rows)
+
+Time: 1.048 ms
+===== P1.2 orders ledger (all tab)
+                                                                                QUERY PLAN                                                                                 
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8152.85..8152.91 rows=25 width=230) (actual time=1.069..1.072 rows=25 loops=1)
+   Buffers: shared hit=119
+   ->  Sort  (cost=8152.85..8165.29 rows=4976 width=230) (actual time=1.069..1.070 rows=25 loops=1)
+         Sort Key: created_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 36kB
+         Buffers: shared hit=119
+         ->  Index Scan using sales_order_org_id_idempotency_key_key on sales_order  (cost=0.42..8012.43 rows=4976 width=230) (actual time=0.010..0.510 rows=5000 loops=1)
+               Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Buffers: shared hit=119
+ Planning Time: 0.024 ms
+ Execution Time: 1.087 ms
+(11 rows)
+
+Time: 1.235 ms
+===== P1.2 orders count (worklist total)
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=21.20..21.21 rows=1 width=8) (actual time=0.097..0.098 rows=1 loops=1)
+   Buffers: shared hit=7
+   ->  Index Only Scan using idx_so_pending on sales_order  (cost=0.42..20.10 rows=439 width=0) (actual time=0.039..0.069 rows=467 loops=1)
+         Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+         Heap Fetches: 0
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.093 ms
+ Execution Time: 0.115 ms
+(10 rows)
+
+Time: 0.337 ms
+===== P1.2 portal my-orders
+                                                                             QUERY PLAN                                                                              
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8024.88..8024.88 rows=1 width=230) (actual time=0.400..0.401 rows=5 loops=1)
+   Buffers: shared hit=119
+   ->  Sort  (cost=8024.88..8024.88 rows=1 width=230) (actual time=0.399..0.400 rows=5 loops=1)
+         Sort Key: placed_at DESC, id DESC
+         Sort Method: quicksort  Memory: 26kB
+         Buffers: shared hit=119
+         ->  Index Scan using sales_order_org_id_idempotency_key_key on sales_order  (cost=0.42..8024.87 rows=1 width=230) (actual time=0.075..0.390 rows=5 loops=1)
+               Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Filter: (customer_id = '87740c80-52c8-49b6-8aa1-dbc4fd81ded1'::uuid)
+               Rows Removed by Filter: 4995
+               Buffers: shared hit=119
+ Planning Time: 0.036 ms
+ Execution Time: 0.425 ms
+(13 rows)
+
+Time: 0.560 ms
+===== P1.3 payments worklist (?status=DISPUTED — the health-linked queue)
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=24234.32..24237.24 rows=25 width=195) (actual time=149.879..149.949 rows=25 loops=1)
+   Buffers: shared hit=475 read=17597
+   ->  Gather Merge  (cost=24234.32..24238.99 rows=40 width=195) (actual time=149.878..149.946 rows=25 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=475 read=17597
+         ->  Sort  (cost=23234.30..23234.35 rows=20 width=195) (actual time=144.916..144.917 rows=8 loops=3)
+               Sort Key: received_at, id
+               Sort Method: quicksort  Memory: 36kB
+               Buffers: shared hit=475 read=17597
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Parallel Seq Scan on payment  (cost=0.00..23233.87 rows=20 width=195) (actual time=96.782..144.818 rows=15 loops=3)
+                     Filter: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (status = 'DISPUTED'::payment_status))
+                     Rows Removed by Filter: 279978
+                     Buffers: shared hit=387 read=17597
+ Planning:
+   Buffers: shared hit=43
+ Planning Time: 0.154 ms
+ Execution Time: 149.981 ms
+(20 rows)
+
+Time: 150.768 ms
+===== P1.3 payments ledger
+                                                                QUERY PLAN                                                                
+------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=23408.24..23411.16 rows=25 width=195) (actual time=28.782..30.148 rows=25 loops=1)
+   Buffers: shared hit=573 read=17501
+   ->  Gather Merge  (cost=23408.24..23816.14 rows=3496 width=195) (actual time=28.781..30.144 rows=25 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=573 read=17501
+         ->  Sort  (cost=22408.22..22412.59 rows=1748 width=195) (actual time=24.120..24.121 rows=8 loops=3)
+               Sort Key: received_at DESC, id DESC
+               Sort Method: top-N heapsort  Memory: 36kB
+               Buffers: shared hit=573 read=17501
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Parallel Seq Scan on payment  (cost=0.00..22358.89 rows=1748 width=195) (actual time=14.834..23.922 rows=1391 loops=3)
+                     Filter: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                     Rows Removed by Filter: 278602
+                     Buffers: shared hit=483 read=17501
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.131 ms
+ Execution Time: 30.175 ms
+(20 rows)
+
+Time: 30.567 ms
+===== P1.3 order money story
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=24233.98..24233.98 rows=1 width=195) (actual time=30.198..31.541 rows=1 loops=1)
+   Sort Key: received_at, id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=579 read=17405
+   ->  Gather  (cost=1000.00..24233.97 rows=1 width=195) (actual time=2.000..31.528 rows=1 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=579 read=17405
+         ->  Parallel Seq Scan on payment  (cost=0.00..23233.87 rows=1 width=195) (actual time=17.746..26.823 rows=0 loops=3)
+               Filter: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (sales_order_id = 'b6a39a36-ab69-40a7-976c-1d842378970a'::uuid))
+               Rows Removed by Filter: 279993
+               Buffers: shared hit=579 read=17405
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.085 ms
+ Execution Time: 31.561 ms
+(16 rows)
+
+Time: 31.875 ms
+===== P1.3 health rollup payment aggregates
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=23376.59..23376.60 rows=1 width=16) (actual time=30.265..30.320 rows=1 loops=1)
+   Buffers: shared hit=675 read=17309
+   ->  Gather  (cost=23376.37..23376.58 rows=2 width=16) (actual time=30.260..30.316 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=675 read=17309
+         ->  Partial Aggregate  (cost=22376.37..22376.38 rows=1 width=16) (actual time=26.484..26.484 rows=1 loops=3)
+               Buffers: shared hit=675 read=17309
+               ->  Parallel Seq Scan on payment  (cost=0.00..22358.89 rows=1748 width=7) (actual time=16.446..26.356 rows=1391 loops=3)
+                     Filter: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                     Rows Removed by Filter: 278602
+                     Buffers: shared hit=675 read=17309
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.062 ms
+ Execution Time: 30.343 ms
+(16 rows)
+
+Time: 30.874 ms
+===== P1.4 invoices worklist (?status=ISSUED awaiting-payment)
+                                                                                 QUERY PLAN                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=5773.16..5773.23 rows=25 width=312) (actual time=1.119..1.121 rows=25 loops=1)
+   Buffers: shared hit=119
+   ->  Sort  (cost=5773.16..5773.88 rows=288 width=312) (actual time=1.118..1.119 rows=25 loops=1)
+         Sort Key: created_at, id
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=119
+         ->  Index Scan using sales_invoice_org_id_invoice_number_key on sales_invoice  (cost=0.42..5765.04 rows=288 width=312) (actual time=0.011..1.071 rows=263 loops=1)
+               Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Filter: (status = 'ISSUED'::invoice_status)
+               Rows Removed by Filter: 3203
+               Buffers: shared hit=119
+ Planning:
+   Buffers: shared hit=65
+ Planning Time: 0.269 ms
+ Execution Time: 1.142 ms
+(15 rows)
+
+Time: 2.043 ms
+===== P1.4 invoices ledger
+                                                                                  QUERY PLAN                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=5854.15..5854.22 rows=25 width=312) (actual time=0.745..0.748 rows=25 loops=1)
+   Buffers: shared hit=119
+   ->  Sort  (cost=5854.15..5862.82 rows=3465 width=312) (actual time=0.745..0.746 rows=25 loops=1)
+         Sort Key: created_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 38kB
+         Buffers: shared hit=119
+         ->  Index Scan using sales_invoice_org_id_invoice_number_key on sales_invoice  (cost=0.42..5756.38 rows=3465 width=312) (actual time=0.008..0.288 rows=3466 loops=1)
+               Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Buffers: shared hit=119
+ Planning Time: 0.036 ms
+ Execution Time: 0.761 ms
+(11 rows)
+
+Time: 1.026 ms
+===== P1.4 order billing story
+                                                                            QUERY PLAN                                                                            
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=5765.05..5765.05 rows=1 width=312) (actual time=0.295..0.295 rows=1 loops=1)
+   Sort Key: created_at, id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=119
+   ->  Index Scan using sales_invoice_org_id_invoice_number_key on sales_invoice  (cost=0.42..5765.04 rows=1 width=312) (actual time=0.193..0.287 rows=1 loops=1)
+         Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+         Filter: (sales_order_id = 'b6a39a36-ab69-40a7-976c-1d842378970a'::uuid)
+         Rows Removed by Filter: 3465
+         Buffers: shared hit=119
+ Planning Time: 0.043 ms
+ Execution Time: 0.307 ms
+(11 rows)
+
+Time: 0.482 ms
+===== P1.4 portal invoices
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=5773.71..5773.72 rows=1 width=312) (actual time=0.265..0.265 rows=4 loops=1)
+   Buffers: shared hit=119
+   ->  Sort  (cost=5773.71..5773.72 rows=1 width=312) (actual time=0.265..0.265 rows=4 loops=1)
+         Sort Key: created_at DESC, id DESC
+         Sort Method: quicksort  Memory: 26kB
+         Buffers: shared hit=119
+         ->  Index Scan using sales_invoice_org_id_invoice_number_key on sales_invoice  (cost=0.42..5773.70 rows=1 width=312) (actual time=0.015..0.261 rows=4 loops=1)
+               Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Filter: ((status <> 'VOID'::invoice_status) AND (customer_id = '87740c80-52c8-49b6-8aa1-dbc4fd81ded1'::uuid))
+               Rows Removed by Filter: 3462
+               Buffers: shared hit=119
+ Planning Time: 0.033 ms
+ Execution Time: 0.280 ms
+(13 rows)
+
+Time: 0.599 ms
+===== P1.5 fulfillments worklist (?status=SHIPPED — non-partial-covered status)
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=19055.82..19055.82 rows=1 width=200) (actual time=80.341..82.381 rows=0 loops=1)
+   Buffers: shared hit=288 read=12945
+   ->  Sort  (cost=19055.82..19055.82 rows=1 width=200) (actual time=80.340..82.380 rows=0 loops=1)
+         Sort Key: created_at, id
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=288 read=12945
+         ->  Gather  (cost=1000.00..19055.81 rows=1 width=200) (actual time=80.336..82.376 rows=0 loops=1)
+               Workers Planned: 2
+               Workers Launched: 2
+               Buffers: shared hit=288 read=12945
+               ->  Parallel Seq Scan on fulfillment  (cost=0.00..18055.71 rows=1 width=200) (actual time=77.903..77.903 rows=0 loops=3)
+                     Filter: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (status = 'SHIPPED'::fulfillment_status))
+                     Rows Removed by Filter: 257211
+                     Buffers: shared hit=288 read=12945
+ Planning:
+   Buffers: shared hit=83
+ Planning Time: 0.296 ms
+ Execution Time: 82.400 ms
+(18 rows)
+
+Time: 83.363 ms
+===== P1.5 fulfillments ledger
+                                                                  QUERY PLAN                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=18297.10..18300.01 rows=25 width=200) (actual time=22.348..23.674 rows=25 loops=1)
+   Buffers: shared hit=474 read=12849
+   ->  Gather Merge  (cost=18297.10..18670.46 rows=3200 width=200) (actual time=22.347..23.671 rows=25 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=474 read=12849
+         ->  Sort  (cost=17297.07..17301.07 rows=1600 width=200) (actual time=19.617..19.618 rows=9 loops=3)
+               Sort Key: created_at DESC, id DESC
+               Sort Method: top-N heapsort  Memory: 30kB
+               Buffers: shared hit=474 read=12849
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Parallel Seq Scan on fulfillment  (cost=0.00..17251.92 rows=1600 width=200) (actual time=11.345..18.757 rows=1285 loops=3)
+                     Filter: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                     Rows Removed by Filter: 255926
+                     Buffers: shared hit=384 read=12849
+ Planning Time: 0.090 ms
+ Execution Time: 23.699 ms
+(18 rows)
+
+Time: 24.060 ms
+===== P1.5 order shipment story
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=19055.82..19055.82 rows=1 width=200) (actual time=21.440..21.489 rows=1 loops=1)
+   Sort Key: created_at
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=480 read=12753
+   ->  Gather  (cost=1000.00..19055.81 rows=1 width=200) (actual time=2.751..21.478 rows=1 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=480 read=12753
+         ->  Parallel Seq Scan on fulfillment  (cost=0.00..18055.71 rows=1 width=200) (actual time=11.897..17.652 rows=0 loops=3)
+               Filter: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (sales_order_id = 'b6a39a36-ab69-40a7-976c-1d842378970a'::uuid))
+               Rows Removed by Filter: 257211
+               Buffers: shared hit=480 read=12753
+ Planning Time: 0.057 ms
+ Execution Time: 21.507 ms
+(14 rows)
+
+Time: 21.770 ms
+===== P1.6 members roster page (org-first user_org_role)
+                                                                       QUERY PLAN                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=50.29..50.30 rows=4 width=41) (actual time=0.113..0.114 rows=4 loops=1)
+   Buffers: shared hit=22
+   ->  Sort  (cost=50.29..50.30 rows=4 width=41) (actual time=0.112..0.113 rows=4 loops=1)
+         Sort Key: u.email
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=22
+         ->  Group  (cost=50.23..50.25 rows=4 width=41) (actual time=0.094..0.096 rows=4 loops=1)
+               Group Key: u.id
+               Buffers: shared hit=19
+               ->  Sort  (cost=50.23..50.24 rows=4 width=41) (actual time=0.094..0.094 rows=4 loops=1)
+                     Sort Key: u.id
+                     Sort Method: quicksort  Memory: 25kB
+                     Buffers: shared hit=19
+                     ->  Nested Loop  (cost=0.28..50.19 rows=4 width=41) (actual time=0.030..0.085 rows=4 loops=1)
+                           Buffers: shared hit=19
+                           ->  Seq Scan on user_org_role r  (cost=0.00..17.00 rows=4 width=16) (actual time=0.007..0.041 rows=4 loops=1)
+                                 Filter: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                                 Rows Removed by Filter: 796
+                                 Buffers: shared hit=7
+                           ->  Index Scan using app_user_pkey on app_user u  (cost=0.28..8.29 rows=1 width=41) (actual time=0.010..0.010 rows=1 loops=4)
+                                 Index Cond: (id = r.user_id)
+                                 Buffers: shared hit=12
+ Planning:
+   Buffers: shared hit=122
+ Planning Time: 0.579 ms
+ Execution Time: 0.153 ms
+(26 rows)
+
+Time: 1.414 ms
+===== P1.6 notification fan-out (findActiveUserIdsByOrgAndRoles)
+                                                                  QUERY PLAN                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------
+ Unique  (cost=53.23..53.25 rows=4 width=16) (actual time=0.039..0.041 rows=4 loops=1)
+   Buffers: shared hit=19
+   ->  Sort  (cost=53.23..53.24 rows=4 width=16) (actual time=0.038..0.039 rows=4 loops=1)
+         Sort Key: r.user_id
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=19
+         ->  Nested Loop  (cost=0.28..53.19 rows=4 width=16) (actual time=0.009..0.035 rows=4 loops=1)
+               Buffers: shared hit=19
+               ->  Seq Scan on user_org_role r  (cost=0.00..20.00 rows=4 width=16) (actual time=0.004..0.027 rows=4 loops=1)
+                     Filter: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (role = ANY ('{STAFF,MANAGER,OWNER}'::org_role[])))
+                     Rows Removed by Filter: 796
+                     Buffers: shared hit=7
+               ->  Index Scan using app_user_pkey on app_user u  (cost=0.28..8.29 rows=1 width=16) (actual time=0.002..0.002 rows=1 loops=4)
+                     Index Cond: (id = r.user_id)
+                     Filter: (active IS TRUE)
+                     Buffers: shared hit=12
+ Planning:
+   Buffers: shared hit=42
+ Planning Time: 0.165 ms
+ Execution Time: 0.055 ms
+(20 rows)
+
+Time: 0.683 ms
+===== P1.7 transaction ledger (unfiltered)
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=28928.49..28931.41 rows=25 width=306) (actual time=92.264..92.319 rows=25 loops=1)
+   Buffers: shared hit=186 read=23377
+   ->  Gather Merge  (cost=28928.49..29336.39 rows=3496 width=306) (actual time=92.263..92.316 rows=25 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=186 read=23377
+         ->  Sort  (cost=27928.47..27932.84 rows=1748 width=306) (actual time=89.229..89.230 rows=18 loops=3)
+               Sort Key: recorded_at DESC, id DESC
+               Sort Method: top-N heapsort  Memory: 36kB
+               Buffers: shared hit=186 read=23377
+               Worker 0:  Sort Method: top-N heapsort  Memory: 35kB
+               Worker 1:  Sort Method: top-N heapsort  Memory: 36kB
+               ->  Parallel Seq Scan on payment_transaction  (cost=0.00..27879.14 rows=1748 width=306) (actual time=2.049..88.986 rows=1401 loops=3)
+                     Filter: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                     Rows Removed by Filter: 280592
+                     Buffers: shared hit=96 read=23377
+ Planning:
+   Buffers: shared hit=122
+ Planning Time: 0.340 ms
+ Execution Time: 92.363 ms
+(20 rows)
+
+Time: 92.923 ms
+===== P2.8 order lines (every order detail read)
+                                                            QUERY PLAN                                                             
+-----------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..54646.23 rows=2 width=176) (actual time=344.161..344.220 rows=2 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=96 read=44696
+   ->  Parallel Seq Scan on sales_order_line  (cost=0.00..53646.03 rows=1 width=176) (actual time=270.208..340.708 rows=1 loops=3)
+         Filter: (sales_order_id = 'b6a39a36-ab69-40a7-976c-1d842378970a'::uuid)
+         Rows Removed by Filter: 566666
+         Buffers: shared hit=96 read=44696
+ Planning:
+   Buffers: shared hit=48
+ Planning Time: 0.243 ms
+ Execution Time: 344.230 ms
+(12 rows)
+
+Time: 344.847 ms
+===== P2.10 invoice lines
+                                                               QUERY PLAN                                                                
+-----------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=38373.30..38373.30 rows=2 width=177) (actual time=83.822..85.441 rows=2 loops=1)
+   Sort Key: id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=96 read=31115
+   ->  Gather  (cost=1000.00..38373.29 rows=2 width=177) (actual time=83.215..85.431 rows=2 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=96 read=31115
+         ->  Parallel Seq Scan on sales_invoice_line  (cost=0.00..37373.09 rows=1 width=177) (actual time=77.481..80.135 rows=1 loops=3)
+               Filter: (sales_invoice_id = 'd3ddadfb-00cc-42f4-a677-31f6c63f97ef'::uuid)
+               Rows Removed by Filter: 394381
+               Buffers: shared hit=96 read=31115
+ Planning:
+   Buffers: shared hit=49
+ Planning Time: 0.249 ms
+ Execution Time: 85.459 ms
+(16 rows)
+
+Time: 85.978 ms
+===== P2.11 invoice crediting story
+                                                                           QUERY PLAN                                                                            
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=101.04..101.04 rows=1 width=167) (actual time=0.023..0.023 rows=0 loops=1)
+   Sort Key: created_at, id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=4
+   ->  Index Scan using credit_note_org_id_credit_note_number_key on credit_note  (cost=0.29..101.03 rows=1 width=167) (actual time=0.019..0.019 rows=0 loops=1)
+         Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+         Filter: (sales_invoice_id = 'd3ddadfb-00cc-42f4-a677-31f6c63f97ef'::uuid)
+         Rows Removed by Filter: 59
+         Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=41
+ Planning Time: 0.213 ms
+ Execution Time: 0.057 ms
+(13 rows)
+
+Time: 0.413 ms
+===== P3.14 inventory movement ledger (paged)
+Time: 0.397 ms
+                                                                         QUERY PLAN                                                                         
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.46..8.47 rows=1 width=838) (actual time=0.024..0.027 rows=25 loops=1)
+   Buffers: shared hit=8
+   ->  Sort  (cost=8.46..8.47 rows=1 width=838) (actual time=0.024..0.025 rows=25 loops=1)
+         Sort Key: created_at DESC, id DESC
+         Sort Method: quicksort  Memory: 30kB
+         Buffers: shared hit=8
+         ->  Index Scan using inventory_log_org_product_idx on inventory_log  (cost=0.43..8.45 rows=1 width=838) (actual time=0.005..0.009 rows=40 loops=1)
+               Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (product_id = '014679e7-f9d8-48a8-b8fa-0a268af1794f'::uuid))
+               Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=47
+ Planning Time: 0.108 ms
+ Execution Time: 0.046 ms
+(13 rows)
+
+Time: 0.424 ms
