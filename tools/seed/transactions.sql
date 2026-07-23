@@ -111,9 +111,22 @@ FROM t_line
 WHERE EXISTS (SELECT 1 FROM inventory i
               WHERE i.org_id = t_line.org_id AND i.product_id = t_line.product_id);
 
--- keep the reserved_qty == Σ ACTIVE invariant honest (capped at stock in case a
--- random over-reservation would trip a stock>=reserved CHECK)
-UPDATE inventory i SET reserved_qty = least(a.q, i.stock_qty)
+-- The schema enforces available >= 0 (inventory_available_non_negative), so Σ ACTIVE per
+-- product must not exceed stock. Random reservation generation can overshoot; release the
+-- overflow (oldest kept — what the real system would have done) THEN sync reserved_qty to
+-- exactly Σ ACTIVE. A least()-cap here is WRONG: it desyncs the invariant and the order-TTL
+-- sweeper later underflows reserved_qty when releasing expired orders' holds.
+WITH ranked AS (
+  SELECT r.id, sum(r.quantity) OVER (PARTITION BY r.org_id, r.product_id
+                                     ORDER BY r.created_at, r.id) AS run, i.stock_qty
+  FROM inventory_reservation r
+  JOIN inventory i ON i.org_id = r.org_id AND i.product_id = r.product_id
+  WHERE r.status = 'ACTIVE')
+UPDATE inventory_reservation r
+SET status = 'RELEASED', released_at = now(), released_reason = 'seed rebalance: exceeded stock'
+FROM ranked k WHERE k.id = r.id AND k.run > k.stock_qty;
+
+UPDATE inventory i SET reserved_qty = coalesce(a.q, 0)
 FROM (SELECT org_id, product_id, sum(quantity) AS q
       FROM inventory_reservation WHERE status = 'ACTIVE'
       GROUP BY org_id, product_id) a
