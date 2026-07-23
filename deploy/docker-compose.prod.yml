@@ -21,7 +21,7 @@ networks:
 
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     restart: unless-stopped
     networks: [internal]
     environment:
