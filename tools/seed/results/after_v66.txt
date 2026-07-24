@@ -1,0 +1,464 @@
+SET
+Timing is on.
+===== pick fixture rows for the parameterized shapes
+Time: 1.876 ms
+Time: 0.396 ms
+Time: 0.464 ms
+Time: 0.541 ms
+Time: 0.620 ms
+===== P1.1 refunds worklist (?status=PENDING queue)
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=103.16..103.22 rows=25 width=212) (actual time=0.076..0.078 rows=25 loops=1)
+   Buffers: shared hit=24
+   ->  Sort  (cost=103.16..103.23 rows=29 width=212) (actual time=0.075..0.076 rows=25 loops=1)
+         Sort Key: created_at, id
+         Sort Method: quicksort  Memory: 32kB
+         Buffers: shared hit=24
+         ->  Bitmap Heap Scan on refund  (cost=4.71..102.45 rows=29 width=212) (actual time=0.017..0.050 rows=31 loops=1)
+               Recheck Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (status = 'PENDING'::refund_status))
+               Heap Blocks: exact=15
+               Buffers: shared hit=18
+               ->  Bitmap Index Scan on refund_org_status_idx  (cost=0.00..4.71 rows=29 width=0) (actual time=0.010..0.010 rows=31 loops=1)
+                     Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (status = 'PENDING'::refund_status))
+                     Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=147
+ Planning Time: 0.405 ms
+ Execution Time: 0.109 ms
+(17 rows)
+
+Time: 1.483 ms
+===== P1.1 refunds ledger (unfiltered)
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=403.66..403.73 rows=25 width=212) (actual time=0.161..0.164 rows=25 loops=1)
+   Buffers: shared hit=57
+   ->  Sort  (cost=403.66..404.11 rows=178 width=212) (actual time=0.161..0.162 rows=25 loops=1)
+         Sort Key: created_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 35kB
+         Buffers: shared hit=57
+         ->  Bitmap Heap Scan on refund  (cost=5.67..398.64 rows=178 width=212) (actual time=0.013..0.138 rows=173 loops=1)
+               Recheck Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Heap Blocks: exact=55
+               Buffers: shared hit=57
+               ->  Bitmap Index Scan on refund_org_note_idx  (cost=0.00..5.62 rows=178 width=0) (actual time=0.008..0.008 rows=173 loops=1)
+                     Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                     Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=10
+ Planning Time: 0.049 ms
+ Execution Time: 0.198 ms
+(17 rows)
+
+Time: 0.370 ms
+===== P1.1 credit-note cap meter (sumExecutedByCreditNote)
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=8.32..8.33 rows=1 width=32) (actual time=0.011..0.011 rows=1 loops=1)
+   Buffers: shared hit=3
+   ->  Index Scan using refund_org_note_idx on refund  (cost=0.29..8.31 rows=1 width=8) (actual time=0.006..0.006 rows=1 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (credit_note_id = '293f8745-6a69-4657-ba4e-16132cc53a11'::uuid))
+         Filter: (status = 'EXECUTED'::refund_status)
+         Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=9
+ Planning Time: 0.067 ms
+ Execution Time: 0.021 ms
+(10 rows)
+
+Time: 0.310 ms
+===== P1.1 refunds by payment
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=8.44..8.45 rows=1 width=212) (actual time=0.039..0.039 rows=0 loops=1)
+   Sort Key: created_at, id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=3
+   ->  Index Scan using refund_org_payment_idx on refund  (cost=0.41..8.43 rows=1 width=212) (actual time=0.028..0.028 rows=0 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (payment_id = '0ffd80d9-45ae-4c8a-9f77-c58d5018c73e'::uuid))
+         Buffers: shared hit=3
+ Planning Time: 0.035 ms
+ Execution Time: 0.061 ms
+(9 rows)
+
+Time: 0.215 ms
+===== P1.2 orders worklist (?status=PENDING_PAYMENT tab)
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..45.60 rows=25 width=230) (actual time=0.010..0.063 rows=25 loops=1)
+   Buffers: shared hit=28
+   ->  Index Scan using sales_order_org_status_idx on sales_order  (cost=0.42..800.91 rows=443 width=230) (actual time=0.010..0.061 rows=25 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (status = 'PENDING_PAYMENT'::order_status))
+         Buffers: shared hit=28
+ Planning:
+   Buffers: shared hit=69
+ Planning Time: 0.279 ms
+ Execution Time: 0.079 ms
+(9 rows)
+
+Time: 0.526 ms
+===== P1.2 orders ledger (all tab)
+                                                                                QUERY PLAN                                                                                 
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8167.74..8167.80 rows=25 width=230) (actual time=0.902..0.904 rows=25 loops=1)
+   Buffers: shared hit=119
+   ->  Sort  (cost=8167.74..8180.21 rows=4986 width=230) (actual time=0.902..0.902 rows=25 loops=1)
+         Sort Key: created_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 36kB
+         Buffers: shared hit=119
+         ->  Index Scan using sales_order_org_id_idempotency_key_key on sales_order  (cost=0.42..8027.04 rows=4986 width=230) (actual time=0.016..0.502 rows=5000 loops=1)
+               Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Buffers: shared hit=119
+ Planning Time: 0.031 ms
+ Execution Time: 0.915 ms
+(11 rows)
+
+Time: 1.122 ms
+===== P1.2 orders count (worklist total)
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=21.28..21.29 rows=1 width=8) (actual time=0.063..0.063 rows=1 loops=1)
+   Buffers: shared hit=7
+   ->  Index Only Scan using idx_so_pending on sales_order  (cost=0.42..20.17 rows=443 width=0) (actual time=0.010..0.040 rows=467 loops=1)
+         Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+         Heap Fetches: 0
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.060 ms
+ Execution Time: 0.072 ms
+(10 rows)
+
+Time: 0.318 ms
+===== P1.2 portal my-orders
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..8.45 rows=1 width=230) (actual time=0.008..0.011 rows=5 loops=1)
+   Buffers: shared hit=8
+   ->  Index Scan using sales_order_org_customer_idx on sales_order  (cost=0.42..8.45 rows=1 width=230) (actual time=0.008..0.010 rows=5 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (customer_id = '87740c80-52c8-49b6-8aa1-dbc4fd81ded1'::uuid))
+         Buffers: shared hit=8
+ Planning Time: 0.051 ms
+ Execution Time: 0.024 ms
+(7 rows)
+
+Time: 0.239 ms
+===== P1.3 payments worklist (?status=DISPUTED — the health-linked queue)
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..102.77 rows=25 width=195) (actual time=0.010..0.042 rows=25 loops=1)
+   Buffers: shared hit=28
+   ->  Index Scan using payment_org_status_idx on payment  (cost=0.42..221.49 rows=54 width=195) (actual time=0.010..0.041 rows=25 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (status = 'DISPUTED'::payment_status))
+         Buffers: shared hit=28
+ Planning:
+   Buffers: shared hit=43
+ Planning Time: 0.110 ms
+ Execution Time: 0.051 ms
+(9 rows)
+
+Time: 0.555 ms
+===== P1.3 payments ledger
+                                                                       QUERY PLAN                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..91.18 rows=25 width=195) (actual time=0.009..0.036 rows=25 loops=1)
+   Buffers: shared hit=28
+   ->  Index Scan Backward using payment_org_ledger_idx on payment  (cost=0.42..15200.30 rows=4187 width=195) (actual time=0.008..0.034 rows=25 loops=1)
+         Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+         Buffers: shared hit=28
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.026 ms
+ Execution Time: 0.048 ms
+(9 rows)
+
+Time: 0.230 ms
+===== P1.3 order money story
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=8.46..8.46 rows=1 width=195) (actual time=0.014..0.014 rows=1 loops=1)
+   Sort Key: received_at, id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=4
+   ->  Index Scan using payment_org_order_idx on payment  (cost=0.42..8.45 rows=1 width=195) (actual time=0.010..0.010 rows=1 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (sales_order_id = 'e66b0796-0b7b-4135-8fb9-524e47b78b4b'::uuid))
+         Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.036 ms
+ Execution Time: 0.035 ms
+(11 rows)
+
+Time: 0.186 ms
+===== P1.3 health rollup payment aggregates
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=10095.84..10095.85 rows=1 width=16) (actual time=0.811..0.811 rows=1 loops=1)
+   Buffers: shared hit=119
+   ->  Bitmap Heap Scan on payment  (cost=136.87..10053.97 rows=4187 width=7) (actual time=0.163..0.453 rows=4173 loops=1)
+         Recheck Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+         Heap Blocks: exact=91
+         Buffers: shared hit=119
+         ->  Bitmap Index Scan on payment_org_order_idx  (cost=0.00..135.83 rows=4187 width=0) (actual time=0.153..0.154 rows=4173 loops=1)
+               Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Buffers: shared hit=28
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.025 ms
+ Execution Time: 0.833 ms
+(13 rows)
+
+Time: 1.229 ms
+===== P1.4 invoices worklist (?status=ISSUED awaiting-payment)
+                                                                       QUERY PLAN                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..45.96 rows=25 width=312) (actual time=0.010..0.023 rows=25 loops=1)
+   Buffers: shared hit=13
+   ->  Index Scan using sales_invoice_org_status_idx on sales_invoice  (cost=0.42..519.56 rows=285 width=312) (actual time=0.010..0.021 rows=25 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (status = 'ISSUED'::invoice_status))
+         Buffers: shared hit=13
+ Planning:
+   Buffers: shared hit=65
+ Planning Time: 0.172 ms
+ Execution Time: 0.033 ms
+(9 rows)
+
+Time: 0.579 ms
+===== P1.4 invoices ledger
+                                                                            QUERY PLAN                                                                            
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=5832.11..5832.17 rows=25 width=312) (actual time=1.219..1.222 rows=25 loops=1)
+   Buffers: shared hit=3449
+   ->  Sort  (cost=5832.11..5840.74 rows=3453 width=312) (actual time=1.219..1.220 rows=25 loops=1)
+         Sort Key: created_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 36kB
+         Buffers: shared hit=3449
+         ->  Index Scan using sales_invoice_org_order_idx on sales_invoice  (cost=0.42..5734.66 rows=3453 width=312) (actual time=0.012..0.796 rows=3466 loops=1)
+               Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+               Buffers: shared hit=3449
+ Planning Time: 0.032 ms
+ Execution Time: 1.232 ms
+(11 rows)
+
+Time: 1.354 ms
+===== P1.4 order billing story
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=8.46..8.46 rows=1 width=312) (actual time=0.008..0.008 rows=1 loops=1)
+   Sort Key: created_at, id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=4
+   ->  Index Scan using sales_invoice_org_order_idx on sales_invoice  (cost=0.42..8.45 rows=1 width=312) (actual time=0.005..0.005 rows=1 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (sales_order_id = 'e66b0796-0b7b-4135-8fb9-524e47b78b4b'::uuid))
+         Buffers: shared hit=4
+ Planning Time: 0.031 ms
+ Execution Time: 0.018 ms
+(9 rows)
+
+Time: 0.193 ms
+===== P1.4 portal invoices
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..8.45 rows=1 width=312) (actual time=0.011..0.013 rows=4 loops=1)
+   Buffers: shared hit=7
+   ->  Index Scan using sales_invoice_org_customer_live_idx on sales_invoice  (cost=0.42..8.45 rows=1 width=312) (actual time=0.011..0.012 rows=4 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (customer_id = '87740c80-52c8-49b6-8aa1-dbc4fd81ded1'::uuid))
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=2
+ Planning Time: 0.053 ms
+ Execution Time: 0.059 ms
+(9 rows)
+
+Time: 0.305 ms
+===== P1.5 fulfillments worklist (?status=SHIPPED — non-partial-covered status)
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..8.45 rows=1 width=200) (actual time=0.008..0.009 rows=0 loops=1)
+   Buffers: shared hit=3
+   ->  Index Scan using fulfillment_org_status_idx on fulfillment  (cost=0.42..8.45 rows=1 width=200) (actual time=0.008..0.008 rows=0 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (status = 'SHIPPED'::fulfillment_status))
+         Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=138
+ Planning Time: 0.338 ms
+ Execution Time: 0.016 ms
+(9 rows)
+
+Time: 0.813 ms
+===== P1.5 fulfillments ledger
+                                                                           QUERY PLAN                                                                            
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..88.87 rows=25 width=200) (actual time=0.024..0.060 rows=25 loops=1)
+   Buffers: shared hit=27
+   ->  Index Scan Backward using fulfillment_org_ledger_idx on fulfillment  (cost=0.42..13638.91 rows=3855 width=200) (actual time=0.024..0.058 rows=25 loops=1)
+         Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+         Buffers: shared hit=27
+ Planning Time: 0.035 ms
+ Execution Time: 0.083 ms
+(7 rows)
+
+Time: 0.233 ms
+===== P1.5 order shipment story
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=8.46..8.46 rows=1 width=200) (actual time=0.015..0.015 rows=1 loops=1)
+   Sort Key: created_at
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=4
+   ->  Index Scan using fulfillment_org_order_idx on fulfillment  (cost=0.42..8.45 rows=1 width=200) (actual time=0.011..0.012 rows=1 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (sales_order_id = 'e66b0796-0b7b-4135-8fb9-524e47b78b4b'::uuid))
+         Buffers: shared hit=4
+ Planning Time: 0.024 ms
+ Execution Time: 0.026 ms
+(9 rows)
+
+Time: 0.153 ms
+===== P1.6 members roster page (org-first user_org_role)
+                                                                         QUERY PLAN                                                                         
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=44.57..44.58 rows=4 width=41) (actual time=0.051..0.052 rows=4 loops=1)
+   Buffers: shared hit=18
+   ->  Sort  (cost=44.57..44.58 rows=4 width=41) (actual time=0.051..0.051 rows=4 loops=1)
+         Sort Key: u.email
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=18
+         ->  Group  (cost=44.51..44.53 rows=4 width=41) (actual time=0.033..0.034 rows=4 loops=1)
+               Group Key: u.id
+               Buffers: shared hit=15
+               ->  Sort  (cost=44.51..44.52 rows=4 width=41) (actual time=0.032..0.032 rows=4 loops=1)
+                     Sort Key: u.id
+                     Sort Method: quicksort  Memory: 25kB
+                     Buffers: shared hit=15
+                     ->  Nested Loop  (cost=4.58..44.47 rows=4 width=41) (actual time=0.019..0.025 rows=4 loops=1)
+                           Buffers: shared hit=15
+                           ->  Bitmap Heap Scan on user_org_role r  (cost=4.31..11.28 rows=4 width=16) (actual time=0.012..0.013 rows=4 loops=1)
+                                 Recheck Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                                 Heap Blocks: exact=1
+                                 Buffers: shared hit=3
+                                 ->  Bitmap Index Scan on user_org_role_org_idx  (cost=0.00..4.31 rows=4 width=0) (actual time=0.008..0.008 rows=4 loops=1)
+                                       Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                                       Buffers: shared hit=2
+                           ->  Index Scan using app_user_pkey on app_user u  (cost=0.28..8.29 rows=1 width=41) (actual time=0.002..0.002 rows=1 loops=4)
+                                 Index Cond: (id = r.user_id)
+                                 Buffers: shared hit=12
+ Planning:
+   Buffers: shared hit=133
+ Planning Time: 0.493 ms
+ Execution Time: 0.099 ms
+(29 rows)
+
+Time: 1.236 ms
+===== P1.6 notification fan-out (findActiveUserIdsByOrgAndRoles)
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Unique  (cost=44.53..44.55 rows=4 width=16) (actual time=0.022..0.024 rows=4 loops=1)
+   Buffers: shared hit=15
+   ->  Sort  (cost=44.53..44.54 rows=4 width=16) (actual time=0.022..0.022 rows=4 loops=1)
+         Sort Key: r.user_id
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=15
+         ->  Nested Loop  (cost=4.58..44.49 rows=4 width=16) (actual time=0.012..0.017 rows=4 loops=1)
+               Buffers: shared hit=15
+               ->  Bitmap Heap Scan on user_org_role r  (cost=4.31..11.30 rows=4 width=16) (actual time=0.007..0.008 rows=4 loops=1)
+                     Recheck Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                     Filter: (role = ANY ('{STAFF,MANAGER,OWNER}'::org_role[]))
+                     Heap Blocks: exact=1
+                     Buffers: shared hit=3
+                     ->  Bitmap Index Scan on user_org_role_org_idx  (cost=0.00..4.31 rows=4 width=0) (actual time=0.003..0.003 rows=4 loops=1)
+                           Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+                           Buffers: shared hit=2
+               ->  Index Scan using app_user_pkey on app_user u  (cost=0.28..8.29 rows=1 width=16) (actual time=0.002..0.002 rows=1 loops=4)
+                     Index Cond: (id = r.user_id)
+                     Filter: (active IS TRUE)
+                     Buffers: shared hit=12
+ Planning:
+   Buffers: shared hit=42
+ Planning Time: 0.236 ms
+ Execution Time: 0.049 ms
+(24 rows)
+
+Time: 0.801 ms
+===== P1.7 transaction ledger (unfiltered)
+                                                                                   QUERY PLAN                                                                                    
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..93.33 rows=25 width=306) (actual time=0.011..0.044 rows=25 loops=1)
+   Buffers: shared hit=28
+   ->  Index Scan Backward using payment_transaction_org_ledger_idx on payment_transaction  (cost=0.42..15704.76 rows=4226 width=306) (actual time=0.011..0.042 rows=25 loops=1)
+         Index Cond: (org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid)
+         Buffers: shared hit=28
+ Planning:
+   Buffers: shared hit=141
+ Planning Time: 0.356 ms
+ Execution Time: 0.069 ms
+(9 rows)
+
+Time: 0.624 ms
+===== P2.8 order lines (every order detail read)
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using sales_order_line_order_idx on sales_order_line  (cost=0.43..12.46 rows=2 width=176) (actual time=0.012..0.013 rows=2 loops=1)
+   Index Cond: (sales_order_id = 'e66b0796-0b7b-4135-8fb9-524e47b78b4b'::uuid)
+   Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=73
+ Planning Time: 0.247 ms
+ Execution Time: 0.018 ms
+(7 rows)
+
+Time: 0.490 ms
+===== P2.10 invoice lines
+                                                                         QUERY PLAN                                                                         
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=12.47..12.48 rows=2 width=176) (actual time=0.015..0.015 rows=1 loops=1)
+   Sort Key: id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=4
+   ->  Index Scan using sales_invoice_line_invoice_idx on sales_invoice_line  (cost=0.43..12.46 rows=2 width=176) (actual time=0.011..0.011 rows=1 loops=1)
+         Index Cond: (sales_invoice_id = 'da1b2a36-8d56-4592-8011-0e4b465d0df9'::uuid)
+         Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=61
+ Planning Time: 0.251 ms
+ Execution Time: 0.023 ms
+(11 rows)
+
+Time: 0.449 ms
+===== P2.11 invoice crediting story
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=8.31..8.32 rows=1 width=167) (actual time=0.008..0.008 rows=0 loops=1)
+   Sort Key: created_at, id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=2
+   ->  Index Scan using credit_note_org_invoice_idx on credit_note  (cost=0.29..8.30 rows=1 width=167) (actual time=0.005..0.005 rows=0 loops=1)
+         Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (sales_invoice_id = 'da1b2a36-8d56-4592-8011-0e4b465d0df9'::uuid))
+         Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=41
+ Planning Time: 0.131 ms
+ Execution Time: 0.027 ms
+(11 rows)
+
+Time: 0.260 ms
+===== P3.14 inventory movement ledger (paged)
+Time: 0.348 ms
+                                                                         QUERY PLAN                                                                         
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.46..8.47 rows=1 width=838) (actual time=0.022..0.025 rows=25 loops=1)
+   Buffers: shared hit=8
+   ->  Sort  (cost=8.46..8.47 rows=1 width=838) (actual time=0.022..0.023 rows=25 loops=1)
+         Sort Key: created_at DESC, id DESC
+         Sort Method: quicksort  Memory: 30kB
+         Buffers: shared hit=8
+         ->  Index Scan using inventory_log_org_product_idx on inventory_log  (cost=0.43..8.45 rows=1 width=838) (actual time=0.006..0.009 rows=40 loops=1)
+               Index Cond: ((org_id = 'ab9099a4-35a2-40ae-9af3-05535ec42e08'::uuid) AND (product_id = '014679e7-f9d8-48a8-b8fa-0a268af1794f'::uuid))
+               Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=47
+ Planning Time: 0.101 ms
+ Execution Time: 0.040 ms
+(13 rows)
+
+Time: 0.471 ms
