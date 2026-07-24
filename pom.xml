@@ -28,7 +28,7 @@
         <jjwt.version>0.13.0</jjwt.version>
         <jbcrypt.version>0.4</jbcrypt.version>
         <!-- Pinned: the V29 JobRunr DDL is generated from this exact version. Bump in lockstep. -->
-        <jobrunr.version>7.2.2</jobrunr.version>
+        <jobrunr.version>8.7.1</jobrunr.version>
         <!-- AWS SDK v2 — S3 presigner for product-listing image uploads (MinIO/S3). -->
         <awssdk.version>2.49.1</awssdk.version>
         <!-- Jakarta Mail (Eclipse Angus) — SMTP sender for transactional email (notifications §6). -->
