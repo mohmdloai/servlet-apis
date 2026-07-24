@@ -144,7 +144,9 @@ class OrderLookupByNumberIT {
             new PaymentRepositoryFactoryImpl(),
             invoiceService,
             refundService,
-            reservationService);
+            reservationService,
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
     PaymentService paymentService =
         new PaymentService(
             dsl,

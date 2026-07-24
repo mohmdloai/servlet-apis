@@ -97,6 +97,8 @@ public final class FulfillmentService {
   private final InvoiceService invoiceService;
   private final RefundService refundService;
   private final ReservationService reservationService;
+  private final NotificationService notificationService;
+  private final MagicLinkService magicLinkService;
 
   public FulfillmentService(
       DSLContext rootDsl,
@@ -108,7 +110,9 @@ public final class FulfillmentService {
       PaymentRepositoryFactory paymentRepoFactory,
       InvoiceService invoiceService,
       RefundService refundService,
-      ReservationService reservationService) {
+      ReservationService reservationService,
+      NotificationService notificationService,
+      MagicLinkService magicLinkService) {
     this.rootDsl = rootDsl;
     this.fulfillmentRepoFactory = fulfillmentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
@@ -119,6 +123,8 @@ public final class FulfillmentService {
     this.invoiceService = invoiceService;
     this.refundService = refundService;
     this.reservationService = reservationService;
+    this.notificationService = notificationService;
+    this.magicLinkService = magicLinkService;
   }
 
   /** Which order line to ship; quantity is derived from that line's ACTIVE reservation (v1). */
@@ -522,7 +528,36 @@ public final class FulfillmentService {
 
           // (d) Order roll-up: FULFILLED when every line is delivered; CLOSED when all invoices
           // PAID.
+          boolean wasFulfilling = order.getStatus() == OrderStatus.FULFILLING;
           maybeRollUpOrder(txDsl, orgId, order, orderLines, fulfillmentRepo, orderRepo, now);
+
+          // (e) Review-request notification (roadmap item 1): fire once per order, on the
+          // FULFILLING → FULFILLED|CLOSED edge this txn drew — so a multi-shipment order fires only
+          // when its last line delivers, and a partial delivery (stays FULFILLING) never fires. The
+          // in-store sale never reaches here (no FULFILLING roll-up). Guarded on an emailable
+          // customer: notify()'s email leg throws on an email-less customer, which would roll back
+          // the whole deliver txn.
+          boolean nowComplete =
+              order.getStatus() == OrderStatus.FULFILLED || order.getStatus() == OrderStatus.CLOSED;
+          if (wasFulfilling
+              && nowComplete
+              && customer != null
+              && customer.getEmail() != null
+              && !customer.getEmail().isBlank()) {
+            MagicLinkService.OrderViewLink reviewLink =
+                magicLinkService.issueOrderViewLink(
+                    txDsl, orgId, order.getCustomerId(), order.getId(), now);
+            notificationService.notify(
+                txDsl,
+                orgId,
+                com.loai.inventory.domain.model.NotificationRecipient.customer(
+                    order.getCustomerId()),
+                com.loai.inventory.domain.model.NotificationType.REVIEW_REQUESTED,
+                Map.of("order_number", order.getOrderNumber()),
+                "sales_order",
+                order.getId(),
+                reviewLink.absolute());
+          }
 
           log.info(
               "Delivered fulfillment id={} orgId={} order={} invoice={} allocated={} orderStatus={}",

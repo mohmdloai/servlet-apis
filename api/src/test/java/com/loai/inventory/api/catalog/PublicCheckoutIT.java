@@ -147,7 +147,9 @@ class PublicCheckoutIT {
             new PaymentRepositoryFactoryImpl(),
             invoiceService,
             refundService,
-            reservationService);
+            reservationService,
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
     magicLink =
         new MagicLinkService(
             dsl,

@@ -45,7 +45,9 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.flywaydb.core.Flyway;
@@ -135,7 +137,9 @@ class DeliverInvoiceIT {
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl()));
+                new com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl()),
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
     reconciliationService =
         new NumberSequenceReconciliationService(
             dsl, new NumberSequenceReconciliationRepositoryFactoryImpl());
@@ -387,7 +391,77 @@ class DeliverInvoiceIT {
     assertEquals(0, reconciliationService.reconcile().counted());
   }
 
+  /**
+   * Review-request notification (roadmap item 1, {@code stories/review_request_on_delivery.md}):
+   * completing an order's delivery raises exactly one {@code REVIEW_REQUESTED} to the customer, on
+   * both the in-app and email channels. It fires on the FULFILLED/CLOSED roll-up, not before.
+   */
+  @Test
+  void deliver_completesOrder_raisesOneReviewRequest_onBothChannels() {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "Yara", "yara@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 2);
+    Order order =
+        seedPaidOrder(org, customer, List.of(new Want(product, 2)), "20.00", now().minusHours(1));
+
+    UUID f = shipLine(org, order, order.lines().get(0));
+    assertEquals(0L, reviewRequestCount(customer)); // shipped, not yet delivered → nothing
+
+    service.markDelivered(org, f, actor);
+
+    assertEquals("CLOSED", orderStatus(order.id()));
+    assertEquals(1L, reviewRequestCount(customer));
+    assertEquals(Set.of("in_app", "email"), reviewRequestChannels(customer));
+  }
+
+  /**
+   * Per-order-once idempotency: a multi-shipment order fires the review request only when its last
+   * line delivers — a partial delivery (order stays FULFILLING) raises nothing.
+   */
+  @Test
+  void partialDelivery_raisesReviewRequestOnlyOnFinalDelivery() {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "Tarek", "tarek@acme.test");
+    UUID a = createProduct(org, "A");
+    UUID b = createProduct(org, "B");
+    createInventory(org, a, 10, 1);
+    createInventory(org, b, 10, 1);
+    Order order =
+        seedPaidOrder(
+            org, customer, List.of(new Want(a, 1), new Want(b, 1)), "20.00", now().minusHours(1));
+
+    UUID fa = shipLine(org, order, order.lines().get(0));
+    service.markDelivered(org, fa, actor);
+    assertEquals("FULFILLING", orderStatus(order.id()));
+    assertEquals(0L, reviewRequestCount(customer)); // partial → no request yet
+
+    UUID fb = shipLine(org, order, order.lines().get(1));
+    service.markDelivered(org, fb, actor);
+    assertEquals(1L, reviewRequestCount(customer)); // exactly one, on completion
+  }
+
   // flow helpers
+
+  /** How many REVIEW_REQUESTED notifications exist for this customer. */
+  private long reviewRequestCount(UUID customer) {
+    return dsl.fetchOne(
+            "SELECT count(*) FROM notification"
+                + " WHERE type = 'REVIEW_REQUESTED' AND recipient_customer_id = ?",
+            customer)
+        .get(0, Long.class);
+  }
+
+  /** The distinct delivery channels created for this customer's REVIEW_REQUESTED notifications. */
+  private Set<String> reviewRequestChannels(UUID customer) {
+    return new HashSet<>(
+        dsl.fetch(
+                "SELECT d.channel FROM notification n"
+                    + " JOIN notification_delivery d ON d.notification_id = n.id"
+                    + " WHERE n.type = 'REVIEW_REQUESTED' AND n.recipient_customer_id = ?",
+                customer)
+            .getValues("channel", String.class));
+  }
 
   /** Create a single-line PENDING fulfillment and ship it; returns the fulfillment id. */
   private UUID shipLine(UUID org, Order order, Line line) {

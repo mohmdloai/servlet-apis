@@ -126,7 +126,9 @@ class ReplaceFailedFulfillmentIT {
             new com.loai.inventory.service.ReservationService(
                 new InventoryRepositoryFactoryImpl(),
                 new InventoryReservationRepositoryFactoryImpl(),
-                new InventoryLogRepositoryFactoryImpl()));
+                new InventoryLogRepositoryFactoryImpl()),
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
 
     actorId = UUID.randomUUID();
     dsl.insertInto(com.loai.inventory.repository.generated.Tables.APP_USER)

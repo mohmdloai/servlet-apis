@@ -132,7 +132,9 @@ class FailedFulfillmentIT {
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl()));
+                new com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl()),
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
 
     actorId = UUID.randomUUID();
     dsl.insertInto(com.loai.inventory.repository.generated.Tables.APP_USER)
