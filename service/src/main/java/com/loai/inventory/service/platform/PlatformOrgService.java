@@ -254,10 +254,25 @@ public class PlatformOrgService {
       Integer orderTtlMinutes,
       OrgService.StorefrontBranding branding,
       OrgService.SeoMetadata seo) {
+    return updateOrg(
+        actor, env, orgId, name, refundApprovalThreshold, orderTtlMinutes, branding, seo, null);
+  }
+
+  public Org updateOrg(
+      SecurityContext actor,
+      Environment env,
+      UUID orgId,
+      String name,
+      BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes,
+      OrgService.StorefrontBranding branding,
+      OrgService.SeoMetadata seo,
+      OrgService.StoreConfig storeConfig) {
     OrgService.validateName(name);
     OrgService.validatePolicy(refundApprovalThreshold, orderTtlMinutes);
     OrgService.validateBranding(branding);
     OrgService.validateSeoMetadata(seo);
+    OrgService.validateStoreConfig(storeConfig);
     OrgService.validateOgImageKeyOwnership(orgId, seo);
 
     return dsl.transactionResult(
@@ -275,6 +290,7 @@ public class PlatformOrgService {
           }
           OrgService.applyBranding(existing, branding);
           OrgService.applySeoMetadata(existing, seo);
+          OrgService.applyStoreConfig(existing, storeConfig);
           Org updated = orgRepo.update(existing);
 
           Map<String, Object> detail = new LinkedHashMap<>();
@@ -303,6 +319,12 @@ public class PlatformOrgService {
               detail.put("meta_description", seo.metaDescription());
             if (seo.ogImageObjectKey() != null) {
               detail.put("og_image_object_key", seo.ogImageObjectKey());
+            }
+          }
+          if (storeConfig != null) {
+            if (storeConfig.taxRate() != null) detail.put("tax_rate", storeConfig.taxRate());
+            if (storeConfig.shippingFee() != null) {
+              detail.put("shipping_fee", storeConfig.shippingFee());
             }
           }
           audit.recordInTx(

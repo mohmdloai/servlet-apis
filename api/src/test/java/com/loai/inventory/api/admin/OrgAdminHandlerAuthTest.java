@@ -214,7 +214,7 @@ class OrgAdminHandlerAuthTest {
     Org org =
         new Org(
             ORG, "Renamed", "acme", true, null, 1440, OffsetDateTime.now(), OffsetDateTime.now());
-    when(service.updateOrg(any(), any(), eq(ORG), any(), any(), any(), any(), any()))
+    when(service.updateOrg(any(), any(), eq(ORG), any(), any(), any(), any(), any(), any()))
         .thenReturn(org);
     Resp resp = new Resp();
     handler(service)
@@ -224,7 +224,8 @@ class OrgAdminHandlerAuthTest {
             resp.mock,
             "/" + ORG);
     assertEquals(200, resp.status);
-    verify(service).updateOrg(any(), any(), eq(ORG), eq("Renamed"), any(), any(), any(), any());
+    verify(service)
+        .updateOrg(any(), any(), eq(ORG), eq("Renamed"), any(), any(), any(), any(), any());
   }
 
   private static final class Resp {

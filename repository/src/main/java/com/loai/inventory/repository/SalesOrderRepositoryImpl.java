@@ -323,6 +323,7 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
                 order.getStatus().name()))
         .set(SALES_ORDER.SUBTOTAL, order.getSubtotal())
         .set(SALES_ORDER.TAX_TOTAL, order.getTaxTotal())
+        .set(SALES_ORDER.SHIPPING_TOTAL, order.getShippingTotal())
         .set(SALES_ORDER.DISCOUNT_TOTAL, order.getDiscountTotal())
         .set(SALES_ORDER.GRAND_TOTAL, order.getGrandTotal())
         .set(SALES_ORDER.CURRENCY, order.getCurrency())
@@ -410,6 +411,7 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
         OrderStatus.valueOf(r.getStatus().name()),
         r.getSubtotal(),
         r.getTaxTotal(),
+        r.getShippingTotal(),
         r.getDiscountTotal(),
         r.getGrandTotal(),
         r.getPrepaidAmount(),

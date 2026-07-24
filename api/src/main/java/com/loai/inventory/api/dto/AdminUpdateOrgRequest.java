@@ -23,6 +23,10 @@ public class AdminUpdateOrgRequest {
   private String metaDescription;
   private String ogImageObjectKey;
 
+  // Commerce money config (V68, roadmap item 5). Merge semantics: null = leave unchanged.
+  private BigDecimal taxRate;
+  private BigDecimal shippingFee;
+
   public String getName() {
     return name;
   }
@@ -101,5 +105,21 @@ public class AdminUpdateOrgRequest {
 
   public void setOgImageObjectKey(String ogImageObjectKey) {
     this.ogImageObjectKey = ogImageObjectKey;
+  }
+
+  public BigDecimal getTaxRate() {
+    return taxRate;
+  }
+
+  public void setTaxRate(BigDecimal taxRate) {
+    this.taxRate = taxRate;
+  }
+
+  public BigDecimal getShippingFee() {
+    return shippingFee;
+  }
+
+  public void setShippingFee(BigDecimal shippingFee) {
+    this.shippingFee = shippingFee;
   }
 }

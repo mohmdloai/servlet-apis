@@ -269,6 +269,7 @@ class PortalOrdersIT {
             OrderStatus.PENDING_PAYMENT,
             new BigDecimal("20.00"),
             BigDecimal.ZERO,
+            BigDecimal.ZERO, // shipping
             BigDecimal.ZERO,
             new BigDecimal("20.00"),
             BigDecimal.ZERO,

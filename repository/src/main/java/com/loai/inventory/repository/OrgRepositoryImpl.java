@@ -114,6 +114,8 @@ public final class OrgRepositoryImpl implements OrgRepository {
             .set(ORG.META_TITLE, org.getMetaTitle())
             .set(ORG.META_DESCRIPTION, org.getMetaDescription())
             .set(ORG.OG_IMAGE_OBJECT_KEY, org.getOgImageObjectKey())
+            .set(ORG.TAX_RATE, org.getTaxRate())
+            .set(ORG.SHIPPING_FEE, org.getShippingFee())
             .set(ORG.UPDATED_AT, OffsetDateTime.now())
             .where(ORG.ID.eq(org.getId()))
             .returning()
@@ -211,6 +213,8 @@ public final class OrgRepositoryImpl implements OrgRepository {
     org.setMetaTitle(r.getMetaTitle());
     org.setMetaDescription(r.getMetaDescription());
     org.setOgImageObjectKey(r.getOgImageObjectKey());
+    org.setTaxRate(r.getTaxRate());
+    org.setShippingFee(r.getShippingFee());
     return org;
   }
 }

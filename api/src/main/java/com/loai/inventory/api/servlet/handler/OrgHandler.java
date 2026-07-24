@@ -112,6 +112,8 @@ public class OrgHandler {
     OrgService.SeoMetadata seo =
         new OrgService.SeoMetadata(
             body.getMetaTitle(), body.getMetaDescription(), body.getOgImageObjectKey());
+    OrgService.StoreConfig storeConfig =
+        new OrgService.StoreConfig(body.getTaxRate(), body.getShippingFee());
     Org updated =
         orgService.update(
             orgId,
@@ -120,7 +122,8 @@ public class OrgHandler {
             body.getOrderTtlMinutes(),
             profile,
             branding,
-            seo);
+            seo,
+            storeConfig);
     writeJson(resp, 200, OrgResponse.from(updated));
   }
 

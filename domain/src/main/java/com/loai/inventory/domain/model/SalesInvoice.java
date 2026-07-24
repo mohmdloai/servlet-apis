@@ -31,6 +31,7 @@ public final class SalesInvoice {
   private final UUID fulfillmentId;
   private final BigDecimal subtotal;
   private final BigDecimal taxTotal;
+  private final BigDecimal shippingTotal;
   private final BigDecimal discountTotal;
   private final BigDecimal grandTotal;
   private final String currency;
@@ -60,6 +61,7 @@ public final class SalesInvoice {
       UUID fulfillmentId,
       BigDecimal subtotal,
       BigDecimal taxTotal,
+      BigDecimal shippingTotal,
       BigDecimal discountTotal,
       String currency,
       String customerName,
@@ -72,17 +74,22 @@ public final class SalesInvoice {
     Objects.requireNonNull(fulfillmentId, "fulfillmentId required");
     Objects.requireNonNull(subtotal, "subtotal required");
     Objects.requireNonNull(taxTotal, "taxTotal required");
+    Objects.requireNonNull(shippingTotal, "shippingTotal required");
     Objects.requireNonNull(discountTotal, "discountTotal required");
     Objects.requireNonNull(currency, "currency required");
     Objects.requireNonNull(customerName, "customerName required");
     Objects.requireNonNull(now, "now required");
-    if (subtotal.signum() < 0 || taxTotal.signum() < 0 || discountTotal.signum() < 0) {
+    if (subtotal.signum() < 0
+        || taxTotal.signum() < 0
+        || shippingTotal.signum() < 0
+        || discountTotal.signum() < 0) {
       throw new IllegalArgumentException("money fields must be >= 0");
     }
     BigDecimal sub = subtotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
     BigDecimal tax = taxTotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
+    BigDecimal ship = shippingTotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
     BigDecimal disc = discountTotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
-    BigDecimal grand = sub.add(tax).subtract(disc);
+    BigDecimal grand = sub.add(tax).add(ship).subtract(disc);
     if (grand.signum() <= 0) {
       throw new IllegalArgumentException("grandTotal must be > 0");
     }
@@ -94,6 +101,7 @@ public final class SalesInvoice {
         fulfillmentId,
         sub,
         tax,
+        ship,
         disc,
         grand,
         currency,
@@ -122,6 +130,7 @@ public final class SalesInvoice {
       InvoiceStatus status,
       BigDecimal subtotal,
       BigDecimal taxTotal,
+      BigDecimal shippingTotal,
       BigDecimal discountTotal,
       BigDecimal grandTotal,
       String currency,
@@ -144,6 +153,7 @@ public final class SalesInvoice {
             fulfillmentId,
             subtotal,
             taxTotal,
+            shippingTotal,
             discountTotal,
             grandTotal,
             currency,
@@ -170,6 +180,7 @@ public final class SalesInvoice {
       UUID fulfillmentId,
       BigDecimal subtotal,
       BigDecimal taxTotal,
+      BigDecimal shippingTotal,
       BigDecimal discountTotal,
       BigDecimal grandTotal,
       String currency,
@@ -192,6 +203,7 @@ public final class SalesInvoice {
     this.fulfillmentId = fulfillmentId;
     this.subtotal = subtotal;
     this.taxTotal = taxTotal;
+    this.shippingTotal = shippingTotal;
     this.discountTotal = discountTotal;
     this.grandTotal = grandTotal;
     this.currency = currency;
@@ -319,6 +331,11 @@ public final class SalesInvoice {
 
   public BigDecimal getTaxTotal() {
     return taxTotal;
+  }
+
+  /** The order's delivery fee, billed on the first live invoice only (V68); 0 otherwise. */
+  public BigDecimal getShippingTotal() {
+    return shippingTotal;
   }
 
   public BigDecimal getDiscountTotal() {

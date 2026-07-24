@@ -75,7 +75,8 @@ class DocumentRenderServiceTest {
             UUID.randomUUID(),
             new BigDecimal("100.00"),
             new BigDecimal("20.00"),
-            BigDecimal.ZERO,
+            BigDecimal.ZERO, // shipping
+            BigDecimal.ZERO, // discount
             "EGP",
             "Nadia",
             "nadia@example.com",

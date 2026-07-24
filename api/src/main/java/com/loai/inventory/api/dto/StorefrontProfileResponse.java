@@ -22,6 +22,8 @@ public class StorefrontProfileResponse {
   private String metaTitle;
   private String metaDescription;
   private String ogImageVersion;
+  private java.math.BigDecimal taxRate;
+  private java.math.BigDecimal shippingFee;
 
   private StorefrontProfileResponse() {}
 
@@ -39,6 +41,8 @@ public class StorefrontProfileResponse {
     r.metaTitle = v.metaTitle();
     r.metaDescription = v.metaDescription();
     r.ogImageVersion = v.ogImageVersion();
+    r.taxRate = v.taxRate();
+    r.shippingFee = v.shippingFee();
     return r;
   }
 
@@ -76,6 +80,14 @@ public class StorefrontProfileResponse {
 
   public String getPaymentInstructions() {
     return paymentInstructions;
+  }
+
+  public java.math.BigDecimal getTaxRate() {
+    return taxRate;
+  }
+
+  public java.math.BigDecimal getShippingFee() {
+    return shippingFee;
   }
 
   public String getMetaTitle() {

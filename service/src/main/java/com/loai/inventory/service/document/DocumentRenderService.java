@@ -163,12 +163,13 @@ public final class DocumentRenderService {
                   new String[][] {
                     {"Subtotal", money(inv.getSubtotal())},
                     {"Tax", money(inv.getTaxTotal())},
+                    {"Shipping", money(inv.getShippingTotal())},
                     {"Discount", money(inv.getDiscountTotal())},
                     {"Grand total", money(inv.getGrandTotal())},
                     {"Paid", money(inv.getPaidAmount())},
                     {"Balance", money(balance)},
                   },
-                  4 // grand-total row index — emphasised
+                  4 // grand-total row index (0-based) — emphasised
                   );
             });
     return new RenderedDocument(fileName(view.invoice().getInvoiceNumber(), "invoice"), bytes);

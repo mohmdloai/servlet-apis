@@ -17,6 +17,7 @@ public class InvoiceResponse {
   private String status;
   private BigDecimal subtotal;
   private BigDecimal taxTotal;
+  private BigDecimal shippingTotal;
   private BigDecimal discountTotal;
   private BigDecimal grandTotal;
   private String currency;
@@ -42,6 +43,7 @@ public class InvoiceResponse {
     r.status = inv.getStatus().name();
     r.subtotal = inv.getSubtotal();
     r.taxTotal = inv.getTaxTotal();
+    r.shippingTotal = inv.getShippingTotal();
     r.discountTotal = inv.getDiscountTotal();
     r.grandTotal = inv.getGrandTotal();
     r.currency = inv.getCurrency();
@@ -87,6 +89,10 @@ public class InvoiceResponse {
 
   public BigDecimal getTaxTotal() {
     return taxTotal;
+  }
+
+  public BigDecimal getShippingTotal() {
+    return shippingTotal;
   }
 
   public BigDecimal getDiscountTotal() {
