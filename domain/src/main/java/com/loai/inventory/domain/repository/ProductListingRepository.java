@@ -134,6 +134,14 @@ public interface ProductListingRepository {
    * "احمد"} finds an {@code "أحمد"} title within the shopper's resolved locale. {@code locale} is
    * the requested locale, {@code defaultLocale} the org's fallback; both are ignored when {@code q}
    * is null.
+   *
+   * <p>Best-sellers (roadmap item 4, {@code stories/storefront_best_sellers.md}): {@code soldOnly}
+   * adds the optional "sold at least one unit in the rolling window" predicate, and {@link
+   * ListingSort#BEST_SELLING} orders by that same aggregate. Both are computed <b>in SQL</b> (a
+   * derived per-product {@code SUM(quantity)} over money-committed orders, LEFT-JOINed to the
+   * listing query) precisely so they compose with {@code offset}/{@code limit} — a post-fetch sort
+   * would corrupt page ≥ 1. The two are independent: the sort alone never hides a never-sold
+   * listing (it ranks last), and {@code soldOnly} narrows under any sort.
    */
   List<ProductListing> findByFilters(
       UUID orgId,
@@ -145,6 +153,7 @@ public interface ProductListingRepository {
       BigDecimal minPrice,
       BigDecimal maxPrice,
       boolean featuredOnly,
+      boolean soldOnly,
       ListingSort sort,
       int offset,
       int limit);
@@ -166,7 +175,8 @@ public interface ProductListingRepository {
       String defaultLocale,
       BigDecimal minPrice,
       BigDecimal maxPrice,
-      boolean featuredOnly);
+      boolean featuredOnly,
+      boolean soldOnly);
 
   // --- translations (content-localization slice L2) ---
 

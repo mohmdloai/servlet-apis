@@ -155,7 +155,9 @@ class TaxShippingConfigIT {
             new PaymentRepositoryFactoryImpl(),
             invoiceService,
             refundService,
-            reservationService);
+            reservationService,
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
     salesOrderService =
         new SalesOrderService(
             dsl,
