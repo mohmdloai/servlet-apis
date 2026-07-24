@@ -203,7 +203,8 @@ public class NotificationService {
           String unsubscribeUrl =
               magicLinkService.issueUnsubscribeLink(txDsl, orgId, recipient.customerId(), now);
           String html =
-              NotificationTemplates.emailHtml(rendered.body(), linkTarget, unsubscribeUrl);
+              NotificationTemplates.emailHtml(
+                  rendered.body(), linkTarget, rendered.ctaLabel(), unsubscribeUrl);
           repo.insertEmailDelivery(savedDelivery.getId(), toAddress, rendered.title(), html);
         }
       }

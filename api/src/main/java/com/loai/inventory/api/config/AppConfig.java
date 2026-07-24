@@ -549,7 +549,9 @@ public class AppConfig {
             paymentRepositoryFactory,
             invoiceService,
             refundService,
-            reservationService);
+            reservationService,
+            notificationService,
+            magicLinkService);
     this.salesOrderService =
         new SalesOrderService(
             dsl,

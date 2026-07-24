@@ -127,7 +127,9 @@ class FulfillmentReadIT {
             new com.loai.inventory.service.ReservationService(
                 new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl(),
-                new com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl()));
+                new com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl()),
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
   }
 
   @AfterAll

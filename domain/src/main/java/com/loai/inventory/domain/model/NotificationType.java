@@ -24,5 +24,15 @@ public enum NotificationType {
    * reply only (editing an answer never re-notifies). Payload carries {@code listing_slug} so the
    * portal feed can deep-link to the listing's Q&amp;A anchor.
    */
-  COMMENT_REPLIED
+  COMMENT_REPLIED,
+
+  /**
+   * An online order finished delivering — "how was your order? review your items" (roadmap item 1,
+   * {@code stories/review_request_on_delivery.md}). Customer recipient (feed + email); raised
+   * inside the deliver txn on the {@code FULFILLING → FULFILLED} roll-up edge, exactly once per
+   * order (never on a partial delivery or a re-deliver, never for the in-store sale). Payload
+   * carries {@code order_number}; the email deep-links to the branded order-view page so the
+   * shopper can rate each delivered line.
+   */
+  REVIEW_REQUESTED
 }
