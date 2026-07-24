@@ -316,6 +316,7 @@ public final class PaymentService {
             order.getCurrency(),
             order.getCustomerId(),
             null,
+            null, // no shopper-uploaded proof key on the in-store path
             null,
             now,
             now);

@@ -84,6 +84,21 @@ public final class ObjectStorage implements AutoCloseable {
     return orgId + "/og/";
   }
 
+  /**
+   * A tenant- and order-scoped payment-proof object key: {@code
+   * {orgId}/payment-proof/{orderId}/{uuid}-{name}} (roadmap item 2). The prefix lets the claim path
+   * verify on attach that an anonymous shopper's key really belongs to this org + order — an
+   * unauthenticated caller must not attach an arbitrary/cross-tenant key.
+   */
+  public String newPaymentProofKey(UUID orgId, UUID orderId, String filename) {
+    return orgId + "/payment-proof/" + orderId + "/" + UUID.randomUUID() + "-" + sanitize(filename);
+  }
+
+  /** The key prefix every payment-proof object of this org+order must start with. */
+  public static String paymentProofKeyPrefix(UUID orgId, UUID orderId) {
+    return orgId + "/payment-proof/" + orderId + "/";
+  }
+
   /** A presigned PUT URL the client uploads bytes to directly. */
   public String presignPut(String objectKey, String contentType) {
     PutObjectRequest put =

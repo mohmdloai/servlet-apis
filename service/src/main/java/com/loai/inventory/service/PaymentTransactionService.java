@@ -4,6 +4,7 @@ import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentDirection;
@@ -89,6 +90,98 @@ public final class PaymentTransactionService {
       boolean replay) {}
 
   /**
+   * A shopper-supplied payment claim (roadmap item 2). {@code salesOrderId} is the order the claim
+   * pays (already resolved from a magic-link token or the portal session); {@code
+   * claimedByCustomerId} stamps who filed it; {@code proofObjectKey} is an optional uploaded
+   * screenshot key (validated against the order's prefix).
+   */
+  public record ClaimCommand(
+      UUID salesOrderId,
+      UUID claimedByCustomerId,
+      String reference,
+      String proofObjectKey,
+      String note) {}
+
+  /** Result of a claim: the recorded UNVERIFIED transaction and whether this call inserted it. */
+  public record ClaimResult(PaymentTransaction transaction, boolean inserted) {}
+
+  /**
+   * Record a shopper-supplied payment claim as an {@code UNVERIFIED} CREDIT transaction that lands
+   * in the staff reconciliation queue ({@code ?verification_status=UNVERIFIED}) — roadmap item 2,
+   * {@code stories/shopper_payment_proof_claim.md}. Unlike {@link #verify}, this does <em>not</em>
+   * verify or reconcile: a human still confirms, starting from the shopper's own evidence. The
+   * amount is the order's <b>outstanding</b> (grand_total − prepaid) snapshotted now; a fully-paid
+   * order (outstanding ≤ 0) is a 409 (before the domain's {@code amount > 0} invariant). Idempotent
+   * on {@code (provider, provider_ref)}: a re-filed identical reference returns the prior row
+   * ({@code inserted=false}).
+   */
+  public ClaimResult claim(UUID orgId, ClaimCommand cmd) {
+    if (orgId == null) {
+      throw new ValidationException("orgId is required");
+    }
+    if (cmd == null || cmd.salesOrderId() == null) {
+      throw new ValidationException("salesOrderId is required");
+    }
+    String reference = Text.normalizeNumeric(cmd.reference());
+    if (reference == null || reference.isBlank()) {
+      throw new ValidationException("reference is required");
+    }
+
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+
+          SalesOrder order =
+              paymentService
+                  .findOrder(txDsl, orgId, new OrderRef(cmd.salesOrderId(), null))
+                  .orElseThrow(() -> new NotFoundException("SalesOrder", cmd.salesOrderId()));
+
+          BigDecimal outstanding = order.getGrandTotal().subtract(order.getPrepaidAmount());
+          if (outstanding.signum() <= 0) {
+            throw new ConflictException(
+                "order " + order.getOrderNumber() + " has no outstanding balance to pay");
+          }
+
+          // Prefix-guard the uploaded key against this org+order (an anonymous shopper must not be
+          // able to attach an arbitrary/cross-tenant key).
+          String proofKey =
+              (cmd.proofObjectKey() == null || cmd.proofObjectKey().isBlank())
+                  ? null
+                  : cmd.proofObjectKey().trim();
+          if (proofKey != null
+              && !proofKey.startsWith(ObjectStorage.paymentProofKeyPrefix(orgId, order.getId()))) {
+            throw new ValidationException("proof_object_key does not belong to this order");
+          }
+
+          String currency = order.getCurrency() == null ? CURRENCY_EGP : order.getCurrency();
+          PaymentTransaction claim =
+              PaymentTransaction.createClaimed(
+                  UUID.randomUUID(),
+                  orgId,
+                  PaymentProvider.INSTAPAY_MANUAL,
+                  reference,
+                  outstanding,
+                  currency,
+                  cmd.claimedByCustomerId(),
+                  Text.normalizeText(cmd.note()),
+                  proofKey,
+                  null, // no admin verification proof — this is the shopper's own claim
+                  now,
+                  now);
+          PaymentTransactionRepository.Recorded rec = txnRepo.insertIfAbsent(claim);
+          log.info(
+              "Shopper payment claim orgId={} order={} ref={} inserted={}",
+              orgId,
+              order.getOrderNumber(),
+              reference,
+              rec.inserted());
+          return new ClaimResult(rec.transaction(), rec.inserted());
+        });
+  }
+
+  /**
    * Record-and-verify a claimed transfer. {@code verifiedBy} is the admin's {@code app_user.id}.
    * Returns the verified transaction and reconciliation outcome.
    */
@@ -115,6 +208,7 @@ public final class PaymentTransactionService {
                   currency,
                   cmd.claimedByCustomerId(),
                   Text.normalizeText(cmd.customerNote()),
+                  null, // admin record path carries no shopper-uploaded proof key
                   Text.normalizeText(cmd.verificationProof()),
                   cmd.occurredAt(),
                   now);

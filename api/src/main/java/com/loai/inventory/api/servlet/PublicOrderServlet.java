@@ -4,9 +4,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.PaymentClaimRequest;
+import com.loai.inventory.api.dto.PaymentClaimResponse;
+import com.loai.inventory.api.dto.PaymentProofPresignRequest;
+import com.loai.inventory.api.dto.PaymentProofPresignResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
+import com.loai.inventory.common.exception.AppException;
+import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.MagicLinkService.ResolvedOrderView;
+import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.PaymentTransactionService.ClaimResult;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.SalesOrderService.Placed;
 import jakarta.servlet.http.HttpServlet;
@@ -18,18 +27,29 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 
 /**
- * Anonymous order-view route at {@code /api/public/orders/{token}} — the customer side of the
+ * Anonymous order routes at {@code /api/public/orders/{token}/…} — the customer side of the
  * notifications email channel (notifications-plan §7). Mounted outside the JWT filter (the {@code
  * /api/public/} bypass); the unguessable {@code VIEW_ORDER} magic token <em>is</em> the
  * authorization, scoped to exactly one order.
  *
- * <p>Every failure (unknown/expired token, or an order that vanished) answers an opaque {@code 404}
- * — never distinguishing them, so the endpoint is not an oracle for valid tokens.
+ * <ul>
+ *   <li>{@code GET /{token}} — the customer-safe order view (the branded status page's data).
+ *   <li>{@code POST /{token}/payment-proof/presign} — mint a presigned PUT URL for a payment
+ *       screenshot (roadmap item 2). Guests have no JWT, so the STAFF org presign can't be reused —
+ *       the token authorizes it, and the minted key is prefix-bound to the token's org + order.
+ *   <li>{@code POST /{token}/payment-claim} — record the shopper's InstaPay reference (+ optional
+ *       proof key) as an UNVERIFIED transaction in the staff reconciliation queue.
+ * </ul>
+ *
+ * <p>Every token failure (unknown/expired token, or an order that vanished) answers an opaque
+ * {@code 404} — never distinguishing them, so the endpoint is not an oracle for valid tokens.
  */
 public class PublicOrderServlet extends HttpServlet {
 
   private MagicLinkService magicLinkService;
   private SalesOrderService salesOrderService;
+  private PaymentTransactionService paymentTransactionService;
+  private ObjectStorage objectStorage;
   private ObjectMapper mapper;
 
   @Override
@@ -37,59 +57,139 @@ public class PublicOrderServlet extends HttpServlet {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.magicLinkService = config.magicLinkService;
     this.salesOrderService = config.salesOrderService;
+    this.paymentTransactionService = config.paymentTransactionService;
+    this.objectStorage = config.objectStorage;
     this.mapper = config.objectMapper;
   }
 
   @Override
   protected void service(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     try {
-      if (!"GET".equals(req.getMethod())) {
-        writeError(resp, 405, "Method not allowed");
-        return;
-      }
-      String token = extractToken(req.getPathInfo());
-      if (token == null) {
+      String[] parts = splitPath(req.getPathInfo());
+      if (parts.length == 0) {
         writeError(resp, 404, "Not found");
         return;
       }
-      OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-      Optional<ResolvedOrderView> resolved = magicLinkService.resolveOrderView(token, now);
-      if (resolved.isEmpty()) {
-        writeError(resp, 404, "Not found");
+      String token = parts[0];
+      String method = req.getMethod();
+
+      // GET /{token} — the order view.
+      if (parts.length == 1 && "GET".equals(method)) {
+        handleOrderView(resp, token);
         return;
       }
-      ResolvedOrderView view = resolved.get();
-      Optional<Placed> placed = salesOrderService.findPlaced(view.orgId(), view.orderId());
-      if (placed.isEmpty()) {
-        writeError(resp, 404, "Not found");
+      // POST /{token}/payment-claim — record a shopper payment claim.
+      if (parts.length == 2 && "payment-claim".equals(parts[1]) && "POST".equals(method)) {
+        handlePaymentClaim(req, resp, token);
         return;
       }
-      Placed p = placed.get();
-      // Customer-safe view: a whitelisted body carrying no internal id, product_id, prepaid, or
-      // channel — the same guarantee the checkout confirmation upholds. Rendered as a branded
-      // status page by the storefront (the magic link points there).
-      writeJson(resp, 200, PublicOrderResponse.forOrderView(p.order(), p.lines()));
+      // POST /{token}/payment-proof/presign — mint an upload URL for the screenshot.
+      if (parts.length == 3
+          && "payment-proof".equals(parts[1])
+          && "presign".equals(parts[2])
+          && "POST".equals(method)) {
+        handleProofPresign(req, resp, token);
+        return;
+      }
+      writeError(resp, 405, "Method not allowed");
+    } catch (AppException e) {
+      writeError(resp, e.getStatusCode(), e.getMessage());
     } catch (Exception e) {
       writeError(resp, 500, "Internal server error");
     }
   }
 
-  /** {@code /{token}} → the token; anything else (missing/nested) → null. */
-  private static String extractToken(String pathInfo) {
+  private void handleOrderView(HttpServletResponse resp, String token) throws IOException {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    Optional<ResolvedOrderView> resolved = magicLinkService.resolveOrderView(token, now);
+    if (resolved.isEmpty()) {
+      writeError(resp, 404, "Not found");
+      return;
+    }
+    ResolvedOrderView view = resolved.get();
+    Optional<Placed> placed = salesOrderService.findPlaced(view.orgId(), view.orderId());
+    if (placed.isEmpty()) {
+      writeError(resp, 404, "Not found");
+      return;
+    }
+    Placed p = placed.get();
+    // Customer-safe view: a whitelisted body carrying no internal id, product_id, prepaid, or
+    // channel — the same guarantee the checkout confirmation upholds.
+    writeJson(resp, 200, PublicOrderResponse.forOrderView(p.order(), p.lines()));
+  }
+
+  private void handlePaymentClaim(HttpServletRequest req, HttpServletResponse resp, String token)
+      throws IOException {
+    ResolvedOrderView view = resolveOrThrow(token);
+    PaymentClaimRequest body = readBody(req, PaymentClaimRequest.class);
+    ClaimResult result =
+        paymentTransactionService.claim(
+            view.orgId(),
+            new PaymentTransactionService.ClaimCommand(
+                view.orderId(),
+                view.customerId(),
+                body.getReference(),
+                body.getProofObjectKey(),
+                body.getNote()));
+    // 201 on first record, 200 on an idempotent replay of the same reference.
+    writeJson(
+        resp,
+        result.inserted() ? 201 : 200,
+        PaymentClaimResponse.from(result.transaction(), result.inserted()));
+  }
+
+  private void handleProofPresign(HttpServletRequest req, HttpServletResponse resp, String token)
+      throws IOException {
+    ResolvedOrderView view = resolveOrThrow(token);
+    PaymentProofPresignRequest body = readBody(req, PaymentProofPresignRequest.class);
+    String objectKey =
+        objectStorage.newPaymentProofKey(view.orgId(), view.orderId(), body.getFilename());
+    String uploadUrl = objectStorage.presignPut(objectKey, body.getContentType());
+    writeJson(
+        resp,
+        200,
+        PaymentProofPresignResponse.of(uploadUrl, objectKey, objectStorage.presignTtlSeconds()));
+  }
+
+  /** Resolve the token to its order or throw the opaque 404 (never a valid-token oracle). */
+  private ResolvedOrderView resolveOrThrow(String token) {
+    return magicLinkService
+        .resolveOrderView(token, OffsetDateTime.now(ZoneOffset.UTC))
+        .orElseThrow(() -> new com.loai.inventory.common.exception.NotFoundException("Not found"));
+  }
+
+  /** Split {@code /a/b/c} into {@code [a,b,c]}; missing/empty → {@code []}. */
+  private static String[] splitPath(String pathInfo) {
     if (pathInfo == null || pathInfo.length() < 2) {
-      return null;
+      return new String[0];
     }
     String raw = pathInfo.startsWith("/") ? pathInfo.substring(1) : pathInfo;
-    if (raw.isBlank() || raw.contains("/")) {
-      return null;
+    if (raw.endsWith("/")) {
+      raw = raw.substring(0, raw.length() - 1);
     }
-    return raw;
+    if (raw.isBlank()) {
+      return new String[0];
+    }
+    return raw.split("/");
+  }
+
+  private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {
+    try {
+      T body = mapper.readValue(req.getInputStream(), type);
+      if (body == null) {
+        throw new ValidationException("request body is required");
+      }
+      return body;
+    } catch (com.fasterxml.jackson.core.JacksonException e) {
+      throw new ValidationException("malformed JSON body");
+    }
   }
 
   private void writeJson(HttpServletResponse resp, int status, Object body) throws IOException {
     resp.setStatus(status);
     resp.setContentType("application/json");
     resp.setCharacterEncoding("UTF-8");
+    resp.setHeader("Cache-Control", "no-store");
     mapper.writeValue(resp.getOutputStream(), body);
   }
 

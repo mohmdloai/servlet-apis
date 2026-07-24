@@ -61,8 +61,12 @@ public class MagicLinkService {
    */
   public record OrderViewLink(String absolute, String relative) {}
 
-  /** Where a resolved order view lives — the token's org + the order it unlocks. */
-  public record ResolvedOrderView(UUID orgId, UUID orderId) {}
+  /**
+   * Where a resolved order view lives — the token's org, the order it unlocks, and the customer it
+   * belongs to (the last lets an anonymous shopper's payment-claim stamp {@code
+   * claimed_by_customer_id} without a login — roadmap item 2).
+   */
+  public record ResolvedOrderView(UUID orgId, UUID orderId, UUID customerId) {}
 
   /** The subject of a resolved unsubscribe token — the customer whose email to switch off. */
   public record ResolvedUnsubscribe(UUID orgId, UUID customerId) {}
@@ -118,7 +122,7 @@ public class MagicLinkService {
     CustomerMagicTokenRepository repo = tokenRepoFactory.create(rootDsl);
     return repo.findActiveByHash(RefreshTokenStore.hashToken(rawToken), now)
         .filter(t -> t.purpose() == MagicTokenPurpose.VIEW_ORDER && t.resourceId() != null)
-        .map(t -> new ResolvedOrderView(t.orgId(), t.resourceId()));
+        .map(t -> new ResolvedOrderView(t.orgId(), t.resourceId(), t.customerId()));
   }
 
   /**

@@ -7,6 +7,10 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.NotificationPreferenceResponse;
 import com.loai.inventory.api.dto.NotificationPreferencesRequest;
 import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.dto.PaymentClaimRequest;
+import com.loai.inventory.api.dto.PaymentClaimResponse;
+import com.loai.inventory.api.dto.PaymentProofPresignRequest;
+import com.loai.inventory.api.dto.PaymentProofPresignResponse;
 import com.loai.inventory.api.dto.PortalAddressRequest;
 import com.loai.inventory.api.dto.PortalAddressResponse;
 import com.loai.inventory.api.dto.PortalCheckoutRequest;
@@ -27,6 +31,7 @@ import com.loai.inventory.api.filter.CustomerAuthFilter;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.AuthenticationException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.domain.model.CustomerAddress;
 import com.loai.inventory.domain.model.CustomerPrincipal;
 import com.loai.inventory.domain.model.InAppFeedItem;
@@ -36,6 +41,7 @@ import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.ListingCommentService;
 import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.NotificationService;
+import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.auth.CustomerAuthService;
 import com.loai.inventory.service.document.DocumentRenderService;
@@ -91,6 +97,8 @@ public class PortalServlet extends HttpServlet {
 
   private CustomerAuthService authService;
   private CustomerPortalService portalService;
+  private PaymentTransactionService paymentTransactionService;
+  private ObjectStorage objectStorage;
   private DocumentRenderService renderService;
   private NotificationService notificationService;
   private ListingReviewService reviewService;
@@ -104,6 +112,8 @@ public class PortalServlet extends HttpServlet {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.authService = config.customerAuthService;
     this.portalService = config.customerPortalService;
+    this.paymentTransactionService = config.paymentTransactionService;
+    this.objectStorage = config.objectStorage;
     this.renderService = config.documentRenderService;
     this.notificationService = config.notificationService;
     this.reviewService = config.listingReviewService;
@@ -131,6 +141,12 @@ public class PortalServlet extends HttpServlet {
         if (rest.endsWith("/reorder")) {
           String orderNumber = rest.substring(0, rest.length() - "/reorder".length());
           requirePost(method, () -> handleReorder(req, resp, orderNumber));
+        } else if (rest.endsWith("/payment-claim")) {
+          String orderNumber = rest.substring(0, rest.length() - "/payment-claim".length());
+          requirePost(method, () -> handlePaymentClaim(req, resp, orderNumber));
+        } else if (rest.endsWith("/payment-proof/presign")) {
+          String orderNumber = rest.substring(0, rest.length() - "/payment-proof/presign".length());
+          requirePost(method, () -> handleProofPresign(req, resp, orderNumber));
         } else {
           requireGet(method, () -> handleGetOrder(req, resp, rest));
         }
@@ -352,6 +368,49 @@ public class PortalServlet extends HttpServlet {
         portalService.getOrderDetail(principal.orgId(), principal.customerId(), orderNumber);
     resp.setHeader("Cache-Control", "private, no-store");
     writeJson(resp, 200, PublicOrderResponse.forPortalOrderDetail(detail));
+  }
+
+  // payment-proof claim (roadmap item 2) — the logged-in twin of the guest magic-link route
+
+  private void handlePaymentClaim(
+      HttpServletRequest req, HttpServletResponse resp, String orderNumber) throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    // Ownership: getOrder resolves within the session org and asserts the order is the caller's —
+    // a foreign/unknown number is the same opaque 404. Yields the internal order id for the claim.
+    CustomerPortalService.OrderView owned =
+        portalService.getOrder(principal.orgId(), principal.customerId(), orderNumber);
+    PaymentClaimRequest body = readBody(req, PaymentClaimRequest.class);
+    PaymentTransactionService.ClaimResult result =
+        paymentTransactionService.claim(
+            principal.orgId(),
+            new PaymentTransactionService.ClaimCommand(
+                owned.order().getId(),
+                principal.customerId(),
+                body.getReference(),
+                body.getProofObjectKey(),
+                body.getNote()));
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(
+        resp,
+        result.inserted() ? 201 : 200,
+        PaymentClaimResponse.from(result.transaction(), result.inserted()));
+  }
+
+  private void handleProofPresign(
+      HttpServletRequest req, HttpServletResponse resp, String orderNumber) throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    CustomerPortalService.OrderView owned =
+        portalService.getOrder(principal.orgId(), principal.customerId(), orderNumber);
+    PaymentProofPresignRequest body = readBody(req, PaymentProofPresignRequest.class);
+    String objectKey =
+        objectStorage.newPaymentProofKey(
+            principal.orgId(), owned.order().getId(), body.getFilename());
+    String uploadUrl = objectStorage.presignPut(objectKey, body.getContentType());
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(
+        resp,
+        200,
+        PaymentProofPresignResponse.of(uploadUrl, objectKey, objectStorage.presignTtlSeconds()));
   }
 
   // invoices (slice P3)

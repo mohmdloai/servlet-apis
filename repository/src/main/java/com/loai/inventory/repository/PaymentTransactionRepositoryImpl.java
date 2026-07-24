@@ -61,6 +61,7 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
             .set(PAYMENT_TRANSACTION.RECORDED_AT, txn.getRecordedAt())
             .set(PAYMENT_TRANSACTION.CLAIMED_BY_CUSTOMER_ID, txn.getClaimedByCustomerId())
             .set(PAYMENT_TRANSACTION.CUSTOMER_NOTE, txn.getCustomerNote())
+            .set(PAYMENT_TRANSACTION.PROOF_OBJECT_KEY, txn.getProofObjectKey())
             .onConflict(PAYMENT_TRANSACTION.PROVIDER, PAYMENT_TRANSACTION.PROVIDER_REF)
             .doNothing()
             .returning()
@@ -212,6 +213,7 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
         r.getRecordedAt(),
         r.getClaimedByCustomerId(),
         r.getCustomerNote(),
+        r.getProofObjectKey(),
         r.getCreatedAt(),
         PaymentVerificationStatus.valueOf(r.getVerificationStatus().name()),
         r.getVerifiedBy(),

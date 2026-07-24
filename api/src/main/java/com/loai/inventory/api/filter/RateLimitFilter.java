@@ -74,6 +74,10 @@ public class RateLimitFilter implements Filter {
   static final int DEFAULT_PORTAL_REVIEW_LIMIT = 10;
   // Comment writes (slice R2): same shape — every ask lands in the merchant's answer queue.
   static final int DEFAULT_PORTAL_COMMENT_LIMIT = 10;
+  // Payment-proof claim + presign (roadmap item 2): a shopper attaching evidence to their order —
+  // a write on both the public (magic-link) and portal planes. Strict, its own bucket. ~10/min
+  // allows presign + claim + a couple retries per submission.
+  static final int DEFAULT_PAYMENT_CLAIM_LIMIT = 10;
   // Self-serve auth writes (story 87): register mints a live account + org per call, and
   // forgot-password emails an arbitrary address per call — both previously fell through the
   // final fail-open else, i.e. completely unthrottled.
@@ -89,6 +93,7 @@ public class RateLimitFilter implements Filter {
   private int portalRefreshLimit = DEFAULT_PORTAL_REFRESH_LIMIT;
   private int portalReviewLimit = DEFAULT_PORTAL_REVIEW_LIMIT;
   private int portalCommentLimit = DEFAULT_PORTAL_COMMENT_LIMIT;
+  private int paymentClaimLimit = DEFAULT_PAYMENT_CLAIM_LIMIT;
   private int authRegisterLimit = DEFAULT_AUTH_REGISTER_LIMIT;
   private int authForgotLimit = DEFAULT_AUTH_FORGOT_LIMIT;
   private boolean trustProxy;
@@ -127,6 +132,7 @@ public class RateLimitFilter implements Filter {
         envIntOrDefault("PORTAL_OTP_VERIFY_LIMIT", DEFAULT_PORTAL_OTP_VERIFY_LIMIT);
     this.portalReviewLimit = envIntOrDefault("PORTAL_REVIEW_LIMIT", DEFAULT_PORTAL_REVIEW_LIMIT);
     this.portalCommentLimit = envIntOrDefault("PORTAL_COMMENT_LIMIT", DEFAULT_PORTAL_COMMENT_LIMIT);
+    this.paymentClaimLimit = envIntOrDefault("PAYMENT_CLAIM_LIMIT", DEFAULT_PAYMENT_CLAIM_LIMIT);
     this.authRegisterLimit = envIntOrDefault("AUTH_REGISTER_LIMIT", DEFAULT_AUTH_REGISTER_LIMIT);
     this.authForgotLimit = envIntOrDefault("AUTH_FORGOT_LIMIT", DEFAULT_AUTH_FORGOT_LIMIT);
     this.trustProxy = Boolean.parseBoolean(System.getenv("TRUST_PROXY"));
@@ -173,6 +179,13 @@ public class RateLimitFilter implements Filter {
       // Comment mutations (slice R2) — same strict shape as reviews, its own bucket.
       keyPrefix = "rl:portal-comment:";
       limit = portalCommentLimit;
+    } else if ("POST".equals(req.getMethod())
+        && (path.endsWith("/payment-claim") || path.endsWith("/payment-proof/presign"))) {
+      // Payment-proof claim + presign (roadmap item 2) — a strict write on both the public
+      // (magic-link) and portal planes; matched ahead of the /api/portal/ and /api/public/
+      // catch-alls so it isn't absorbed by the generous read buckets.
+      keyPrefix = "rl:payment-claim:";
+      limit = paymentClaimLimit;
     } else if (path.startsWith("/api/portal/")) {
       keyPrefix = "rl:portal-read:";
       limit = publicReadLimit;
