@@ -8,6 +8,8 @@ import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_CATEGORY;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_IMAGE;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
+import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
+import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.ListingSort;
@@ -35,11 +37,34 @@ import org.jooq.OrderField;
 import org.jooq.Record;
 import org.jooq.Record1;
 import org.jooq.SelectJoinStep;
+import org.jooq.Table;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public final class ProductListingRepositoryImpl implements ProductListingRepository {
   private static final Logger log = LoggerFactory.getLogger(ProductListingRepositoryImpl.class);
+
+  /**
+   * The best-sellers ranking window ({@code stories/storefront_best_sellers.md}, roadmap item 4). A
+   * fixed constant, not a query parameter — a {@code ?window=} would fragment the 60s edge cache
+   * key for no merchandising gain. Widening to 90 days is this one line.
+   */
+  private static final int BEST_SELLING_WINDOW_DAYS = 30;
+
+  /**
+   * Orders whose lines count as sold units — money committed. The same set as the reporting slice's
+   * {@code SALE_STATUSES}: DRAFT/PENDING_PAYMENT are not yet money, CANCELLED/EXPIRED never were.
+   */
+  private static final com.loai.inventory.repository.generated.enums.OrderStatus[] SALE_STATUSES = {
+    com.loai.inventory.repository.generated.enums.OrderStatus.PAID,
+    com.loai.inventory.repository.generated.enums.OrderStatus.FULFILLING,
+    com.loai.inventory.repository.generated.enums.OrderStatus.FULFILLED,
+    com.loai.inventory.repository.generated.enums.OrderStatus.CLOSED
+  };
+
+  /** Column name of the derived best-sellers aggregate — referenced back off the joined table. */
+  private static final String SOLD_UNITS = "sold_units";
+
   private final DSLContext dsl;
 
   public ProductListingRepositoryImpl(DSLContext dsl) {
@@ -267,10 +292,12 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       java.math.BigDecimal minPrice,
       java.math.BigDecimal maxPrice,
       boolean featuredOnly,
+      boolean soldOnly,
       ListingSort sort,
       int offset,
       int limit) {
-    return joinCategoryIfNeeded(selectListing(), categoryId)
+    Table<?> sold = soldOnly || sort == ListingSort.BEST_SELLING ? soldUnits(orgId) : null;
+    return joinSoldIfNeeded(joinCategoryIfNeeded(selectListing(), categoryId), sold)
         .where(
             filterConditions(
                 orgId,
@@ -281,8 +308,9 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                 defaultLocale,
                 minPrice,
                 maxPrice,
-                featuredOnly))
-        .orderBy(orderFields(sort))
+                featuredOnly,
+                soldOnly ? soldUnitsField(sold) : null))
+        .orderBy(orderFields(sort, soldUnitsField(sold)))
         .offset(offset)
         .limit(limit)
         .fetch()
@@ -299,10 +327,15 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       String defaultLocale,
       java.math.BigDecimal minPrice,
       java.math.BigDecimal maxPrice,
-      boolean featuredOnly) {
+      boolean featuredOnly,
+      boolean soldOnly) {
     SelectJoinStep<Record1<UUID>> step = dsl.select(PRODUCT_LISTING.ID).from(PRODUCT_LISTING);
+    // The count mirrors findByFilters' predicates only — the sold aggregate is joined here just for
+    // the ?sold=true narrow; the BEST_SELLING *order* changes no row's membership, so a plain
+    // ?sort=best_selling count never pays for the join.
+    Table<?> sold = soldOnly ? soldUnits(orgId) : null;
     return dsl.fetchCount(
-        joinCategoryIfNeeded(step, categoryId)
+        joinSoldIfNeeded(joinCategoryIfNeeded(step, categoryId), sold)
             .where(
                 filterConditions(
                     orgId,
@@ -313,7 +346,63 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                     defaultLocale,
                     minPrice,
                     maxPrice,
-                    featuredOnly)));
+                    featuredOnly,
+                    soldUnitsField(sold))));
+  }
+
+  /**
+   * The best-sellers aggregate ({@code stories/storefront_best_sellers.md}): units actually sold
+   * per {@code product_id} over the rolling window, as a derived table to LEFT-JOIN onto the
+   * listing query. Semantics are deliberately identical to the reporting slice's {@code
+   * ReportRepositoryImpl.topProducts} so the two reads never disagree — money-committed statuses
+   * only, {@code COALESCE(placed_at, created_at)} as the sale timestamp, half-open window, {@code
+   * SUM(quantity)} (units, not revenue). Status is read <em>live</em>, so an order that cancels
+   * drops out of the ranking on the next 60s cache refresh.
+   */
+  private static Table<?> soldUnits(UUID orgId) {
+    // The window is anchored to the DATABASE clock, not the JVM's: an order's placed_at/created_at
+    // is stamped by Postgres, so bounding it with a JVM timestamp makes a fresh sale invisible
+    // whenever the app server's clock trails the DB's by more than the request took to arrive.
+    org.jooq.Field<OffsetDateTime> now = org.jooq.impl.DSL.field("now()", OffsetDateTime.class);
+    org.jooq.Field<OffsetDateTime> windowStart =
+        org.jooq.impl.DSL.field(
+            "now() - make_interval(days => {0})",
+            OffsetDateTime.class, org.jooq.impl.DSL.val(BEST_SELLING_WINDOW_DAYS));
+    org.jooq.Field<OffsetDateTime> saleTs =
+        org.jooq.impl.DSL.coalesce(SALES_ORDER.PLACED_AT, SALES_ORDER.CREATED_AT);
+    return org.jooq
+        .impl
+        .DSL
+        .select(
+            SALES_ORDER_LINE.PRODUCT_ID,
+            org.jooq.impl.DSL.sum(SALES_ORDER_LINE.QUANTITY).as(SOLD_UNITS))
+        .from(SALES_ORDER_LINE)
+        .join(SALES_ORDER)
+        .on(SALES_ORDER_LINE.SALES_ORDER_ID.eq(SALES_ORDER.ID))
+        .where(
+            SALES_ORDER
+                .ORG_ID
+                .eq(orgId)
+                .and(SALES_ORDER.STATUS.in(SALE_STATUSES))
+                .and(saleTs.ge(windowStart))
+                .and(saleTs.lt(now)))
+        .groupBy(SALES_ORDER_LINE.PRODUCT_ID)
+        .asTable("sold");
+  }
+
+  /** The derived table's {@code SUM(quantity)} column, or null when the aggregate isn't joined. */
+  private static org.jooq.Field<java.math.BigDecimal> soldUnitsField(Table<?> sold) {
+    return sold == null ? null : sold.field(SOLD_UNITS, java.math.BigDecimal.class);
+  }
+
+  /** LEFT JOIN so never-sold listings survive the join and rank last (COALESCE 0), never vanish. */
+  private static <R extends Record> SelectJoinStep<R> joinSoldIfNeeded(
+      SelectJoinStep<R> step, Table<?> sold) {
+    if (sold == null) {
+      return step;
+    }
+    return step.leftJoin(sold)
+        .on(sold.field(SALES_ORDER_LINE.PRODUCT_ID).eq(PRODUCT_LISTING.PRODUCT_ID));
   }
 
   /** The category narrow is a join only when requested — the unfiltered read stays join-free. */
@@ -347,9 +436,15 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       String defaultLocale,
       java.math.BigDecimal minPrice,
       java.math.BigDecimal maxPrice,
-      boolean featuredOnly) {
+      boolean featuredOnly,
+      org.jooq.Field<java.math.BigDecimal> soldUnits) {
     Condition c =
         PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)));
+    if (soldUnits != null) {
+      // LEFT JOIN + NULL-fails-the-predicate: a never-sold listing is simply absent, no COALESCE
+      // needed. Only reached when the caller asked for ?sold=true.
+      c = c.and(soldUnits.gt(java.math.BigDecimal.ZERO));
+    }
     if (categoryId != null) {
       c = c.and(PRODUCT_LISTING_CATEGORY.CATEGORY_ID.eq(categoryId));
     }
@@ -412,8 +507,13 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                                     pattern)))));
   }
 
-  /** Every sort is tie-broken by {@code slug ASC} (unique per org) so paging is deterministic. */
-  private static List<OrderField<?>> orderFields(ListingSort sort) {
+  /**
+   * Every sort is tie-broken by {@code slug ASC} (unique per org) so paging is deterministic.
+   * {@code soldUnits} is the joined best-sellers aggregate — non-null exactly when {@code sort ==
+   * BEST_SELLING} (or {@code ?sold=true} joined it anyway) and unused otherwise.
+   */
+  private static List<OrderField<?>> orderFields(
+      ListingSort sort, org.jooq.Field<java.math.BigDecimal> soldUnits) {
     return switch (sort) {
       case NEWEST ->
           List.of(PRODUCT_LISTING.PUBLISHED_AT.desc().nullsLast(), PRODUCT_LISTING.SLUG.asc());
@@ -421,6 +521,12 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       case PRICE_DESC -> List.of(PRODUCT_LISTING.SALES_PRICE.desc(), PRODUCT_LISTING.SLUG.asc());
       case FEATURED ->
           List.of(PRODUCT_LISTING.FEATURED_SORT.asc().nullsLast(), PRODUCT_LISTING.SLUG.asc());
+      // COALESCE(0) rather than nullsLast(): a never-sold listing must sort *equal to* a listing
+      // whose window sum is genuinely zero, and then fall to the slug tie-break with it.
+      case BEST_SELLING ->
+          List.of(
+              org.jooq.impl.DSL.coalesce(soldUnits, java.math.BigDecimal.ZERO).desc(),
+              PRODUCT_LISTING.SLUG.asc());
     };
   }
 

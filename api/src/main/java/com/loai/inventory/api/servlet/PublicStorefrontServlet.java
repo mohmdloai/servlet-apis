@@ -205,6 +205,9 @@ public class PublicStorefrontServlet extends HttpServlet {
       // L2: ?locale= resolves each listing's title/marketing_copy server-side (unknown → 400 in the
       // service). The locale is part of the URL, so the max-age=60 cache is naturally
       // per-(org,locale).
+      // Roadmap item 4 (storefront_best_sellers.md): ?sort=best_selling ranks by units actually
+      // sold, and ?sold=true narrows to listings that sold at all in the window (the home strip's
+      // collapse-when-empty guard). Both forwarded as-is; validated in the service.
       ListingPage p =
           service.listPublished(
               orgSlug,
@@ -214,6 +217,7 @@ public class PublicStorefrontServlet extends HttpServlet {
               req.getParameter("max_price"),
               req.getParameter("sort"),
               req.getParameter("featured"),
+              req.getParameter("sold"),
               req.getParameter("locale"),
               page,
               size);

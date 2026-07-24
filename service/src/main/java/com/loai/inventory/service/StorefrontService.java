@@ -494,7 +494,23 @@ public class StorefrontService {
       int page,
       int size) {
     return listPublished(
-        orgSlug, categorySlug, q, minPrice, maxPrice, sort, featured, null, page, size);
+        orgSlug, categorySlug, q, minPrice, maxPrice, sort, featured, null, null, page, size);
+  }
+
+  /** Filtered read without the {@code sold} narrow (roadmap item 4) — every listing, any sort. */
+  public ListingPage listPublished(
+      String orgSlug,
+      String categorySlug,
+      String q,
+      String minPrice,
+      String maxPrice,
+      String sort,
+      String featured,
+      String locale,
+      int page,
+      int size) {
+    return listPublished(
+        orgSlug, categorySlug, q, minPrice, maxPrice, sort, featured, null, locale, page, size);
   }
 
   /**
@@ -509,6 +525,12 @@ public class StorefrontService {
    * <p>When {@code featured=true} and no explicit {@code sort} is given, the default order becomes
    * the merchant's curated {@code featured_sort ASC}; an explicit {@code ?sort=} still overrides
    * it.
+   *
+   * <p>Best-sellers (roadmap item 4, {@code stories/storefront_best_sellers.md}): {@code
+   * sort=best_selling} ranks by units actually sold in a rolling 30-day window (never-sold listings
+   * last, never hidden), and the separate {@code sold=true} predicate narrows to listings that
+   * genuinely sold in that window. Both are computed in SQL so they compose with paging; neither
+   * puts a sold count on the wire — the ordering is the fact.
    */
   public ListingPage listPublished(
       String orgSlug,
@@ -518,6 +540,7 @@ public class StorefrontService {
       String maxPrice,
       String sort,
       String featured,
+      String sold,
       String locale,
       int page,
       int size) {
@@ -525,6 +548,7 @@ public class StorefrontService {
 
     String query = trimToNull(q);
     boolean featuredOnly = parseFeatured(featured);
+    boolean soldOnly = parseSold(sold);
     // featured + no explicit sort → curated order; otherwise the usual grammar (blank = NEWEST).
     String sortTrim = trimToNull(sort);
     ListingSort listingSort =
@@ -565,6 +589,7 @@ public class StorefrontService {
             min,
             max,
             featuredOnly,
+            soldOnly,
             listingSort,
             offset,
             size);
@@ -578,7 +603,8 @@ public class StorefrontService {
             defaultLocale,
             min,
             max,
-            featuredOnly);
+            featuredOnly,
+            soldOnly);
 
     // One batched image query for the whole page (avoids an N+1), and the grid presigns only each
     // listing's primary image — full galleries and category breadcrumbs are a detail-view concern.
@@ -725,10 +751,31 @@ public class StorefrontService {
       case "newest" -> ListingSort.NEWEST;
       case "price_asc" -> ListingSort.PRICE_ASC;
       case "price_desc" -> ListingSort.PRICE_DESC;
+      case "best_selling" -> ListingSort.BEST_SELLING;
       default ->
           throw new com.loai.inventory.common.exception.ValidationException(
-              "Parameter 'sort' must be one of: newest, price_asc, price_desc");
+              "Parameter 'sort' must be one of: newest, price_asc, price_desc, best_selling");
     };
+  }
+
+  /**
+   * Parse the {@code sold} param (roadmap item 4, {@code stories/storefront_best_sellers.md}):
+   * absent/blank → false; exactly {@code true} → true; anything else → 400 — the same
+   * no-silent-coercion rule as {@code featured}. It narrows to listings with ≥1 unit sold in the
+   * ranking window, and exists for the home strip's honesty guard (a store with no sales renders an
+   * empty result the strip collapses on, rather than a fabricated "best sellers" list). The
+   * <b>sort</b> alone never narrows — a sort must not shrink "N results".
+   */
+  private static boolean parseSold(String raw) {
+    String t = trimToNull(raw);
+    if (t == null) {
+      return false;
+    }
+    if ("true".equals(t)) {
+      return true;
+    }
+    throw new com.loai.inventory.common.exception.ValidationException(
+        "Parameter 'sold' must be 'true' or absent");
   }
 
   /**

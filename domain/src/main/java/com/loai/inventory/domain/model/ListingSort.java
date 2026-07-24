@@ -13,6 +13,12 @@ package com.loai.inventory.domain.model;
  *       This one is <b>internal-only</b>: it is never a wire value (no {@code ?sort=featured}) —
  *       the service selects it as the default order when {@code ?featured=true} is present and no
  *       explicit {@code ?sort=} overrides it. So a typo'd {@code ?sort=} is still a 400.
+ *   <li>{@link #BEST_SELLING} — units actually sold over a rolling 30-day window, descending
+ *       ({@code stories/storefront_best_sellers.md}, roadmap item 4). Unlike {@link #FEATURED} this
+ *       <b>is</b> a wire value ({@code ?sort=best_selling}). The ranking is a SQL aggregate over
+ *       money-committed order lines, so it composes with paging; never-sold listings rank last
+ *       (they are ordered, not hidden — narrowing to sellers is the separate {@code ?sold=true}
+ *       predicate).
  * </ul>
  *
  * <p>Every order is tie-broken by a stable key ({@code slug ASC} — unique per org, never serialized
@@ -23,5 +29,6 @@ public enum ListingSort {
   NEWEST,
   PRICE_ASC,
   PRICE_DESC,
-  FEATURED
+  FEATURED,
+  BEST_SELLING
 }
