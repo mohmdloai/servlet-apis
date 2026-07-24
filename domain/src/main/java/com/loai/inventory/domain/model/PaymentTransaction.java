@@ -31,6 +31,7 @@ public class PaymentTransaction {
   private final OffsetDateTime recordedAt;
   private final UUID claimedByCustomerId;
   private final String customerNote;
+  private final String proofObjectKey;
   private final OffsetDateTime createdAt;
 
   private PaymentVerificationStatus verificationStatus;
@@ -53,6 +54,7 @@ public class PaymentTransaction {
       String currency,
       UUID claimedByCustomerId,
       String customerNote,
+      String proofObjectKey,
       String verificationProof,
       OffsetDateTime occurredAt,
       OffsetDateTime now) {
@@ -80,6 +82,7 @@ public class PaymentTransaction {
         now,
         claimedByCustomerId,
         customerNote,
+        proofObjectKey,
         now,
         PaymentVerificationStatus.UNVERIFIED,
         null,
@@ -130,6 +133,7 @@ public class PaymentTransaction {
         now,
         null,
         null,
+        null,
         now,
         PaymentVerificationStatus.VERIFIED,
         verifiedBy,
@@ -152,6 +156,7 @@ public class PaymentTransaction {
       OffsetDateTime recordedAt,
       UUID claimedByCustomerId,
       String customerNote,
+      String proofObjectKey,
       OffsetDateTime createdAt,
       PaymentVerificationStatus verificationStatus,
       UUID verifiedBy,
@@ -171,6 +176,7 @@ public class PaymentTransaction {
         recordedAt,
         claimedByCustomerId,
         customerNote,
+        proofObjectKey,
         createdAt,
         verificationStatus,
         verifiedBy,
@@ -192,6 +198,7 @@ public class PaymentTransaction {
       OffsetDateTime recordedAt,
       UUID claimedByCustomerId,
       String customerNote,
+      String proofObjectKey,
       OffsetDateTime createdAt,
       PaymentVerificationStatus verificationStatus,
       UUID verifiedBy,
@@ -210,6 +217,7 @@ public class PaymentTransaction {
     this.recordedAt = recordedAt;
     this.claimedByCustomerId = claimedByCustomerId;
     this.customerNote = customerNote;
+    this.proofObjectKey = proofObjectKey;
     this.createdAt = createdAt;
     this.verificationStatus = verificationStatus;
     this.verifiedBy = verifiedBy;
@@ -287,6 +295,11 @@ public class PaymentTransaction {
 
   public String getCustomerNote() {
     return customerNote;
+  }
+
+  /** The shopper's uploaded payment-proof object-storage key (nullable) — presign to view. */
+  public String getProofObjectKey() {
+    return proofObjectKey;
   }
 
   public OffsetDateTime getCreatedAt() {

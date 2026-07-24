@@ -75,6 +75,7 @@ class PaymentTransactionHandlerAuthTest {
             null,
             null,
             null,
+            null,
             now,
             now);
     txn.verify(UUID.randomUUID(), now);
