@@ -21,7 +21,11 @@ networks:
 
 services:
   db:
-    image: postgres:18-alpine
+    # PINNED to 17: the VPS data volume was initialised by Postgres 17, and a major-version
+    # image bump does NOT migrate it — the container crashloops ("database files are
+    # incompatible with server"). Moving to 18+ is a deliberate pg_upgrade/dump-restore
+    # operation, never a dependency bump. Dependabot majors are ignored for this image.
+    image: postgres:17-alpine
     restart: unless-stopped
     networks: [internal]
     environment:

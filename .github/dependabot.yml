@@ -46,3 +46,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    ignore:
+      # A Postgres major bump against an existing data volume crashloops the db container
+      # (data dir is version-locked; needs pg_upgrade). Majors are a manual operation.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
