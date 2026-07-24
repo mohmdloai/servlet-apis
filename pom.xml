@@ -34,7 +34,7 @@
         <!-- Jakarta Mail (Eclipse Angus) — SMTP sender for transactional email (notifications §6). -->
         <angus.mail.version>2.0.5</angus.mail.version>
         <!-- OpenPDF — programmatic PDF for printable documents (document_pdf_rendering.md, Part B). -->
-        <openpdf.version>1.3.43</openpdf.version>
+        <openpdf.version>3.0.5</openpdf.version>
         <!-- dnsjava — MX deliverability lookups for the email quality gate (story 87). -->
         <dnsjava.version>3.6.5</dnsjava.version>
 
