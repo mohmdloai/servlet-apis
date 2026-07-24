@@ -21,6 +21,12 @@
 Method: **audit every read path → seed production-scale data → measure two layers →
 apply only convicted indexes → re-measure identically → report the flats too.**
 
+![Query latency before → after indexing, log scale](img/query-latency-before-after.svg)
+
+*(Dumbbell plot, not bars, on purpose: on a log axis bar length is meaningless —
+position isn't. Each connector spans the before→after jump; the gains span four
+orders of magnitude, which no linear chart can show.)*
+
 ---
 
 ## 1. The trap I was avoiding
