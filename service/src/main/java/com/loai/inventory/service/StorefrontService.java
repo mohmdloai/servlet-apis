@@ -135,7 +135,12 @@ public class StorefrontService {
       String paymentInstructions,
       String metaTitle,
       String metaDescription,
-      String ogImageVersion) {}
+      String ogImageVersion,
+      // Commerce money config (V68, roadmap item 5) — lets the cart/checkout preview tax +
+      // shipping honestly before placement. Not sensitive: both amounts render on every order
+      // summary anyway.
+      java.math.BigDecimal taxRate,
+      java.math.BigDecimal shippingFee) {}
 
   /** v1 constants: both locales ship live; single-currency platform. */
   private static final List<String> SUPPORTED_LOCALES = List.of("ar", "en");
@@ -179,7 +184,9 @@ public class StorefrontService {
         org.getPaymentInstructions(),
         org.getMetaTitle(),
         org.getMetaDescription(),
-        ogImageVersion);
+        ogImageVersion,
+        org.getTaxRate(),
+        org.getShippingFee());
   }
 
   /**

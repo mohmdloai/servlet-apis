@@ -153,7 +153,9 @@ public class OrgAdminHandler implements AdminResourceHandler {
             body.getRefundApprovalThreshold(),
             body.getOrderTtlMinutes(),
             branding,
-            seo);
+            seo,
+            new com.loai.inventory.service.OrgService.StoreConfig(
+                body.getTaxRate(), body.getShippingFee()));
     writeJson(resp, 200, OrgResponse.from(updated));
   }
 

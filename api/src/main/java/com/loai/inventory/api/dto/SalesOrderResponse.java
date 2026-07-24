@@ -18,6 +18,7 @@ public class SalesOrderResponse {
   private OrderStatus status;
   private BigDecimal subtotal;
   private BigDecimal taxTotal;
+  private BigDecimal shippingTotal;
   private BigDecimal discountTotal;
   private BigDecimal grandTotal;
   private String currency;
@@ -57,6 +58,7 @@ public class SalesOrderResponse {
     r.status = order.getStatus();
     r.subtotal = order.getSubtotal();
     r.taxTotal = order.getTaxTotal();
+    r.shippingTotal = order.getShippingTotal();
     r.discountTotal = order.getDiscountTotal();
     r.grandTotal = order.getGrandTotal();
     r.currency = order.getCurrency();
@@ -101,6 +103,10 @@ public class SalesOrderResponse {
 
   public BigDecimal getTaxTotal() {
     return taxTotal;
+  }
+
+  public BigDecimal getShippingTotal() {
+    return shippingTotal;
   }
 
   public BigDecimal getDiscountTotal() {

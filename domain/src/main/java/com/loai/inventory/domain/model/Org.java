@@ -43,6 +43,13 @@ public class Org {
   private String metaDescription;
   private String ogImageObjectKey;
 
+  // Store commerce config (V68, roadmap item 5) — the per-org money knobs applied at order
+  // placement: tax_rate is a fraction (0.1400 = 14%) stamped onto every order line; shipping_fee is
+  // a flat per-order delivery fee for ONLINE/PHONE orders (never IN_STORE). Both NOT NULL DEFAULT 0
+  // at the DB, so an unconfigured org keeps the historic zero-tax free-shipping math unchanged.
+  private BigDecimal taxRate = BigDecimal.ZERO;
+  private BigDecimal shippingFee = BigDecimal.ZERO;
+
   public Org() {}
 
   public Org(
@@ -255,6 +262,24 @@ public class Org {
 
   public void setOgImageObjectKey(String ogImageObjectKey) {
     this.ogImageObjectKey = ogImageObjectKey;
+  }
+
+  /** The per-line tax fraction applied at placement (0 = untaxed; 0.1400 = 14%). Never null. */
+  public BigDecimal getTaxRate() {
+    return taxRate;
+  }
+
+  public void setTaxRate(BigDecimal taxRate) {
+    this.taxRate = taxRate;
+  }
+
+  /** The flat per-order delivery fee for ONLINE/PHONE orders (0 = free shipping). Never null. */
+  public BigDecimal getShippingFee() {
+    return shippingFee;
+  }
+
+  public void setShippingFee(BigDecimal shippingFee) {
+    this.shippingFee = shippingFee;
   }
 
   @Override

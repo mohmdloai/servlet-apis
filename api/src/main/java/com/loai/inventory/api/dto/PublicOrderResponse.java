@@ -22,6 +22,7 @@ public class PublicOrderResponse {
   private String currency;
   private BigDecimal subtotal;
   private BigDecimal taxTotal;
+  private BigDecimal shippingTotal;
   private BigDecimal discountTotal;
   private BigDecimal grandTotal;
   private OffsetDateTime placedAt;
@@ -39,6 +40,7 @@ public class PublicOrderResponse {
     out.currency = r.order().getCurrency();
     out.subtotal = r.order().getSubtotal();
     out.taxTotal = r.order().getTaxTotal();
+    out.shippingTotal = r.order().getShippingTotal();
     out.discountTotal = r.order().getDiscountTotal();
     out.grandTotal = r.order().getGrandTotal();
     out.placedAt = r.order().getPlacedAt();
@@ -69,6 +71,7 @@ public class PublicOrderResponse {
     out.currency = order.getCurrency();
     out.subtotal = order.getSubtotal();
     out.taxTotal = order.getTaxTotal();
+    out.shippingTotal = order.getShippingTotal();
     out.discountTotal = order.getDiscountTotal();
     out.grandTotal = order.getGrandTotal();
     out.placedAt = order.getPlacedAt();
@@ -113,6 +116,10 @@ public class PublicOrderResponse {
 
   public BigDecimal getTaxTotal() {
     return taxTotal;
+  }
+
+  public BigDecimal getShippingTotal() {
+    return shippingTotal;
   }
 
   public BigDecimal getDiscountTotal() {

@@ -155,6 +155,7 @@ public final class InvoiceService {
             fulfillmentId,
             subtotal,
             taxTotal,
+            shippingToBill(invoiceRepo, orgId, order),
             BigDecimal.ZERO, // v1: no per-fulfillment discount proration
             order.getCurrency(),
             invoiceCustomerName(customer),
@@ -227,6 +228,26 @@ public final class InvoiceService {
         allocations.size(),
         invoice.getStatus());
     return new Issued(invoice, invoiceLines, allocations, consumedPayments);
+  }
+
+  /**
+   * The shipping to bill on the invoice being issued (V68, roadmap item 5): the order's frozen
+   * {@code shipping_total}, charged on the <b>first live invoice only</b> — so on a
+   * partial-delivery order the sum of live invoice grand totals still equals the order grand total
+   * (the CLOSED roll-up and the FIFO allocator both depend on that identity). A later invoice sees
+   * a live predecessor already carrying it and bills 0. Void+reissue re-carries naturally: the
+   * predecessor is VOID by the time the replacement issues, so the replacement picks it back up.
+   */
+  private static BigDecimal shippingToBill(
+      SalesInvoiceRepository invoiceRepo, UUID orgId, SalesOrder order) {
+    if (order.getShippingTotal() == null || order.getShippingTotal().signum() <= 0) {
+      return BigDecimal.ZERO;
+    }
+    boolean alreadyBilled =
+        invoiceRepo.findByOrderId(orgId, order.getId()).stream()
+            .filter(inv -> !inv.isVoid())
+            .anyMatch(inv -> inv.getShippingTotal() != null && inv.getShippingTotal().signum() > 0);
+    return alreadyBilled ? BigDecimal.ZERO : order.getShippingTotal();
   }
 
   /**

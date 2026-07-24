@@ -216,6 +216,38 @@ public class OrgService {
   public static final int MAX_ORDER_TTL_MINUTES = 43_200;
 
   /**
+   * The org's commerce money config (V68, roadmap item 5): {@code taxRate} is the fraction stamped
+   * onto every order line at placement (0…1, e.g. 0.14 = 14%); {@code shippingFee} is the flat
+   * per-order delivery fee for ONLINE/PHONE orders. Merge semantics like the policy knobs: a {@code
+   * null} field leaves the stored value unchanged (both columns are NOT NULL DEFAULT 0, so there is
+   * no "clear" — set 0 explicitly to turn a knob off).
+   */
+  public record StoreConfig(java.math.BigDecimal taxRate, java.math.BigDecimal shippingFee) {}
+
+  /** Mirrors the V68 CHECKs: {@code tax_rate} ∈ [0,1], {@code shipping_fee} ≥ 0. */
+  public static void validateStoreConfig(StoreConfig c) {
+    if (c == null) {
+      return;
+    }
+    if (c.taxRate() != null
+        && (c.taxRate().signum() < 0 || c.taxRate().compareTo(java.math.BigDecimal.ONE) > 0)) {
+      throw new ValidationException("tax_rate must be between 0 and 1 (a fraction, e.g. 0.14)");
+    }
+    if (c.shippingFee() != null && c.shippingFee().signum() < 0) {
+      throw new ValidationException("shipping_fee must be >= 0");
+    }
+  }
+
+  /** Merge the commerce config onto the org: a {@code null} field leaves the value unchanged. */
+  public static void applyStoreConfig(Org org, StoreConfig c) {
+    if (c == null) {
+      return;
+    }
+    if (c.taxRate() != null) org.setTaxRate(c.taxRate());
+    if (c.shippingFee() != null) org.setShippingFee(c.shippingFee());
+  }
+
+  /**
    * Update an org's name and, optionally, its business-policy knobs: {@code
    * refundApprovalThreshold} (the per-org boundary above which returning money requires an OWNER)
    * and {@code orderTtlMinutes} (the payment-hold window stamped on reserved online/phone orders —
@@ -240,11 +272,24 @@ public class OrgService {
       BillingProfile profile,
       StorefrontBranding branding,
       SeoMetadata seo) {
+    return update(id, name, refundApprovalThreshold, orderTtlMinutes, profile, branding, seo, null);
+  }
+
+  public Org update(
+      UUID id,
+      String name,
+      java.math.BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes,
+      BillingProfile profile,
+      StorefrontBranding branding,
+      SeoMetadata seo,
+      StoreConfig storeConfig) {
     validateName(name);
     validatePolicy(refundApprovalThreshold, orderTtlMinutes);
     validateBillingProfile(profile);
     validateBranding(branding);
     validateSeoMetadata(seo);
+    validateStoreConfig(storeConfig);
     validateLogoKeyOwnership(id, profile);
     validateOgImageKeyOwnership(id, seo);
 
@@ -264,6 +309,7 @@ public class OrgService {
           applyBillingProfile(existing, profile);
           applyBranding(existing, branding);
           applySeoMetadata(existing, seo);
+          applyStoreConfig(existing, storeConfig);
 
           Org updated = orgRepo.update(existing);
           log.info("Updated org id={}", id);

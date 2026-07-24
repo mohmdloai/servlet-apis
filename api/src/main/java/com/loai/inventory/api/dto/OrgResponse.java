@@ -39,6 +39,10 @@ public class OrgResponse {
   private String metaDescription;
   private String ogImageObjectKey;
 
+  // Commerce money config (V68, roadmap item 5).
+  private BigDecimal taxRate;
+  private BigDecimal shippingFee;
+
   private OrgResponse() {}
 
   public static OrgResponse from(Org o) {
@@ -67,11 +71,21 @@ public class OrgResponse {
     r.metaTitle = o.getMetaTitle();
     r.metaDescription = o.getMetaDescription();
     r.ogImageObjectKey = o.getOgImageObjectKey();
+    r.taxRate = o.getTaxRate();
+    r.shippingFee = o.getShippingFee();
     return r;
   }
 
   public UUID getId() {
     return id;
+  }
+
+  public BigDecimal getTaxRate() {
+    return taxRate;
+  }
+
+  public BigDecimal getShippingFee() {
+    return shippingFee;
   }
 
   public String getName() {

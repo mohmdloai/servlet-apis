@@ -28,6 +28,7 @@ public class PortalInvoiceResponse {
   private String currency;
   private BigDecimal subtotal;
   private BigDecimal taxTotal;
+  private BigDecimal shippingTotal;
   private BigDecimal discountTotal;
   private BigDecimal grandTotal;
   private BigDecimal paidAmount;
@@ -49,6 +50,7 @@ public class PortalInvoiceResponse {
     r.currency = inv.getCurrency();
     r.subtotal = inv.getSubtotal();
     r.taxTotal = inv.getTaxTotal();
+    r.shippingTotal = inv.getShippingTotal();
     r.discountTotal = inv.getDiscountTotal();
     r.grandTotal = inv.getGrandTotal();
     r.paidAmount = inv.getPaidAmount();
@@ -91,6 +93,10 @@ public class PortalInvoiceResponse {
 
   public BigDecimal getTaxTotal() {
     return taxTotal;
+  }
+
+  public BigDecimal getShippingTotal() {
+    return shippingTotal;
   }
 
   public BigDecimal getDiscountTotal() {

@@ -79,7 +79,8 @@ class InvoiceHandlerAuthTest {
             UUID.randomUUID(),
             new BigDecimal("100.00"),
             BigDecimal.ZERO,
-            BigDecimal.ZERO,
+            BigDecimal.ZERO, // shipping
+            BigDecimal.ZERO, // discount
             "EGP",
             "Snapshot",
             null,

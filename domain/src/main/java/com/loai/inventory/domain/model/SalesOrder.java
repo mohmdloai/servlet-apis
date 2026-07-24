@@ -25,6 +25,7 @@ public class SalesOrder {
   private OrderStatus status;
   private BigDecimal subtotal;
   private BigDecimal taxTotal;
+  private BigDecimal shippingTotal;
   private BigDecimal discountTotal;
   private BigDecimal grandTotal;
   private BigDecimal prepaidAmount;
@@ -72,6 +73,7 @@ public class SalesOrder {
         zero,
         zero,
         zero,
+        zero,
         now,
         null,
         null,
@@ -98,6 +100,7 @@ public class SalesOrder {
       OrderStatus status,
       BigDecimal subtotal,
       BigDecimal taxTotal,
+      BigDecimal shippingTotal,
       BigDecimal discountTotal,
       BigDecimal grandTotal,
       BigDecimal prepaidAmount,
@@ -121,6 +124,7 @@ public class SalesOrder {
         status,
         subtotal,
         taxTotal,
+        shippingTotal,
         discountTotal,
         grandTotal,
         prepaidAmount,
@@ -146,6 +150,7 @@ public class SalesOrder {
       OrderStatus status,
       BigDecimal subtotal,
       BigDecimal taxTotal,
+      BigDecimal shippingTotal,
       BigDecimal discountTotal,
       BigDecimal grandTotal,
       BigDecimal prepaidAmount,
@@ -168,6 +173,7 @@ public class SalesOrder {
     this.status = status;
     this.subtotal = subtotal;
     this.taxTotal = taxTotal;
+    this.shippingTotal = shippingTotal;
     this.discountTotal = discountTotal;
     this.grandTotal = grandTotal;
     this.prepaidAmount = prepaidAmount;
@@ -182,13 +188,21 @@ public class SalesOrder {
   }
 
   public void setTotals(
-      BigDecimal subtotal, BigDecimal taxTotal, BigDecimal discountTotal, OffsetDateTime now) {
+      BigDecimal subtotal,
+      BigDecimal taxTotal,
+      BigDecimal shippingTotal,
+      BigDecimal discountTotal,
+      OffsetDateTime now) {
     requireStatus(OrderStatus.DRAFT);
     Objects.requireNonNull(subtotal, "subtotal required");
     Objects.requireNonNull(taxTotal, "taxTotal required");
+    Objects.requireNonNull(shippingTotal, "shippingTotal required");
     Objects.requireNonNull(discountTotal, "discountTotal required");
     Objects.requireNonNull(now, "now required");
-    if (subtotal.signum() < 0 || taxTotal.signum() < 0 || discountTotal.signum() < 0) {
+    if (subtotal.signum() < 0
+        || taxTotal.signum() < 0
+        || shippingTotal.signum() < 0
+        || discountTotal.signum() < 0) {
       throw new IllegalArgumentException("money fields must be >= 0");
     }
     if (discountTotal.compareTo(subtotal) > 0) {
@@ -196,8 +210,10 @@ public class SalesOrder {
     }
     this.subtotal = subtotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
     this.taxTotal = taxTotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
+    this.shippingTotal = shippingTotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
     this.discountTotal = discountTotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
-    this.grandTotal = this.subtotal.add(this.taxTotal).subtract(this.discountTotal);
+    this.grandTotal =
+        this.subtotal.add(this.taxTotal).add(this.shippingTotal).subtract(this.discountTotal);
     this.updatedAt = now;
   }
 
@@ -393,6 +409,11 @@ public class SalesOrder {
 
   public BigDecimal getTaxTotal() {
     return taxTotal;
+  }
+
+  /** The flat delivery fee frozen at placement (V68); 0 for IN_STORE and unconfigured orgs. */
+  public BigDecimal getShippingTotal() {
+    return shippingTotal;
   }
 
   public BigDecimal getDiscountTotal() {

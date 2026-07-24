@@ -43,6 +43,7 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
                 invoice.getStatus().name()))
         .set(SALES_INVOICE.SUBTOTAL, invoice.getSubtotal())
         .set(SALES_INVOICE.TAX_TOTAL, invoice.getTaxTotal())
+        .set(SALES_INVOICE.SHIPPING_TOTAL, invoice.getShippingTotal())
         .set(SALES_INVOICE.DISCOUNT_TOTAL, invoice.getDiscountTotal())
         .set(SALES_INVOICE.GRAND_TOTAL, invoice.getGrandTotal())
         .set(SALES_INVOICE.CURRENCY, invoice.getCurrency())
@@ -269,6 +270,7 @@ public final class SalesInvoiceRepositoryImpl implements SalesInvoiceRepository 
         InvoiceStatus.valueOf(r.getStatus().name()),
         r.getSubtotal(),
         r.getTaxTotal(),
+        r.getShippingTotal(),
         r.getDiscountTotal(),
         r.getGrandTotal(),
         r.getCurrency(),

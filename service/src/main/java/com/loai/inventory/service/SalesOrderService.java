@@ -57,7 +57,6 @@ import org.slf4j.LoggerFactory;
 public class SalesOrderService {
 
   private static final Logger log = LoggerFactory.getLogger(SalesOrderService.class);
-  private static final BigDecimal DEFAULT_TAX_RATE = BigDecimal.ZERO;
   private static final String CURRENCY_EGP = "EGP";
 
   private final DSLContext rootDsl;
@@ -316,10 +315,19 @@ public class SalesOrderService {
     }
 
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    // The org row is read inside this txn and drives both the money config (tax rate + shipping
+    // fee, V68) applied at build time and the payment-hold window (reservation.md §Default TTL,
+    // "Configurable per-org" — V47, default 1440 min) stamped below. The TTL sweeper keys off
+    // expires_at alone.
+    Org org =
+        orgRepoFactory
+            .create(txDsl)
+            .findById(orgId)
+            .orElseThrow(() -> new NotFoundException("Org", orgId));
     BuiltOrder built =
         buildDraftOrder(
             repo,
-            orgId,
+            org,
             OrderChannel.ONLINE,
             customerResolver.resolve(repo),
             lines,
@@ -329,15 +337,6 @@ public class SalesOrderService {
     SalesOrder order = built.order();
     List<SalesOrderLine> orderLines = built.lines();
 
-    // Online: DRAFT → PENDING_PAYMENT with the org's payment-hold window (reservation.md
-    // §Default TTL, "Configurable per-org" — V47, default 1440 min), read inside this txn so
-    // the stamped expires_at always reflects the org's current setting. The TTL sweeper keys
-    // off expires_at alone.
-    Org org =
-        orgRepoFactory
-            .create(txDsl)
-            .findById(orgId)
-            .orElseThrow(() -> new NotFoundException("Org", orgId));
     OffsetDateTime expiresAt = now.plus(Duration.ofMinutes(org.getOrderTtlMinutes()));
     order.markPendingPayment(now, expiresAt);
     repo.insert(order, orderLines);
@@ -444,11 +443,17 @@ public class SalesOrderService {
           OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
           // 1. Build + persist the DRAFT order (customer optional for walk-in). The idempotency key
-          // rides on the order row so the UNIQUE above is what actually enforces barrier 1.
+          // rides on the order row so the UNIQUE above is what actually enforces barrier 1. The org
+          // row supplies the money config (tax rate; shipping never applies in-store — V68).
+          Org inStoreOrg =
+              orgRepoFactory
+                  .create(txDsl)
+                  .findById(orgId)
+                  .orElseThrow(() -> new NotFoundException("Org", orgId));
           BuiltOrder built =
               buildDraftOrder(
                   repo,
-                  orgId,
+                  inStoreOrg,
                   OrderChannel.IN_STORE,
                   resolveCustomer(repo, orgId, customer, false),
                   lines.stream()
@@ -676,16 +681,22 @@ public class SalesOrderService {
    * compute line + order totals and claim the per-org per-year order number. The caller resolves
    * the customer first ({@link #resolveCustomer} or {@link #resolveKnownCustomer}; null for an
    * in-store walk-in) and drives the channel-specific transitions and the insert.
+   *
+   * <p>Money config (V68, roadmap item 5) comes from the passed {@code org}: every line is taxed at
+   * {@code org.tax_rate}, and non-IN_STORE orders carry {@code org.shipping_fee} as a scalar {@code
+   * shipping_total} (never a synthetic order line — the reservation engine iterates lines, and a
+   * product-less line cannot exist). An unconfigured org (both 0) reproduces the historic math.
    */
   private BuiltOrder buildDraftOrder(
       SalesOrderRepository repo,
-      UUID orgId,
+      Org org,
       OrderChannel channel,
       Customer resolvedCustomer,
       List<ResolvedLine> lines,
       String idempotencyKey,
       String notes,
       OffsetDateTime now) {
+    UUID orgId = org.getId();
 
     // Snapshot product data per line; fail if any product is missing for this org.
     List<UUID> productIds = lines.stream().map(ResolvedLine::productId).toList();
@@ -719,11 +730,15 @@ public class SalesOrderService {
               description,
               in.quantity(),
               unitPrice,
-              DEFAULT_TAX_RATE);
+              org.getTaxRate());
       orderLines.add(line);
       subtotal = subtotal.add(line.getLineSubtotal());
       taxTotal = taxTotal.add(line.getLineTax());
     }
+    // Shipping: a flat per-order delivery fee for orders that ship; an in-store sale walks out with
+    // the goods, so it never carries one.
+    BigDecimal shippingTotal =
+        channel == OrderChannel.IN_STORE ? BigDecimal.ZERO : org.getShippingFee();
     BigDecimal discountTotal = BigDecimal.ZERO;
 
     int year = now.getYear();
@@ -740,7 +755,7 @@ public class SalesOrderService {
             CURRENCY_EGP,
             idempotencyKey,
             now);
-    order.setTotals(subtotal, taxTotal, discountTotal, now);
+    order.setTotals(subtotal, taxTotal, shippingTotal, discountTotal, now);
     String normalizedNotes = Text.normalizeText(notes);
     if (normalizedNotes != null) {
       order.updateNotes(normalizedNotes, now);
