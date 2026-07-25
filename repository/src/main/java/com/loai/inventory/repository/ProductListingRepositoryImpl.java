@@ -182,19 +182,25 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     // available = stock_qty - reserved_qty; untracked (no inventory row) → COALESCE 0. The join is
     // on (org_id, product_id) so a cross-org inventory row can never satisfy it.
     //
-    // VG2 (architecture §4): a listing's availability is the union of its PARENT product and its
-    // ACTIVE variants' child products — "in stock" at listing level means *something* on this page
-    // is buyable. GREATEST over the two arms is enough because the caller only ever asks
-    // `available > 0`; a variant-less listing keeps exactly today's number.
+    // VG2 (architecture §4): "in stock" at listing level means *something on this page is buyable*.
+    // Once a listing has ACTIVE variants that is the children's answer ALONE — the parent product
+    // is unbuyable on such a listing (checkout rejects a variant-less line for it), so a union over
+    // it would advertise stock nobody can purchase. A variant-less listing keeps today's number.
+    //
+    // Explicitly branched on EXISTS rather than COALESCE'ing the two arms: the variant subquery is
+    // a MAX, which is NULL both when there are no variants AND when the variants simply have no
+    // inventory rows yet — two cases that must answer differently.
     org.jooq.Field<Integer> available =
         org.jooq
             .impl
             .DSL
-            .greatest(
-                org.jooq.impl.DSL.coalesce(
-                    INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY), org.jooq.impl.DSL.inline(0)),
+            .when(
+                hasActiveVariant(),
                 org.jooq.impl.DSL.coalesce(
                     bestActiveVariantAvailable(), org.jooq.impl.DSL.inline(0)))
+            .otherwise(
+                org.jooq.impl.DSL.coalesce(
+                    INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY), org.jooq.impl.DSL.inline(0)))
             .as("available");
     return dsl.select(PRODUCT_LISTING.SLUG, available)
         .from(PRODUCT_LISTING)
@@ -263,7 +269,14 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                         .ORG_ID
                         .eq(orgId)
                         .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)))
-                        .and(PRODUCT_LISTING.PRODUCT_ID.in(productIds)))
+                        .and(PRODUCT_LISTING.PRODUCT_ID.in(productIds))
+                        // A line bought BEFORE the listing had variants carries the parent product
+                        // id, so it still resolves here — but if the merchant has since added
+                        // variants, what it resolves to is a variant-less line on a has-variants
+                        // listing, which checkout rejects outright. Reorder must never prefill a
+                        // cart that dies on Pay, so such a line falls through to `unavailable`
+                        // instead: the option the shopper bought genuinely no longer exists.
+                        .and(org.jooq.impl.DSL.not(hasActiveVariant())))
                 .fetch(
                     r ->
                         new ReorderResolution(
@@ -381,6 +394,24 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
    * NULL when it has none — the children half of the §4 union. A scalar subquery rather than a join
    * so it cannot multiply the outer row.
    */
+  /**
+   * Whether the outer {@code PRODUCT_LISTING} row has at least one ACTIVE variant — the branch that
+   * decides whether listing-level availability is the children's answer or the parent's.
+   */
+  private static org.jooq.Condition hasActiveVariant() {
+    return org.jooq.impl.DSL.exists(
+        org.jooq
+            .impl
+            .DSL
+            .selectOne()
+            .from(PRODUCT_VARIANT)
+            .where(
+                PRODUCT_VARIANT
+                    .PRODUCT_LISTING_ID
+                    .eq(PRODUCT_LISTING.ID)
+                    .and(PRODUCT_VARIANT.ACTIVE.isTrue())));
+  }
+
   private static org.jooq.Field<Integer> bestActiveVariantAvailable() {
     return org.jooq.impl.DSL.field(
         org.jooq
