@@ -108,4 +108,16 @@ public interface ProductVariantRepository {
    * remedy.
    */
   boolean existsActiveVariantForParentProduct(UUID orgId, UUID parentProductId);
+
+  /**
+   * True when the listing itself still has at least one <b>active</b> variant — the listing-delete
+   * guard, the sibling of {@link #existsActiveVariantForParentProduct}. {@code
+   * product_variant.product_listing_id} is {@code ON DELETE CASCADE}, so without this a listing
+   * delete silently dissolves a live variant set: the bridge rows vanish, and the stocked child
+   * products they named are left as ordinary listing-less products that the §5 #11 guard would then
+   * let acquire listings of their own. Active-only on purpose — deactivating the set first is the
+   * merchant's deliberate "these are no longer on sale", which is exactly what the product-delete
+   * guard already treats as consent.
+   */
+  boolean existsActiveVariantForListing(UUID orgId, UUID listingId);
 }

@@ -440,6 +440,111 @@ class CatalogVariantsIT {
         2, count(PRODUCT), "only the parent + the pre-existing conflicting product remain");
   }
 
+  @Test
+  void priceEdit_followsThroughToTheChildProduct_soOneVariantHasOnePrice() {
+    UUID org = createOrg("acme");
+    ProductListing listing = aListing(org, "shirt", "Shirt");
+    variants.replaceVariants(
+        org, listing.getId(), List.of(sizeAxis()), List.of(variant("m", "SKU-M", null, "199.00")));
+    UUID child = byKey(variants.getVariants(org, listing.getId())).get("m").productId();
+
+    // Re-price the variant through the rail — the same set-replace the merchant's Save sends.
+    variants.replaceVariants(
+        org, listing.getId(), List.of(sizeAxis()), List.of(variant("m", "SKU-M", null, "249.00")));
+
+    // The storefront charges product_variant.sales_price; an in-store/phone line snapshots
+    // product.base_price. If the edit stopped at the bridge row the two would diverge for good —
+    // the shop window at 249, the barcode scan still at 199.
+    assertEquals(
+        0,
+        new BigDecimal("249.00")
+            .compareTo(byKey(variants.getVariants(org, listing.getId())).get("m").salesPrice()));
+    assertEquals(
+        0,
+        new BigDecimal("249.00").compareTo(products.getById(org, child).getBasePrice()),
+        "the child product's base price follows the variant's price");
+  }
+
+  @Test
+  void generatedKeys_areUnambiguousForHyphenatedValueSlugs() {
+    UUID org = createOrg("acme");
+    ProductListing listing = aListing(org, "shirt", "Shirt");
+
+    // The trap a '-' join walks into: (navy-x, l) and (navy, x-l) both flatten to "navy-x-l", so
+    // the second row would silently overwrite the first variant's identity — and its child
+    // product, with whatever stock and order history that child already carries.
+    AttributeInput color =
+        new AttributeInput(
+            "color",
+            Map.of("en", "Colour"),
+            List.of(
+                new ValueInput("navy-x", Map.of("en", "Navy X")),
+                new ValueInput("navy", Map.of("en", "Navy"))));
+    AttributeInput size =
+        new AttributeInput(
+            "size",
+            Map.of("en", "Size"),
+            List.of(
+                new ValueInput("l", Map.of("en", "L")), new ValueInput("x-l", Map.of("en", "XL"))));
+
+    VariantSetView saved =
+        variants.replaceVariants(
+            org,
+            listing.getId(),
+            List.of(color, size),
+            List.of(
+                new VariantInput(
+                    null,
+                    Map.of("color", "navy-x", "size", "l"),
+                    new BigDecimal("199.00"),
+                    "SKU-A",
+                    null,
+                    true),
+                new VariantInput(
+                    null,
+                    Map.of("color", "navy", "size", "x-l"),
+                    new BigDecimal("209.00"),
+                    "SKU-B",
+                    null,
+                    true)));
+
+    assertEquals(2, saved.variants().size(), "two combinations stay two variants");
+    Map<String, VariantRow> byKey = byKey(saved);
+    assertEquals(2, byKey.size(), "their generated keys do not collide");
+    assertTrue(byKey.containsKey("navy-x_l"), byKey.keySet().toString());
+    assertTrue(byKey.containsKey("navy_x-l"), byKey.keySet().toString());
+    assertEquals("SKU-A", byKey.get("navy-x_l").sku());
+    assertEquals("SKU-B", byKey.get("navy_x-l").sku());
+
+    // And a generated key round-trips: re-PUTting what the read handed back updates in place
+    // rather than being rejected by a grammar that never allowed the separator it just minted.
+    variants.replaceVariants(
+        org,
+        listing.getId(),
+        List.of(color, size),
+        List.of(
+            new VariantInput(
+                "navy-x_l",
+                Map.of("color", "navy-x", "size", "l"),
+                new BigDecimal("219.00"),
+                "SKU-A",
+                null,
+                true),
+            new VariantInput(
+                "navy_x-l",
+                Map.of("color", "navy", "size", "x-l"),
+                new BigDecimal("209.00"),
+                "SKU-B",
+                null,
+                true)));
+    assertEquals(2, count(PRODUCT_VARIANT), "the re-PUT updated, it did not mint a third");
+    assertEquals(
+        0,
+        new BigDecimal("219.00")
+            .compareTo(
+                byKey(variants.getVariants(org, listing.getId())).get("navy-x_l").salesPrice()));
+  }
+
   // 5. guards (architecture §5 #11–#12)
 
   @Test
@@ -481,6 +586,28 @@ class CatalogVariantsIT {
     listings.delete(org, listing.getId());
     products.delete(org, parent);
     assertThrows(NotFoundException.class, () -> products.getById(org, parent));
+  }
+
+  @Test
+  void listingDelete_409sWhileVariantsAreActive_ratherThanCascadingTheSetAway() {
+    UUID org = createOrg("acme");
+    ProductListing listing = aListing(org, "shirt", "Shirt");
+    variants.replaceVariants(
+        org, listing.getId(), List.of(sizeAxis()), List.of(variant("m", "SKU-M", null, "199.00")));
+    UUID child = byKey(variants.getVariants(org, listing.getId())).get("m").productId();
+
+    // Without the guard, `product_variant.product_listing_id ON DELETE CASCADE` would take the
+    // whole live set with the listing — no error, no trace — and strand the stocked child.
+    ConflictException e =
+        assertThrows(ConflictException.class, () -> listings.delete(org, listing.getId()));
+    assertTrue(e.getMessage().toLowerCase().contains("deactivate"), e.getMessage());
+    assertEquals(1, count(PRODUCT_VARIANT), "the set survived the refused delete");
+
+    // Deactivating the set is the consent the guard asks for — then the delete proceeds, and the
+    // orphaned child is free to become an ordinary product again.
+    variants.replaceVariants(org, listing.getId(), List.of(sizeAxis()), List.of());
+    listings.delete(org, listing.getId());
+    assertNotNull(products.getById(org, child), "the child product outlives its listing");
   }
 
   // 6. org isolation
