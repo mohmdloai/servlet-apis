@@ -64,8 +64,23 @@ public class ProductVariantService {
   static final int MAX_VARIANTS = 100;
   static final int MAX_VALUES_PER_ATTRIBUTE = 40;
 
-  /** Slug discipline for axes, values, and generated variant keys (the {@code OrgService} form). */
+  /** Slug discipline for axes and values (the {@code OrgService} form). */
   private static final Pattern SLUG_PATTERN = Pattern.compile("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$");
+
+  /**
+   * Variant keys are a strict <b>superset</b> of the slug grammar: they may also carry {@code '_'},
+   * which is the character {@link #generateKey} joins option slugs with. Joining with {@code '-'}
+   * (as the first cut did) is ambiguous the moment a value slug contains one — {@code (navy-x, l)}
+   * and {@code (navy, x-l)} both collapse to {@code "navy-x-l"} — and since the key is a variant's
+   * stored identity, a colliding generation would silently rewrite an existing variant (and its
+   * child product, with its order and inventory history) to a different physical option. {@code
+   * '_'} is outside the slug alphabet, so the join can never be produced by a value slug.
+   */
+  private static final Pattern VARIANT_KEY_PATTERN =
+      Pattern.compile("^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$");
+
+  /** What {@link #generateKey} joins option slugs with — never legal inside a slug itself. */
+  private static final String KEY_SEPARATOR = "_";
 
   private static final int MAX_SLUG_CHARS = 80;
 
@@ -122,7 +137,7 @@ public class ProductVariantService {
 
   /**
    * One variant row of the intended set. {@code key} is optional — absent, it is generated from the
-   * option slugs in attribute-slug order ({@code color=red, size=m → "red-m"}). {@code sku} is
+   * option slugs in attribute-slug order ({@code color=red, size=m → "red_m"}). {@code sku} is
    * required for a new variant (it is the org-unique product identity); {@code barcode} is optional
    * and, when given, buys per-variant scan-to-stock/scan-to-sell for free off the V16 partial
    * unique.
@@ -324,10 +339,12 @@ public class ProductVariantService {
         throw new ValidationException("sales_price must be >= 0 (variant at index " + i + ")");
       }
 
+      // A client-supplied key is round-tripped from a previous read, so it must accept everything
+      // generateKey can mint — hence the variant-key grammar, not the plain slug one.
       String key =
           v.key() == null || v.key().isBlank()
               ? generateKey(normalizedOptions)
-              : requireSlug(v.key(), "variant key");
+              : requireVariantKey(v.key());
       if (!seenKeys.add(key)) {
         throw new ValidationException("duplicate variant key: " + key);
       }
@@ -416,7 +433,13 @@ public class ProductVariantService {
               variantId = existing.id();
               variantRepo.updateVariant(variantId, row.salesPrice(), row.sortOrder(), row.active());
               updateChildProduct(
-                  productRepo, orgId, existing.productId(), childName, row.sku(), row.barcode());
+                  productRepo,
+                  orgId,
+                  existing.productId(),
+                  childName,
+                  row.sku(),
+                  row.barcode(),
+                  row.salesPrice());
             }
             variantRepo.replaceVariantValues(variantId, valueIds);
           }
@@ -465,9 +488,15 @@ public class ProductVariantService {
 
   /**
    * Keep an existing variant's child product in step with the rail: the composed name follows the
-   * listing title and option label, and an edited SKU/barcode is applied (with the same org-unique
-   * 409s). A payload that omits the SKU leaves the stored one alone — omission is "unchanged",
-   * never "blank it".
+   * listing title and option label, an edited SKU/barcode is applied (with the same org-unique
+   * 409s), and — critically — {@code base_price} follows the variant's price. A payload that omits
+   * the SKU leaves the stored one alone — omission is "unchanged", never "blank it".
+   *
+   * <p>The price leg is not cosmetic. {@link #mintChildProduct} seeds {@code base_price} from the
+   * variant's price, but in-store and phone order lines snapshot {@code product.base_price} (see
+   * {@code SalesOrderService}) while the storefront charges {@code product_variant.sales_price}.
+   * Let the two drift and one variant is sold at two different prices — the storefront at the new
+   * one, a barcode scan at the old one, permanently.
    */
   private void updateChildProduct(
       ProductRepository productRepo,
@@ -475,7 +504,8 @@ public class ProductVariantService {
       UUID childProductId,
       String name,
       String sku,
-      String barcode) {
+      String barcode,
+      BigDecimal salesPrice) {
     Product child =
         productRepo
             .findById(orgId, childProductId)
@@ -492,6 +522,7 @@ public class ProductVariantService {
     }
     child.setName(name);
     child.setSku(targetSku);
+    child.setBasePrice(salesPrice);
     if (barcode != null) {
       child.setBarcode(barcode);
     }
@@ -535,10 +566,12 @@ public class ProductVariantService {
   }
 
   /**
-   * {@code color=red, size=m → "red-m"} — value slugs in attribute-slug order (options is sorted).
+   * {@code color=red, size=m → "red_m"} — value slugs in attribute-slug order (options is sorted),
+   * joined by the one character a slug can never contain (see {@link #VARIANT_KEY_PATTERN}), so the
+   * generated key is an injective function of the combination.
    */
   private static String generateKey(Map<String, String> options) {
-    String key = String.join("-", options.values());
+    String key = String.join(KEY_SEPARATOR, options.values());
     if (key.length() > MAX_SLUG_CHARS) {
       throw new ValidationException(
           "generated variant key exceeds " + MAX_SLUG_CHARS + " characters: " + key);
@@ -585,6 +618,25 @@ public class ProductVariantService {
           what + " must be lowercase letters, digits and hyphens: " + raw);
     }
     return slug;
+  }
+
+  /**
+   * {@link #requireSlug} widened by the generated-key separator (see {@link #VARIANT_KEY_PATTERN}).
+   */
+  private static String requireVariantKey(String raw) {
+    String key = normalizeSlug(raw);
+    if (key == null || key.isBlank()) {
+      throw new ValidationException("variant key is required");
+    }
+    if (key.length() > MAX_SLUG_CHARS) {
+      throw new ValidationException(
+          "variant key exceeds " + MAX_SLUG_CHARS + " characters: " + key);
+    }
+    if (!VARIANT_KEY_PATTERN.matcher(key).matches()) {
+      throw new ValidationException(
+          "variant key must be lowercase letters, digits, hyphens and underscores: " + raw);
+    }
+    return key;
   }
 
   private String defaultLocale(UUID orgId, DSLContext txDsl) {

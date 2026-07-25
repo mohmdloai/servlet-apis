@@ -351,6 +351,18 @@ public class ProductListingService {
           DSLContext txDsl = DSL.using(cfg);
           ProductListingRepository repo = repoFactory.create(txDsl);
           repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("ProductListing", id));
+          // A listing with a LIVE variant set cannot be deleted — the mirror of the product-delete
+          // guard (architecture §5 #12). `product_variant.product_listing_id` is ON DELETE CASCADE,
+          // so without this the delete silently dissolves the set: the bridge rows vanish and the
+          // stocked children they named are stranded as ordinary listing-less products, which the
+          // §5 #11 guard would then let acquire listings of their own. Deactivating the set first
+          // is the merchant's explicit "these are off sale", the same consent the product guard
+          // takes.
+          if (variantRepoFactory.create(txDsl).existsActiveVariantForListing(orgId, id)) {
+            throw new ConflictException(
+                "Listing has active variants and cannot be deleted — deactivate its variants"
+                    + " first");
+          }
           repo.deleteById(orgId, id);
           log.info("Deleted product_listing id={} orgId={}", id, orgId);
         });

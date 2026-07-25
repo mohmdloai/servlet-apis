@@ -307,6 +307,19 @@ public final class ProductVariantRepositoryImpl implements ProductVariantReposit
                     .and(PRODUCT_VARIANT.ACTIVE.isTrue())));
   }
 
+  @Override
+  public boolean existsActiveVariantForListing(UUID orgId, UUID listingId) {
+    return dsl.fetchExists(
+        dsl.selectOne()
+            .from(PRODUCT_VARIANT)
+            .where(
+                PRODUCT_VARIANT
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(PRODUCT_VARIANT.PRODUCT_LISTING_ID.eq(listingId))
+                    .and(PRODUCT_VARIANT.ACTIVE.isTrue())));
+  }
+
   // --- mappers ---
 
   private static ProductVariant toVariant(ProductVariantRecord r) {
