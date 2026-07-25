@@ -51,18 +51,21 @@ public final class PaymentTransactionService {
   private final PaymentRepositoryFactory paymentRepoFactory;
   private final PaymentService paymentService;
   private final RefundService refundService;
+  private final ObjectStorage storage;
 
   public PaymentTransactionService(
       DSLContext rootDsl,
       PaymentTransactionRepositoryFactory txnRepoFactory,
       PaymentRepositoryFactory paymentRepoFactory,
       PaymentService paymentService,
-      RefundService refundService) {
+      RefundService refundService,
+      ObjectStorage storage) {
     this.rootDsl = rootDsl;
     this.txnRepoFactory = txnRepoFactory;
     this.paymentRepoFactory = paymentRepoFactory;
     this.paymentService = paymentService;
     this.refundService = refundService;
+    this.storage = storage;
   }
 
   /**
@@ -502,9 +505,17 @@ public final class PaymentTransactionService {
   /** One page of the transaction ledger/queues plus the filtered total (for tab badges). */
   public record TransactionPage(List<PaymentTransaction> items, long total) {}
 
-  /** A transaction with its money context: the 1:1 payment and that payment's order, if any. */
+  /**
+   * A transaction with its money context: the 1:1 payment and that payment's order, if any, plus
+   * {@code proofUrl} — a short-lived presigned GET for the screenshot the shopper attached to their
+   * claim, or null when they attached none (or the row predates the feature).
+   *
+   * <p>The proof is deliberately on the <b>detail</b> only. Presigning every row of a 100-item
+   * worklist page would mint 100 credentials the operator will not look at, and a URL that grants
+   * anyone holding it read access has no business sitting in a cached list response.
+   */
   public record TransactionDetail(
-      PaymentTransaction transaction, Payment payment, SalesOrder order) {}
+      PaymentTransaction transaction, Payment payment, SalesOrder order, String proofUrl) {}
 
   public static final int DEFAULT_PAGE_SIZE = 20;
   public static final int MAX_PAGE_SIZE = 100;
@@ -528,7 +539,10 @@ public final class PaymentTransactionService {
   /**
    * Read one transaction with its disposition context: the 1:1 payment bound to it (matched at
    * verify time, resolved, or refund-dispositioned) and, when that payment is order-linked, the
-   * order — the detail view's answer to "how was this handled?".
+   * order — the detail view's answer to "how was this handled?" — plus a presigned view of the
+   * shopper's uploaded proof, so the operator deciding whether to verify can actually look at the
+   * evidence the shopper sent. Collecting a screenshot nobody can open is worse than not asking for
+   * one.
    */
   public TransactionDetail get(UUID orgId, UUID transactionId) {
     if (transactionId == null) {
@@ -548,7 +562,28 @@ public final class PaymentTransactionService {
             : paymentService
                 .findOrder(rootDsl, orgId, new OrderRef(payment.getSalesOrderId(), null))
                 .orElse(null);
-    return new TransactionDetail(txn, payment, order);
+    return new TransactionDetail(txn, payment, order, presignProof(txn));
+  }
+
+  /**
+   * Presign the claim's screenshot for viewing, or null when there is none. The stored key is
+   * re-checked against this org's payment-proof prefix before it is signed: the write path already
+   * enforces that prefix, and this is the read path refusing to mint a credential for anything
+   * outside it even if a bad key ever reached the column.
+   */
+  private String presignProof(PaymentTransaction txn) {
+    String key = txn.getProofObjectKey();
+    if (key == null || key.isBlank()) {
+      return null;
+    }
+    if (!key.startsWith(ObjectStorage.paymentProofOrgPrefix(txn.getOrgId()))) {
+      log.warn(
+          "Refusing to presign proof key outside org {} on transaction {}",
+          txn.getOrgId(),
+          txn.getId());
+      return null;
+    }
+    return storage.presignGet(key);
   }
 
   private static String orphanRefundNotes(String notes) {

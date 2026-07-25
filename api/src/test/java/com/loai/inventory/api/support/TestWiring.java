@@ -1,5 +1,7 @@
 package com.loai.inventory.api.support;
 
+import com.loai.inventory.common.storage.ObjectStorage;
+import com.loai.inventory.common.storage.ObjectStorageFactory;
 import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
@@ -24,6 +26,19 @@ import org.jooq.DSLContext;
 public final class TestWiring {
 
   private TestWiring() {}
+
+  /**
+   * One shared {@link ObjectStorage} for the whole test JVM. Presigning is an offline signature
+   * computation — no connection, no bucket, nothing to fail — so the ITs that merely have to
+   * <em>construct</em> a service which takes one do not each need their own instance wired through
+   * {@code @BeforeAll}/{@code @AfterAll}. Tests that actually assert on a presigned URL can use
+   * this too; the signature is real.
+   */
+  private static final ObjectStorage SHARED_STORAGE = ObjectStorageFactory.build();
+
+  public static ObjectStorage storage() {
+    return SHARED_STORAGE;
+  }
 
   /** A pass-everything {@link EmailGate} (story 87) for ITs that aren't about email quality. */
   public static EmailGate permissiveEmailGate() {

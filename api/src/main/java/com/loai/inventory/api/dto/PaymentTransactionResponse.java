@@ -33,10 +33,23 @@ public class PaymentTransactionResponse {
   private OffsetDateTime occurredAt;
   private OffsetDateTime recordedAt;
   private UUID claimedByCustomerId;
+  private String proofUrl;
   private PaymentSummary payment;
   private OrderSummary order;
 
   private PaymentTransactionResponse() {}
+
+  /**
+   * The detail shape: {@code from} plus {@code proof_url}, a short-lived presigned GET for the
+   * screenshot the shopper attached. Null (hence omitted) when they attached none. Only the detail
+   * read calls this — a worklist page must not mint a read credential per row.
+   */
+  public static PaymentTransactionResponse withProof(
+      PaymentTransaction txn, Payment payment, SalesOrder order, String proofUrl) {
+    PaymentTransactionResponse r = from(txn, payment, order);
+    r.proofUrl = proofUrl;
+    return r;
+  }
 
   public static PaymentTransactionResponse from(
       PaymentTransaction txn, Payment payment, SalesOrder order) {
@@ -114,6 +127,11 @@ public class PaymentTransactionResponse {
 
   public UUID getClaimedByCustomerId() {
     return claimedByCustomerId;
+  }
+
+  /** Presigned view of the shopper's uploaded proof — detail read only, omitted when absent. */
+  public String getProofUrl() {
+    return proofUrl;
   }
 
   public PaymentSummary getPayment() {

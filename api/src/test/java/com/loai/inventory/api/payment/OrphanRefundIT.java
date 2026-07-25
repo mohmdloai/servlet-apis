@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.loai.inventory.api.support.TestWiring;
 import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
@@ -131,7 +132,8 @@ class OrphanRefundIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
             paymentService,
-            refundService);
+            refundService,
+            TestWiring.storage());
   }
 
   @AfterAll

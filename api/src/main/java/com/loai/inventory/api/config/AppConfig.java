@@ -574,7 +574,8 @@ public class AppConfig {
             paymentTransactionRepositoryFactory,
             paymentRepositoryFactory,
             paymentService,
-            refundService);
+            refundService,
+            objectStorage);
     this.invoiceService =
         new InvoiceService(
             salesInvoiceRepositoryFactory,

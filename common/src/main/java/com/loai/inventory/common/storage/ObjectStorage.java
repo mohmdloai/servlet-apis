@@ -99,6 +99,15 @@ public final class ObjectStorage implements AutoCloseable {
     return orgId + "/payment-proof/" + orderId + "/";
   }
 
+  /**
+   * The org-wide half of {@link #paymentProofKeyPrefix} — the tenant check the staff <b>read</b>
+   * path applies before presigning a stored key. The read cannot use the order-scoped form: an
+   * ORPHAN transaction is bound to no order, yet its proof is still the shopper's to show.
+   */
+  public static String paymentProofOrgPrefix(UUID orgId) {
+    return orgId + "/payment-proof/";
+  }
+
   /** A presigned PUT URL the client uploads bytes to directly. */
   public String presignPut(String objectKey, String contentType) {
     PutObjectRequest put =

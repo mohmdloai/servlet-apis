@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import com.loai.inventory.api.support.TestWiring;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.PaymentProvider;
@@ -139,7 +140,8 @@ class OrphanResolutionEdgeIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
             paymentService,
-            refundService);
+            refundService,
+            TestWiring.storage());
   }
 
   @AfterAll

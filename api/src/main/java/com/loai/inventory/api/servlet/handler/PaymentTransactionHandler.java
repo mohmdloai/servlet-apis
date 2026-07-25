@@ -147,16 +147,23 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
     writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
   }
 
-  /** {@code GET /{id}} — one transaction plus its disposition payment/order when they exist. */
+  /**
+   * {@code GET /{id}} — one transaction plus its disposition payment/order when they exist, and a
+   * presigned {@code proof_url} for the shopper's uploaded screenshot when they attached one. The
+   * URL is short-lived, so this response is {@code no-store}: a cached copy would outlive the
+   * credential and hand a stale link to whoever read the cache.
+   */
   private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
       throws IOException {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
 
     TransactionDetail detail = service.get(orgId, id);
+    resp.setHeader("Cache-Control", "private, no-store");
     writeJson(
         resp,
         200,
-        PaymentTransactionResponse.from(detail.transaction(), detail.payment(), detail.order()));
+        PaymentTransactionResponse.withProof(
+            detail.transaction(), detail.payment(), detail.order(), detail.proofUrl()));
   }
 
   private void doPost(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
