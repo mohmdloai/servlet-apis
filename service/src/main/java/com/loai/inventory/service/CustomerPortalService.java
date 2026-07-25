@@ -422,7 +422,9 @@ public class CustomerPortalService {
       UUID addressId,
       AddressInput address,
       boolean saveAddress,
-      String locale) {
+      String locale,
+      /** The optional coupon code (roadmap item 9); null/blank = no coupon. */
+      String couponCode) {
     /** Locale-less convenience (→ org default) — pre-L2b callers. */
     public CheckoutInput(
         List<CheckoutLine> lines,
@@ -430,7 +432,18 @@ public class CustomerPortalService {
         UUID addressId,
         AddressInput address,
         boolean saveAddress) {
-      this(lines, notes, addressId, address, saveAddress, null);
+      this(lines, notes, addressId, address, saveAddress, null, null);
+    }
+
+    /** Coupon-less convenience — pre-V72 callers. */
+    public CheckoutInput(
+        List<CheckoutLine> lines,
+        String notes,
+        UUID addressId,
+        AddressInput address,
+        boolean saveAddress,
+        String locale) {
+      this(lines, notes, addressId, address, saveAddress, locale, null);
     }
   }
 
@@ -539,6 +552,7 @@ public class CustomerPortalService {
                         orderLines,
                         idempotencyKey,
                         input.notes(),
+                        input.couponCode(),
                         PORTAL_ACTOR);
                 // Save-to-book rides the placement txn: a shortage rolls it back with the order,
                 // and an idempotent replay (created=false) never re-adds the row.

@@ -8,6 +8,7 @@ import com.loai.inventory.api.servlet.handler.BannerHandler;
 import com.loai.inventory.api.servlet.handler.CategoryHandler;
 import com.loai.inventory.api.servlet.handler.CollectionHandler;
 import com.loai.inventory.api.servlet.handler.CommentHandler;
+import com.loai.inventory.api.servlet.handler.CouponHandler;
 import com.loai.inventory.api.servlet.handler.CreditNoteHandler;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
 import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
@@ -86,6 +87,7 @@ public class OrgServlet extends HttpServlet {
             Map.entry("products", new ProductHandler(config.productService, mapper)),
             Map.entry("categories", new CategoryHandler(config.categoryService, mapper)),
             Map.entry("collections", new CollectionHandler(config.collectionService, mapper)),
+            Map.entry("coupons", new CouponHandler(config.couponService, mapper)),
             Map.entry("notifications", new NotificationHandler(config.notificationService, mapper)),
             Map.entry(
                 "notification-preferences",

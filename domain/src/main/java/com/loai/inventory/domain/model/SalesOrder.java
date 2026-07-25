@@ -38,6 +38,15 @@ public class SalesOrder {
   private OffsetDateTime expiredAt;
   private String notes;
 
+  /**
+   * The coupon this order redeemed (roadmap item 9) — the id for the redemption count and FK
+   * integrity, plus a FROZEN {@code couponCode} snapshot for display. Both null on an order placed
+   * without a code, which is every order before V72 — nothing downstream may require them.
+   */
+  private UUID couponId;
+
+  private String couponCode;
+
   public static SalesOrder createDraft(
       UUID id,
       UUID orgId,
@@ -346,6 +355,22 @@ public class SalesOrder {
     this.updatedAt = now;
   }
 
+  /**
+   * Attach the redeemed coupon while the order is still a DRAFT (roadmap item 9). Separate from
+   * {@link #setTotals} on purpose: the totals are arithmetic, this is provenance — the frozen
+   * record of *which* code produced that discount, which the order and every invoice derived from
+   * it will keep quoting long after the coupon row could have changed or gone.
+   */
+  public void applyCoupon(UUID couponId, String couponCode, OffsetDateTime now) {
+    requireStatus(OrderStatus.DRAFT);
+    Objects.requireNonNull(couponId, "couponId required");
+    Objects.requireNonNull(couponCode, "couponCode required");
+    Objects.requireNonNull(now, "now required");
+    this.couponId = couponId;
+    this.couponCode = couponCode;
+    this.updatedAt = now;
+  }
+
   public void updateNotes(String notes, OffsetDateTime now) {
     Objects.requireNonNull(now, "now required");
     this.notes = notes;
@@ -458,6 +483,22 @@ public class SalesOrder {
 
   public String getNotes() {
     return notes;
+  }
+
+  public UUID getCouponId() {
+    return couponId;
+  }
+
+  public void setCouponId(UUID couponId) {
+    this.couponId = couponId;
+  }
+
+  public String getCouponCode() {
+    return couponCode;
+  }
+
+  public void setCouponCode(String couponCode) {
+    this.couponCode = couponCode;
   }
 
   @Override

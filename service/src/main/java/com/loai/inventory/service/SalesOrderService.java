@@ -70,6 +70,7 @@ public class SalesOrderService {
   private final NotificationService notificationService;
   private final MagicLinkService magicLinkService;
   private final EmailGate emailGate;
+  private final CouponService couponService;
 
   public SalesOrderService(
       DSLContext rootDsl,
@@ -82,7 +83,8 @@ public class SalesOrderService {
       RefundService refundService,
       NotificationService notificationService,
       MagicLinkService magicLinkService,
-      EmailGate emailGate) {
+      EmailGate emailGate,
+      CouponService couponService) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.orgRepoFactory = orgRepoFactory;
@@ -94,6 +96,7 @@ public class SalesOrderService {
     this.notificationService = notificationService;
     this.magicLinkService = magicLinkService;
     this.emailGate = emailGate;
+    this.couponService = couponService;
   }
 
   /** Input contact info; {@code name} required, others optional. */
@@ -191,7 +194,10 @@ public class SalesOrderService {
     validateOnlineInputs(customer, lines);
     List<ResolvedLine> resolved =
         lines.stream().map(l -> new ResolvedLine(l.productId(), l.quantity(), null, null)).toList();
-    PlacementResult r = placeReserved(orgId, customer, resolved, idempotencyKey, notes, actor);
+    // Admin-placed phone orders take no coupon in v1 (the same call as the in-store POS: a
+    // staff-granted discount is a different authority question — documented in the slice).
+    PlacementResult r =
+        placeReserved(orgId, customer, resolved, idempotencyKey, notes, null, actor);
     return new Placed(r.order(), r.lines(), r.customer());
   }
 
@@ -210,6 +216,7 @@ public class SalesOrderService {
       List<StorefrontLineInput> lines,
       String idempotencyKey,
       String notes,
+      String couponCode,
       ActorContext actor) {
 
     validateOnlineInputs(customer, toOrderLineInputs(lines));
@@ -217,7 +224,8 @@ public class SalesOrderService {
         lines.stream()
             .map(l -> new ResolvedLine(l.productId(), l.quantity(), l.unitPrice(), l.description()))
             .toList();
-    PlacementResult r = placeReserved(orgId, customer, resolved, idempotencyKey, notes, actor);
+    PlacementResult r =
+        placeReserved(orgId, customer, resolved, idempotencyKey, notes, couponCode, actor);
     return new StorefrontPlaced(r.order(), r.lines(), r.customer(), r.trackUrl(), r.created());
   }
 
@@ -242,6 +250,7 @@ public class SalesOrderService {
       List<StorefrontLineInput> lines,
       String idempotencyKey,
       String notes,
+      String couponCode,
       ActorContext actor) {
 
     validateLines(toOrderLineInputs(lines));
@@ -257,6 +266,7 @@ public class SalesOrderService {
             resolved,
             idempotencyKey,
             notes,
+            couponCode,
             actor);
     return new StorefrontPlaced(r.order(), r.lines(), r.customer(), r.trackUrl(), r.created());
   }
@@ -273,6 +283,7 @@ public class SalesOrderService {
       List<ResolvedLine> lines,
       String idempotencyKey,
       String notes,
+      String couponCode,
       ActorContext actor) {
 
     return rootDsl.transactionResult(
@@ -284,6 +295,7 @@ public class SalesOrderService {
                 lines,
                 idempotencyKey,
                 notes,
+                couponCode,
                 actor));
   }
 
@@ -295,6 +307,7 @@ public class SalesOrderService {
       List<ResolvedLine> lines,
       String idempotencyKey,
       String notes,
+      String couponCode,
       ActorContext actor) {
     SalesOrderRepository repo = repoFactory.create(txDsl);
 
@@ -326,6 +339,7 @@ public class SalesOrderService {
             .orElseThrow(() -> new NotFoundException("Org", orgId));
     BuiltOrder built =
         buildDraftOrder(
+            txDsl,
             repo,
             org,
             OrderChannel.ONLINE,
@@ -333,6 +347,7 @@ public class SalesOrderService {
             lines,
             idempotencyKey,
             notes,
+            couponCode,
             now);
     SalesOrder order = built.order();
     List<SalesOrderLine> orderLines = built.lines();
@@ -452,6 +467,7 @@ public class SalesOrderService {
                   .orElseThrow(() -> new NotFoundException("Org", orgId));
           BuiltOrder built =
               buildDraftOrder(
+                  txDsl,
                   repo,
                   inStoreOrg,
                   OrderChannel.IN_STORE,
@@ -461,6 +477,10 @@ public class SalesOrderService {
                       .toList(),
                   idempotencyKey,
                   notes,
+                  // The in-store POS takes no coupon in v1: a counter discount is a different
+                  // product decision (who may grant it, and against which authority), and the code
+                  // machinery here is built for a shopper typing their own.
+                  null,
                   now);
           SalesOrder order = built.order();
           List<SalesOrderLine> orderLines = built.lines();
@@ -688,6 +708,7 @@ public class SalesOrderService {
    * product-less line cannot exist). An unconfigured org (both 0) reproduces the historic math.
    */
   private BuiltOrder buildDraftOrder(
+      DSLContext txDsl,
       SalesOrderRepository repo,
       Org org,
       OrderChannel channel,
@@ -695,6 +716,7 @@ public class SalesOrderService {
       List<ResolvedLine> lines,
       String idempotencyKey,
       String notes,
+      String couponCode,
       OffsetDateTime now) {
     UUID orgId = org.getId();
 
@@ -739,7 +761,14 @@ public class SalesOrderService {
     // the goods, so it never carries one.
     BigDecimal shippingTotal =
         channel == OrderChannel.IN_STORE ? BigDecimal.ZERO : org.getShippingFee();
-    BigDecimal discountTotal = BigDecimal.ZERO;
+    // Coupons (V72, roadmap item 9): resolved HERE, once the goods subtotal exists, and inside the
+    // caller's placement txn — the FOR UPDATE on the coupon row is what serializes the last-slot
+    // race, so it has to share the transaction that inserts the order. A null/blank code is the
+    // ordinary no-coupon case and resolves to null, leaving discountTotal at zero exactly as
+    // before.
+    CouponService.Applied coupon =
+        couponService.resolveForOrder(txDsl, orgId, couponCode, subtotal, now);
+    BigDecimal discountTotal = coupon == null ? BigDecimal.ZERO : coupon.discount();
 
     int year = now.getYear();
     long seqVal = repo.claimOrderNumber(orgId, year);
@@ -756,6 +785,16 @@ public class SalesOrderService {
             idempotencyKey,
             now);
     order.setTotals(subtotal, taxTotal, shippingTotal, discountTotal, now);
+    if (coupon != null) {
+      // A coupon that would zero the order is refused rather than placed: markPendingPayment and
+      // markPaid both reject a non-positive grand total, and "free order" is a different product
+      // (the whole payment machinery assumes money moves). Caught here so the message names the
+      // cause instead of surfacing an opaque transition failure.
+      if (order.getGrandTotal().signum() <= 0) {
+        throw new ValidationException("This code exceeds the order total");
+      }
+      order.applyCoupon(coupon.couponId(), coupon.code(), now);
+    }
     String normalizedNotes = Text.normalizeText(notes);
     if (normalizedNotes != null) {
       order.updateNotes(normalizedNotes, now);
