@@ -25,7 +25,9 @@ import com.loai.inventory.api.dto.PortalReorderResponse;
 import com.loai.inventory.api.dto.PortalReviewRequest;
 import com.loai.inventory.api.dto.PortalReviewResponse;
 import com.loai.inventory.api.dto.PortalSessionResponse;
+import com.loai.inventory.api.dto.PortalWishlistRequest;
 import com.loai.inventory.api.dto.PublicCheckoutError;
+import com.loai.inventory.api.dto.PublicListingResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
 import com.loai.inventory.api.filter.CustomerAuthFilter;
 import com.loai.inventory.common.exception.AppException;
@@ -43,6 +45,7 @@ import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.NotificationService;
 import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.StorefrontService;
+import com.loai.inventory.service.WishlistService;
 import com.loai.inventory.service.auth.CustomerAuthService;
 import com.loai.inventory.service.document.DocumentRenderService;
 import com.loai.inventory.service.document.DocumentRenderService.RenderedDocument;
@@ -86,6 +89,9 @@ import org.slf4j.LoggerFactory;
  *       (idempotent; foreign/unknown id → opaque 404)
  *   <li>{@code GET|PUT /notification-preferences} — the caller's own opt-out settings (the same
  *       rows the emailed one-click unsubscribe writes)
+ *   <li>{@code GET /wishlist} — the caller's saved listings as storefront cards, newest-saved
+ *       first, PUBLISHED-only; {@code POST /wishlist} {@code {listing_slug}} · {@code DELETE
+ *       /wishlist/{listingSlug}} — save / unsave, both idempotent 204 (roadmap item 3)
  * </ul>
  *
  * All identity comes from the {@link CustomerPrincipal} the filter published — never from the URL
@@ -103,6 +109,7 @@ public class PortalServlet extends HttpServlet {
   private NotificationService notificationService;
   private ListingReviewService reviewService;
   private ListingCommentService commentService;
+  private WishlistService wishlistService;
   private ObjectMapper mapper;
   private boolean secureCookies;
   private int refreshMaxAge;
@@ -118,6 +125,7 @@ public class PortalServlet extends HttpServlet {
     this.notificationService = config.notificationService;
     this.reviewService = config.listingReviewService;
     this.commentService = config.listingCommentService;
+    this.wishlistService = config.wishlistService;
     this.mapper = config.objectMapper;
     this.secureCookies = config.secureCookies;
     this.refreshMaxAge = config.customerRefreshMaxAgeSeconds;
@@ -209,6 +217,25 @@ public class PortalServlet extends HttpServlet {
         String rest = path.substring("/comments/".length());
         if ("DELETE".equals(method)) {
           handleDeleteComment(req, resp, rest);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+      if ("/wishlist".equals(path)) {
+        if ("GET".equals(method)) {
+          handleMyWishlist(req, resp);
+        } else if ("POST".equals(method)) {
+          handleAddToWishlist(req, resp);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+      if (path.startsWith("/wishlist/")) {
+        String rest = path.substring("/wishlist/".length());
+        if ("DELETE".equals(method)) {
+          handleRemoveFromWishlist(req, resp, rest);
         } else {
           writeError(resp, 405, "Method not allowed");
         }
@@ -588,6 +615,40 @@ public class PortalServlet extends HttpServlet {
   }
 
   // comments (slice R2)
+
+  // wishlist (roadmap item 3)
+
+  private void handleMyWishlist(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    List<PublicListingResponse> data =
+        wishlistService
+            .list(principal.orgId(), principal.customerId(), req.getParameter("locale"))
+            .stream()
+            .map(PublicListingResponse::from)
+            .toList();
+    resp.setHeader("Cache-Control", "private, no-store");
+    writeJson(resp, 200, data);
+  }
+
+  private void handleAddToWishlist(HttpServletRequest req, HttpServletResponse resp)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    PortalWishlistRequest body = readBody(req, PortalWishlistRequest.class);
+    wishlistService.add(principal.orgId(), principal.customerId(), body.getListingSlug());
+    resp.setHeader("Cache-Control", "private, no-store");
+    // 204 on a fresh save AND on a replay — the login-merge re-posts the guest's whole list, so
+    // idempotence beats the ceremony of distinguishing 201 from 200 for a heart.
+    resp.setStatus(204);
+  }
+
+  private void handleRemoveFromWishlist(
+      HttpServletRequest req, HttpServletResponse resp, String listingSlug) throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    wishlistService.remove(principal.orgId(), principal.customerId(), listingSlug);
+    resp.setHeader("Cache-Control", "private, no-store");
+    resp.setStatus(204);
+  }
 
   private void handleSubmitComment(HttpServletRequest req, HttpServletResponse resp)
       throws IOException {
