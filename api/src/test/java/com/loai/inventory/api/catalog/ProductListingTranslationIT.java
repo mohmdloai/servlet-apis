@@ -83,6 +83,7 @@ class ProductListingTranslationIT {
             dsl,
             new ProductListingRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl(),
             storage);
     storefront =
         new StorefrontService(

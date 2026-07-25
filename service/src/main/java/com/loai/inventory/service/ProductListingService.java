@@ -15,6 +15,7 @@ import com.loai.inventory.domain.repository.OrgRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepository;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
+import com.loai.inventory.domain.repository.ProductVariantRepositoryFactory;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -46,16 +47,19 @@ public class ProductListingService {
   private final DSLContext rootDsl;
   private final ProductListingRepositoryFactory repoFactory;
   private final OrgRepositoryFactory orgRepoFactory;
+  private final ProductVariantRepositoryFactory variantRepoFactory;
   private final ObjectStorage storage;
 
   public ProductListingService(
       DSLContext rootDsl,
       ProductListingRepositoryFactory repoFactory,
       OrgRepositoryFactory orgRepoFactory,
+      ProductVariantRepositoryFactory variantRepoFactory,
       ObjectStorage storage) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.orgRepoFactory = orgRepoFactory;
+    this.variantRepoFactory = variantRepoFactory;
     this.storage = storage;
   }
 
@@ -265,6 +269,14 @@ public class ProductListingService {
           }
           if (repo.existsByProductId(orgId, productId)) {
             throw new ConflictException("This product already has a listing");
+          }
+          // A variant's child product is sold through its parent's listing and can never acquire
+          // one
+          // of its own (architecture §1 / §5 #11) — otherwise the same physical item would be
+          // buyable under two public identities with two independent prices.
+          if (variantRepoFactory.create(txDsl).existsByProductId(orgId, productId)) {
+            throw new ConflictException(
+                "This product is a variant of another listing and cannot have its own listing");
           }
           if (repo.existsBySlug(orgId, slug)) {
             throw new ConflictException("Listing slug already used in this org: " + slug);

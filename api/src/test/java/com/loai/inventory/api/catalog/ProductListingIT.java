@@ -85,6 +85,7 @@ class ProductListingIT {
             dsl,
             new ProductListingRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl(),
             ObjectStorageFactory.build());
     categoryService =
         new CategoryService(

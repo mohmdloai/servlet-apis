@@ -6,6 +6,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Product;
 import com.loai.inventory.domain.repository.ProductRepository;
+import com.loai.inventory.domain.repository.ProductVariantRepositoryFactory;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -23,10 +24,13 @@ public class ProductService {
   private static final Logger log = LoggerFactory.getLogger(ProductService.class);
 
   private final ProductRepository repo;
+  private final ProductVariantRepositoryFactory variantRepoFactory;
   private final DSLContext dsl;
 
-  public ProductService(ProductRepository repo, DSLContext dsl) {
+  public ProductService(
+      ProductRepository repo, ProductVariantRepositoryFactory variantRepoFactory, DSLContext dsl) {
     this.repo = repo;
+    this.variantRepoFactory = variantRepoFactory;
     this.dsl = dsl;
   }
 
@@ -145,6 +149,17 @@ public class ProductService {
     dsl.transaction(
         config -> {
           repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Product", id));
+          // A listing's PARENT product cannot be deleted while its variant set is live: the
+          // children
+          // are still on sale through it (architecture §5 #12). Name the remedy rather than letting
+          // the shopper-visible set be orphaned. Child products themselves keep today's rules — the
+          // FK violation below is what stops one that is referenced by inventory or order lines.
+          if (variantRepoFactory
+              .create(org.jooq.impl.DSL.using(config))
+              .existsActiveVariantForParentProduct(orgId, id)) {
+            throw new ConflictException(
+                "Product has active variants and cannot be deleted — deactivate its variants first");
+          }
           try {
             repo.deleteById(orgId, id);
           } catch (DataAccessException e) {
