@@ -14,6 +14,8 @@ import com.loai.inventory.api.dto.SetCategoriesRequest;
 import com.loai.inventory.api.dto.SetFeaturedListingsRequest;
 import com.loai.inventory.api.dto.UpdateImageRequest;
 import com.loai.inventory.api.dto.UpdateProductListingRequest;
+import com.loai.inventory.api.dto.VariantSetRequest;
+import com.loai.inventory.api.dto.VariantSetResponse;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -24,6 +26,7 @@ import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductListingService.ImageView;
 import com.loai.inventory.service.ProductListingService.ListingView;
 import com.loai.inventory.service.ProductListingService.PresignResult;
+import com.loai.inventory.service.ProductVariantService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -42,6 +45,9 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code GET|PUT|DELETE /{id}} — read / update / delete
  *   <li>{@code POST /{id}/publish|unpublish|archive} — lifecycle (STAFF)
  *   <li>{@code GET|PUT /{id}/categories} — read / replace category set
+ *   <li>{@code GET|PUT /{id}/variants} — read / atomically replace the option axes + variant set
+ *       (slice VG1); each variant is backed by a child product, stocked through the existing
+ *       inventory screens
  *   <li>{@code GET /{id}/images}, {@code POST /{id}/images/presign}, {@code POST /{id}/images},
  *       {@code PATCH|DELETE /{id}/images/{imageId}} — attach / edit (alt + order) / remove
  * </ul>
@@ -53,10 +59,13 @@ public class ProductListingHandler implements OrgResourceHandler {
   private static final Logger log = LoggerFactory.getLogger(ProductListingHandler.class);
 
   private final ProductListingService service;
+  private final ProductVariantService variantService;
   private final ObjectMapper mapper;
 
-  public ProductListingHandler(ProductListingService service, ObjectMapper mapper) {
+  public ProductListingHandler(
+      ProductListingService service, ProductVariantService variantService, ObjectMapper mapper) {
     this.service = service;
+    this.variantService = variantService;
     this.mapper = mapper;
   }
 
@@ -117,6 +126,11 @@ public class ProductListingHandler implements OrgResourceHandler {
           case "images" -> {
             if ("GET".equals(method)) doListImages(req, resp, orgId, id);
             else if ("POST".equals(method)) doAttachImage(req, resp, orgId, id);
+            else writeError(resp, 405, "Method not allowed");
+          }
+          case "variants" -> {
+            if ("GET".equals(method)) doGetVariants(req, resp, orgId, id);
+            else if ("PUT".equals(method)) doSetVariants(req, resp, orgId, id);
             else writeError(resp, 405, "Method not allowed");
           }
           default -> throw new ValidationException("Unknown route: /product-listings/" + tail);
@@ -279,6 +293,26 @@ public class ProductListingHandler implements OrgResourceHandler {
         body.getCategoryIds() == null ? Set.of() : new LinkedHashSet<>(body.getCategoryIds());
     List<UUID> result = service.setCategories(orgId, id, ids);
     writeJson(resp, 200, result);
+  }
+
+  // --- variants (slice VG1) ---
+
+  private void doGetVariants(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(resp, 200, VariantSetResponse.from(variantService.getVariants(orgId, id)));
+  }
+
+  private void doSetVariants(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    VariantSetRequest body = readBody(req, VariantSetRequest.class);
+    writeJson(
+        resp,
+        200,
+        VariantSetResponse.from(
+            variantService.replaceVariants(
+                orgId, id, body.toAttributeInputs(), body.toVariantInputs())));
   }
 
   // --- images ---

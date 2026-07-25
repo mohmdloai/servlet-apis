@@ -63,7 +63,11 @@ class BarcodeLookupIT {
     cfg.setConnectionInitSql("SET search_path TO inventorydb");
     dataSource = new HikariDataSource(cfg);
     dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
-    service = new ProductService(new ProductRepositoryImpl(dsl), dsl);
+    service =
+        new ProductService(
+            new ProductRepositoryImpl(dsl),
+            new com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl(),
+            dsl);
   }
 
   @AfterAll

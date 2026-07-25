@@ -88,7 +88,11 @@ class UnicodeNormalizationIT {
     dataSource = new HikariDataSource(cfg);
     dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
 
-    productService = new ProductService(new ProductRepositoryImpl(dsl), dsl);
+    productService =
+        new ProductService(
+            new ProductRepositoryImpl(dsl),
+            new com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl(),
+            dsl);
     customerService = new CustomerService(dsl, new CustomerRepositoryFactoryImpl());
   }
 

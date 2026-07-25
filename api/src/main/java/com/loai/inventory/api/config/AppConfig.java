@@ -35,6 +35,8 @@ import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.PlatformAuditRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
+import com.loai.inventory.domain.repository.ProductRepositoryFactory;
+import com.loai.inventory.domain.repository.ProductVariantRepositoryFactory;
 import com.loai.inventory.domain.repository.RefundAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.RefundRepositoryFactory;
 import com.loai.inventory.domain.repository.ReportRepository;
@@ -68,7 +70,9 @@ import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
+import com.loai.inventory.repository.ProductRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
+import com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl;
 import com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.RefundRepositoryFactoryImpl;
 import com.loai.inventory.repository.ReportRepositoryImpl;
@@ -102,6 +106,7 @@ import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.PresignedOgImageSource;
 import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductService;
+import com.loai.inventory.service.ProductVariantService;
 import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReportService;
 import com.loai.inventory.service.ReservationService;
@@ -182,6 +187,8 @@ public class AppConfig {
   public final CustomerMagicTokenRepositoryFactory customerMagicTokenRepositoryFactory;
   public final AppUserMagicTokenRepositoryFactory appUserMagicTokenRepositoryFactory;
   public final ProductListingRepositoryFactory productListingRepositoryFactory;
+  public final ProductVariantRepositoryFactory productVariantRepositoryFactory;
+  public final ProductRepositoryFactory productRepositoryFactory;
   public final StorefrontBannerRepositoryFactory storefrontBannerRepositoryFactory;
   public final StorefrontPageRepositoryFactory storefrontPageRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
@@ -235,6 +242,7 @@ public class AppConfig {
   public final WishlistService wishlistService;
   public final ListingCommentService listingCommentService;
   public final ProductListingService productListingService;
+  public final ProductVariantService productVariantService;
   public final StorefrontBannerService storefrontBannerService;
   public final StorefrontPageService storefrontPageService;
   public final StorefrontService storefrontService;
@@ -307,6 +315,8 @@ public class AppConfig {
     this.customerMagicTokenRepositoryFactory = new CustomerMagicTokenRepositoryFactoryImpl();
     this.appUserMagicTokenRepositoryFactory = new AppUserMagicTokenRepositoryFactoryImpl();
     this.productListingRepositoryFactory = new ProductListingRepositoryFactoryImpl();
+    this.productVariantRepositoryFactory = new ProductVariantRepositoryFactoryImpl();
+    this.productRepositoryFactory = new ProductRepositoryFactoryImpl();
     this.storefrontBannerRepositoryFactory = new StorefrontBannerRepositoryFactoryImpl();
     this.storefrontPageRepositoryFactory = new StorefrontPageRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
@@ -412,7 +422,8 @@ public class AppConfig {
     this.userAdminService =
         new UserAdminService(
             dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);
-    this.productService = new ProductService(productRepository, dsl);
+    this.productService =
+        new ProductService(productRepository, productVariantRepositoryFactory, dsl);
     this.categoryService =
         new CategoryService(dsl, categoryRepositoryFactory, orgRepositoryFactory);
     // MagicLinkService is built before NotificationService — the producer mints an unsubscribe
@@ -459,7 +470,18 @@ public class AppConfig {
             60);
     this.productListingService =
         new ProductListingService(
-            dsl, productListingRepositoryFactory, orgRepositoryFactory, objectStorage);
+            dsl,
+            productListingRepositoryFactory,
+            orgRepositoryFactory,
+            productVariantRepositoryFactory,
+            objectStorage);
+    this.productVariantService =
+        new ProductVariantService(
+            dsl,
+            productVariantRepositoryFactory,
+            productListingRepositoryFactory,
+            productRepositoryFactory,
+            orgRepositoryFactory);
     this.storefrontBannerService =
         new StorefrontBannerService(
             dsl,

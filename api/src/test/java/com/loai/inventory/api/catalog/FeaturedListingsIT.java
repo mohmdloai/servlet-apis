@@ -107,6 +107,7 @@ class FeaturedListingsIT {
             dsl,
             new ProductListingRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl(),
             storage);
     storefront =
         new StorefrontService(

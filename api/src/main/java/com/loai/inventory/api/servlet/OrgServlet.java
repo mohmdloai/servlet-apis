@@ -90,7 +90,8 @@ public class OrgServlet extends HttpServlet {
                 new NotificationPreferenceHandler(config.notificationService, mapper)),
             Map.entry(
                 "product-listings",
-                new ProductListingHandler(config.productListingService, mapper)),
+                new ProductListingHandler(
+                    config.productListingService, config.productVariantService, mapper)),
             Map.entry("customers", new CustomerHandler(config.customerService, mapper)),
             Map.entry(
                 "inventory",

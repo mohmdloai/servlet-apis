@@ -15,6 +15,7 @@ import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductListingService.ImageView;
 import com.loai.inventory.service.ProductListingService.PresignResult;
+import com.loai.inventory.service.ProductVariantService;
 import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.ServletOutputStream;
@@ -70,8 +71,69 @@ class ProductListingHandlerAuthTest {
   }
 
   private ProductListingHandler handler(ProductListingService service) {
+    return handler(service, Mockito.mock(ProductVariantService.class));
+  }
+
+  private ProductListingHandler handler(
+      ProductListingService service, ProductVariantService variantService) {
     return new ProductListingHandler(
-        service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+        service, variantService, com.loai.inventory.api.config.ObjectMapperProvider.build());
+  }
+
+  // variants (slice VG1): VIEWER reads the set, STAFF replaces it
+
+  @Test
+  void getVariants_allowedForViewer() throws IOException {
+    ProductVariantService variants = Mockito.mock(ProductVariantService.class);
+    when(variants.getVariants(ORG, ID))
+        .thenReturn(new ProductVariantService.VariantSetView(List.of(), List.of()));
+    Resp resp = new Resp();
+    handler(Mockito.mock(ProductListingService.class), variants)
+        .handle(
+            "GET", reqWith(ctxWith(OrgRole.VIEWER), ""), resp.mock, ORG, "/" + ID + "/variants");
+    assertEquals(200, resp.status);
+    verify(variants).getVariants(ORG, ID);
+  }
+
+  @Test
+  void setVariants_forbiddenForViewer() throws IOException {
+    ProductVariantService variants = Mockito.mock(ProductVariantService.class);
+    Resp resp = new Resp();
+    handler(Mockito.mock(ProductListingService.class), variants)
+        .handle(
+            "PUT",
+            reqWith(ctxWith(OrgRole.VIEWER), "{\"attributes\":[],\"variants\":[]}"),
+            resp.mock,
+            ORG,
+            "/" + ID + "/variants");
+    assertEquals(403, resp.status);
+    verify(variants, Mockito.never()).replaceVariants(any(), any(), any(), any());
+  }
+
+  @Test
+  void setVariants_allowedForStaff() throws IOException {
+    ProductVariantService variants = Mockito.mock(ProductVariantService.class);
+    when(variants.replaceVariants(any(), any(), any(), any()))
+        .thenReturn(new ProductVariantService.VariantSetView(List.of(), List.of()));
+    Resp resp = new Resp();
+    handler(Mockito.mock(ProductListingService.class), variants)
+        .handle(
+            "PUT",
+            reqWith(ctxWith(OrgRole.STAFF), "{\"attributes\":[],\"variants\":[]}"),
+            resp.mock,
+            ORG,
+            "/" + ID + "/variants");
+    assertEquals(200, resp.status);
+    verify(variants).replaceVariants(any(), any(), any(), any());
+  }
+
+  @Test
+  void variants_rejectsOtherMethods() throws IOException {
+    Resp resp = new Resp();
+    handler(Mockito.mock(ProductListingService.class))
+        .handle(
+            "DELETE", reqWith(ctxWith(OrgRole.STAFF), ""), resp.mock, ORG, "/" + ID + "/variants");
+    assertEquals(405, resp.status);
   }
 
   @Test
