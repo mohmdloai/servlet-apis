@@ -20,6 +20,10 @@ public class SalesOrderResponse {
   private BigDecimal taxTotal;
   private BigDecimal shippingTotal;
   private BigDecimal discountTotal;
+
+  /** The frozen coupon code this order redeemed (roadmap item 9), or null. */
+  private String couponCode;
+
   private BigDecimal grandTotal;
   private String currency;
   private BigDecimal prepaidAmount;
@@ -60,6 +64,7 @@ public class SalesOrderResponse {
     r.taxTotal = order.getTaxTotal();
     r.shippingTotal = order.getShippingTotal();
     r.discountTotal = order.getDiscountTotal();
+    r.couponCode = order.getCouponCode();
     r.grandTotal = order.getGrandTotal();
     r.currency = order.getCurrency();
     r.prepaidAmount = order.getPrepaidAmount();
@@ -111,6 +116,10 @@ public class SalesOrderResponse {
 
   public BigDecimal getDiscountTotal() {
     return discountTotal;
+  }
+
+  public String getCouponCode() {
+    return couponCode;
   }
 
   public BigDecimal getGrandTotal() {

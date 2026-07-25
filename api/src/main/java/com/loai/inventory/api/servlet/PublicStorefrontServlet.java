@@ -15,6 +15,7 @@ import com.loai.inventory.api.dto.PublicCheckoutError;
 import com.loai.inventory.api.dto.PublicCheckoutRequest;
 import com.loai.inventory.api.dto.PublicCollectionResponse;
 import com.loai.inventory.api.dto.PublicCommentResponse;
+import com.loai.inventory.api.dto.PublicCouponResponse;
 import com.loai.inventory.api.dto.PublicListingResponse;
 import com.loai.inventory.api.dto.PublicListingsPageResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
@@ -22,9 +23,11 @@ import com.loai.inventory.api.dto.PublicPageResponse;
 import com.loai.inventory.api.dto.PublicPageSummaryResponse;
 import com.loai.inventory.api.dto.PublicReviewResponse;
 import com.loai.inventory.api.dto.StorefrontProfileResponse;
+import com.loai.inventory.api.dto.ValidateCouponRequest;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.service.CouponService;
 import com.loai.inventory.service.ListingCommentService;
 import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.SalesOrderService;
@@ -66,6 +69,9 @@ import java.util.List;
  *       {@code max-age=300}
  *   <li>{@code GET /api/public/{orgSlug}/pages/{kind}} — one text page, both bodies verbatim (C4);
  *       {@code max-age=300}
+ *   <li>{@code POST /api/public/{orgSlug}/coupons/validate} — the anonymous coupon preview (roadmap
+ *       item 9): {@code {code, subtotal}} → {@code {code, discount}} or a calm 400; {@code
+ *       no-store}, own strict {@code rl:pub-coupon} bucket
  *   <li>{@code POST /api/public/{orgSlug}/checkout} — anonymous checkout (B5); {@code no-store}
  * </ul>
  *
@@ -90,6 +96,7 @@ public class PublicStorefrontServlet extends HttpServlet {
   private static final int MAX_AVAILABILITY_SLUGS = 100;
 
   private StorefrontService service;
+  private CouponService couponService;
   private StorefrontPageService pageService;
   private CustomerAuthService customerAuthService;
   private ListingReviewService reviewService;
@@ -103,6 +110,7 @@ public class PublicStorefrontServlet extends HttpServlet {
   public void init() {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.service = config.storefrontService;
+    this.couponService = config.couponService;
     this.pageService = config.storefrontPageService;
     this.customerAuthService = config.customerAuthService;
     this.reviewService = config.listingReviewService;
@@ -123,6 +131,8 @@ public class PublicStorefrontServlet extends HttpServlet {
         // Writes: anonymous checkout, and the customer-portal OTP bootstrap (request/verify-code).
         if (parts.length == 2 && "checkout".equals(parts[1])) {
           doCheckout(req, resp, parts[0]);
+        } else if (parts.length == 3 && "coupons".equals(parts[1]) && "validate".equals(parts[2])) {
+          doValidateCoupon(req, resp, parts[0]);
         } else if (parts.length == 3 && "portal".equals(parts[1])) {
           doPortalBootstrap(req, resp, parts[0], parts[2]);
         } else {
@@ -401,11 +411,34 @@ public class PublicStorefrontServlet extends HttpServlet {
                 l == null ? 0 : l.getQuantity()));
       }
     }
-    CheckoutInput input = new CheckoutInput(customer, lines, body.getNotes(), body.getLocale());
+    CheckoutInput input =
+        new CheckoutInput(customer, lines, body.getNotes(), body.getLocale(), body.getCoupon());
 
     CheckoutResult result = service.checkout(orgSlug, input, idempotencyKey.trim());
     // 201 on a fresh order; 200 when a duplicate Idempotency-Key replayed the prior order.
     writeJson(resp, result.created() ? 201 : 200, PublicOrderResponse.from(result), CACHE_NONE);
+  }
+
+  /**
+   * The anonymous coupon preview (roadmap item 9): what would this code take off a basket of this
+   * subtotal? <b>Advisory</b> — it takes no lock and reserves nothing, so the answer can go stale;
+   * placement re-validates inside its transaction and is the authority. {@code no-store}, because a
+   * cached discount is a wrong discount, and its own strict rate bucket, because a code endpoint is
+   * an enumeration surface.
+   *
+   * <p>No {@code Idempotency-Key} is required: this writes nothing.
+   */
+  private void doValidateCoupon(HttpServletRequest req, HttpServletResponse resp, String orgSlug)
+      throws IOException {
+    ValidateCouponRequest body = readBody(req, ValidateCouponRequest.class);
+    if (body.getSubtotal() == null || body.getSubtotal().signum() < 0) {
+      throw new ValidationException("subtotal is required and must be >= 0");
+    }
+    // Org resolution goes through the same opaque 404 as every other public read.
+    java.util.UUID orgId = service.profileOrgId(orgSlug);
+    CouponService.Applied applied =
+        couponService.preview(orgId, body.getCode(), body.getSubtotal());
+    writeJson(resp, 200, PublicCouponResponse.from(applied), CACHE_NONE);
   }
 
   /**

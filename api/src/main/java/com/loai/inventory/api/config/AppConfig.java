@@ -13,6 +13,7 @@ import com.loai.inventory.common.storage.ObjectStorageFactory;
 import com.loai.inventory.domain.repository.AppUserMagicTokenRepositoryFactory;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
 import com.loai.inventory.domain.repository.CollectionRepositoryFactory;
+import com.loai.inventory.domain.repository.CouponRepositoryFactory;
 import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerAddressRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerMagicTokenRepositoryFactory;
@@ -50,6 +51,7 @@ import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.CollectionRepositoryFactoryImpl;
+import com.loai.inventory.repository.CouponRepositoryFactoryImpl;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerAddressRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
@@ -86,6 +88,7 @@ import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CategoryService;
 import com.loai.inventory.service.CollectionService;
+import com.loai.inventory.service.CouponService;
 import com.loai.inventory.service.CreditNoteService;
 import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.CustomerService;
@@ -186,6 +189,7 @@ public class AppConfig {
   public final ImpersonationEventRepository impersonationEventRepository;
   public final CategoryRepositoryFactory categoryRepositoryFactory;
   public final CollectionRepositoryFactory collectionRepositoryFactory;
+  public final CouponRepositoryFactory couponRepositoryFactory;
   public final NotificationRepositoryFactory notificationRepositoryFactory;
   public final NotificationPreferenceRepositoryFactory notificationPreferenceRepositoryFactory;
   public final CustomerMagicTokenRepositoryFactory customerMagicTokenRepositoryFactory;
@@ -237,6 +241,7 @@ public class AppConfig {
   public final ProductService productService;
   public final CategoryService categoryService;
   public final CollectionService collectionService;
+  public final CouponService couponService;
   public final NotificationService notificationService;
   public final MagicLinkService magicLinkService;
   public final CustomerOtpStore customerOtpStore;
@@ -315,6 +320,7 @@ public class AppConfig {
     this.impersonationEventRepository = new ImpersonationEventRepositoryImpl(dsl);
     this.categoryRepositoryFactory = new CategoryRepositoryFactoryImpl();
     this.collectionRepositoryFactory = new CollectionRepositoryFactoryImpl();
+    this.couponRepositoryFactory = new CouponRepositoryFactoryImpl();
     this.notificationRepositoryFactory = new NotificationRepositoryFactoryImpl();
     this.notificationPreferenceRepositoryFactory =
         new NotificationPreferenceRepositoryFactoryImpl();
@@ -483,6 +489,8 @@ public class AppConfig {
             objectStorage);
     // After productListingService — the curation read reuses its enrichment (thumbnails, status
     // badges) so a collection row renders exactly like a featured one.
+    // Before salesOrderService — the placement resolves a coupon inside its own transaction.
+    this.couponService = new CouponService(dsl, couponRepositoryFactory);
     this.collectionService =
         new CollectionService(
             dsl,
@@ -607,7 +615,8 @@ public class AppConfig {
             refundService,
             notificationService,
             magicLinkService,
-            emailGate);
+            emailGate,
+            couponService);
     this.storefrontService =
         new StorefrontService(
             dsl,

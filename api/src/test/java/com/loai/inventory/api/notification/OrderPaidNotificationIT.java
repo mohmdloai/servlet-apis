@@ -203,7 +203,9 @@ class OrderPaidNotificationIT {
             refundService,
             notificationService,
             magicLink,
-            com.loai.inventory.api.support.TestWiring.permissiveEmailGate());
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
+            new com.loai.inventory.service.CouponService(
+                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()));
   }
 
   @AfterAll

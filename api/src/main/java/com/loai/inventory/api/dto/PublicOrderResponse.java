@@ -24,6 +24,14 @@ public class PublicOrderResponse {
   private BigDecimal taxTotal;
   private BigDecimal shippingTotal;
   private BigDecimal discountTotal;
+
+  /**
+   * The frozen coupon code this order redeemed (roadmap item 9), or null. Paired with the existing
+   * {@code discount_total}, it is what lets the confirmation and the tracker say WHICH code
+   * produced the reduction — the honest minus-row, never a "was" price.
+   */
+  private String couponCode;
+
   private BigDecimal grandTotal;
   private OffsetDateTime placedAt;
   private OffsetDateTime expiresAt;
@@ -42,6 +50,7 @@ public class PublicOrderResponse {
     out.taxTotal = r.order().getTaxTotal();
     out.shippingTotal = r.order().getShippingTotal();
     out.discountTotal = r.order().getDiscountTotal();
+    out.couponCode = r.order().getCouponCode();
     out.grandTotal = r.order().getGrandTotal();
     out.placedAt = r.order().getPlacedAt();
     out.expiresAt = r.order().getExpiresAt();
@@ -73,6 +82,7 @@ public class PublicOrderResponse {
     out.taxTotal = order.getTaxTotal();
     out.shippingTotal = order.getShippingTotal();
     out.discountTotal = order.getDiscountTotal();
+    out.couponCode = order.getCouponCode();
     out.grandTotal = order.getGrandTotal();
     out.placedAt = order.getPlacedAt();
     out.expiresAt = order.getExpiresAt();
@@ -124,6 +134,10 @@ public class PublicOrderResponse {
 
   public BigDecimal getDiscountTotal() {
     return discountTotal;
+  }
+
+  public String getCouponCode() {
+    return couponCode;
   }
 
   public BigDecimal getGrandTotal() {

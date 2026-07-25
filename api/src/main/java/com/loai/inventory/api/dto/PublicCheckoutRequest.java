@@ -23,6 +23,21 @@ public class PublicCheckoutRequest {
     return customer;
   }
 
+  /**
+   * The optional coupon code the shopper applied (roadmap item 9, anonymous checkout). Absent/blank
+   * = no coupon — every pre-V72 client, and the overwhelming majority of orders. Re-validated
+   * inside the placement transaction; the pre-checkout preview is advisory only.
+   */
+  private String coupon;
+
+  public String getCoupon() {
+    return coupon;
+  }
+
+  public void setCoupon(String coupon) {
+    this.coupon = coupon;
+  }
+
   public String getLocale() {
     return locale;
   }

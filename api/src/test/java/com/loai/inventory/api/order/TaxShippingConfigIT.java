@@ -170,7 +170,9 @@ class TaxShippingConfigIT {
             refundService,
             notificationService,
             magicLink,
-            TestWiring.permissiveEmailGate());
+            TestWiring.permissiveEmailGate(),
+            new com.loai.inventory.service.CouponService(
+                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()));
   }
 
   @AfterAll

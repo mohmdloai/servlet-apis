@@ -173,7 +173,9 @@ class CustomerResolutionAtPlacementIT {
                 magicLink,
                 NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS),
             magicLink,
-            com.loai.inventory.api.support.TestWiring.permissiveEmailGate());
+            com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
+            new com.loai.inventory.service.CouponService(
+                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()));
     flaggingService =
         new SalesOrderService(
             dsl,
@@ -189,7 +191,9 @@ class CustomerResolutionAtPlacementIT {
             new com.loai.inventory.service.email.EmailGate(
                 java.util.Set.of("mailinator.com"),
                 domain -> com.loai.inventory.service.email.MxResolver.MxResult.UNDELIVERABLE,
-                true));
+                true),
+            new com.loai.inventory.service.CouponService(
+                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()));
   }
 
   @AfterAll

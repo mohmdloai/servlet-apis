@@ -81,6 +81,10 @@ public class RateLimitFilter implements Filter {
   // Self-serve auth writes (story 87): register mints a live account + org per call, and
   // forgot-password emails an arbitrary address per call — both previously fell through the
   // final fail-open else, i.e. completely unthrottled.
+  // Coupon preview (roadmap item 9): an anonymous endpoint that answers "does this code exist and
+  // what does it give?" — i.e. an enumeration surface. Strict and its own bucket, so a scraper
+  // hunting codes exhausts 10/min rather than riding the generous public-read budget.
+  static final int DEFAULT_PUBLIC_COUPON_LIMIT = 10;
   static final int DEFAULT_AUTH_REGISTER_LIMIT = 3;
   static final int DEFAULT_AUTH_FORGOT_LIMIT = 5;
 
@@ -94,6 +98,7 @@ public class RateLimitFilter implements Filter {
   private int portalReviewLimit = DEFAULT_PORTAL_REVIEW_LIMIT;
   private int portalCommentLimit = DEFAULT_PORTAL_COMMENT_LIMIT;
   private int paymentClaimLimit = DEFAULT_PAYMENT_CLAIM_LIMIT;
+  private int publicCouponLimit = DEFAULT_PUBLIC_COUPON_LIMIT;
   private int authRegisterLimit = DEFAULT_AUTH_REGISTER_LIMIT;
   private int authForgotLimit = DEFAULT_AUTH_FORGOT_LIMIT;
   private boolean trustProxy;
@@ -133,6 +138,7 @@ public class RateLimitFilter implements Filter {
     this.portalReviewLimit = envIntOrDefault("PORTAL_REVIEW_LIMIT", DEFAULT_PORTAL_REVIEW_LIMIT);
     this.portalCommentLimit = envIntOrDefault("PORTAL_COMMENT_LIMIT", DEFAULT_PORTAL_COMMENT_LIMIT);
     this.paymentClaimLimit = envIntOrDefault("PAYMENT_CLAIM_LIMIT", DEFAULT_PAYMENT_CLAIM_LIMIT);
+    this.publicCouponLimit = envIntOrDefault("PUBLIC_COUPON_LIMIT", DEFAULT_PUBLIC_COUPON_LIMIT);
     this.authRegisterLimit = envIntOrDefault("AUTH_REGISTER_LIMIT", DEFAULT_AUTH_REGISTER_LIMIT);
     this.authForgotLimit = envIntOrDefault("AUTH_FORGOT_LIMIT", DEFAULT_AUTH_FORGOT_LIMIT);
     this.trustProxy = Boolean.parseBoolean(System.getenv("TRUST_PROXY"));
@@ -186,6 +192,14 @@ public class RateLimitFilter implements Filter {
       // catch-alls so it isn't absorbed by the generous read buckets.
       keyPrefix = "rl:payment-claim:";
       limit = paymentClaimLimit;
+    } else if ("POST".equals(req.getMethod()) && path.endsWith("/coupons/validate")) {
+      // The coupon preview (roadmap item 9) — matched AHEAD of the /api/public/ catch-all so it
+      // gets
+      // its own strict budget instead of the generous read one. It lives under /api/public/, so
+      // without this branch it would inherit pub-read's 120/min, which is a code-scraping
+      // allowance.
+      keyPrefix = "rl:pub-coupon:";
+      limit = publicCouponLimit;
     } else if (path.startsWith("/api/portal/")) {
       keyPrefix = "rl:portal-read:";
       limit = publicReadLimit;

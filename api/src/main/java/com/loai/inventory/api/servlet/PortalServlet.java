@@ -849,7 +849,8 @@ public class PortalServlet extends HttpServlet {
             body.getAddressId(),
             body.getAddress() == null ? null : toAddressInput(body.getAddress()),
             Boolean.TRUE.equals(body.getSaveAddress()),
-            body.getLocale());
+            body.getLocale(),
+            body.getCoupon());
     StorefrontService.CheckoutResult result =
         portalService.checkout(
             principal.orgId(), principal.customerId(), input, idempotencyKey.trim());

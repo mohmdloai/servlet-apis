@@ -332,6 +332,9 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
         .set(SALES_ORDER.PLACED_AT, order.getPlacedAt())
         .set(SALES_ORDER.EXPIRES_AT, order.getExpiresAt())
         .set(SALES_ORDER.NOTES, order.getNotes())
+        // Roadmap item 9: the redeemed coupon + its frozen display code (both null without one).
+        .set(SALES_ORDER.COUPON_ID, order.getCouponId())
+        .set(SALES_ORDER.COUPON_CODE, order.getCouponCode())
         .execute();
 
     if (!lines.isEmpty()) {
@@ -399,6 +402,15 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   // Mapping
 
   private SalesOrder toSalesOrder(SalesOrderRecord r) {
+    SalesOrder order = rehydrateBase(r);
+    // The coupon snapshot is plain frozen data, not state-machine state, so it rides as fields
+    // rather than widening the already 22-parameter rehydrate signature.
+    order.setCouponId(r.getCouponId());
+    order.setCouponCode(r.getCouponCode());
+    return order;
+  }
+
+  private static SalesOrder rehydrateBase(SalesOrderRecord r) {
     return SalesOrder.rehydrate(
         r.getId(),
         r.getOrgId(),

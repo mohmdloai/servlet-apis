@@ -14,6 +14,7 @@ import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesInvoiceRepository;
 import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,6 +48,11 @@ import org.slf4j.LoggerFactory;
 public final class InvoiceService {
 
   private static final Logger log = LoggerFactory.getLogger(InvoiceService.class);
+
+  /** Money is scale-2 HALF_EVEN system-wide; the proration below is money arithmetic. */
+  private static final int MONEY_SCALE = 2;
+
+  private static final RoundingMode MONEY_ROUNDING = RoundingMode.HALF_EVEN;
 
   /**
    * Postgres-named unique index behind {@code UNIQUE (org_id, invoice_number)} on sales_invoice.
@@ -156,7 +162,7 @@ public final class InvoiceService {
             subtotal,
             taxTotal,
             shippingToBill(invoiceRepo, orgId, order),
-            BigDecimal.ZERO, // v1: no per-fulfillment discount proration
+            discountToBill(invoiceRepo, orgId, order, subtotal),
             order.getCurrency(),
             invoiceCustomerName(customer),
             customer == null ? null : customer.getEmail(),
@@ -248,6 +254,79 @@ public final class InvoiceService {
             .filter(inv -> !inv.isVoid())
             .anyMatch(inv -> inv.getShippingTotal() != null && inv.getShippingTotal().signum() > 0);
     return alreadyBilled ? BigDecimal.ZERO : order.getShippingTotal();
+  }
+
+  /**
+   * The order-level discount to bill on the invoice being issued (V72, roadmap item 9) — the
+   * sibling of {@link #shippingToBill} and the reason it could not simply copy it.
+   *
+   * <p>Shipping is billed on the first live invoice only, because a shipping fee is indivisible: it
+   * is one delivery charge and it fits inside any invoice's own total. A discount is neither. It
+   * can be larger than the first fulfillment's goods value, and charging it all to invoice #1 would
+   * drive that invoice's grand total negative — so it <b>prorates</b> across the invoices by their
+   * share of the goods:
+   *
+   * <pre>
+   *   remainingDiscount = order.discount_total − Σ live invoices' discount_total
+   *   remainingSubtotal = order.subtotal       − Σ live invoices' subtotal
+   *   bill = (invoiceSubtotal >= remainingSubtotal)   // the completing invoice
+   *          ? remainingDiscount                      // takes the exact remainder
+   *          : round(remainingDiscount × invoiceSubtotal / remainingSubtotal, HALF_EVEN)
+   * </pre>
+   *
+   * <p>Three properties, all load-bearing:
+   *
+   * <ul>
+   *   <li><b>Penny-exact.</b> Every partial share rounds, but the invoice that completes the
+   *       order's goods takes the exact remainder rather than its own rounded share — so an
+   *       odd-piastre discount lands whole and {@code Σ live invoice grand totals == order grand
+   *       total} survives, which is the identity the CLOSED roll-up and the FIFO allocator both
+   *       depend on.
+   *   <li><b>Self-healing on void+reissue.</b> Both sums are re-derived from the <em>live</em> rows
+   *       on every call (never from a stored cursor), so voiding an invoice returns its share to
+   *       the pool and the replacement picks it back up — the same property that makes {@code
+   *       shippingToBill} correct.
+   *   <li><b>Per-invoice {@code grand > 0} holds.</b> The prorated share never exceeds the
+   *       invoice's own subtotal: the partial branch scales by {@code invoiceSubtotal /
+   *       remainingSubtotal ≤ 1} against a remainder that is itself ≤ the remaining subtotal, and
+   *       the completing branch hands over a remainder bounded by that same relation.
+   * </ul>
+   */
+  private static BigDecimal discountToBill(
+      SalesInvoiceRepository invoiceRepo,
+      UUID orgId,
+      SalesOrder order,
+      BigDecimal invoiceSubtotal) {
+    if (order.getDiscountTotal() == null || order.getDiscountTotal().signum() <= 0) {
+      return BigDecimal.ZERO;
+    }
+    List<SalesInvoice> live =
+        invoiceRepo.findByOrderId(orgId, order.getId()).stream()
+            .filter(inv -> !inv.isVoid())
+            .toList();
+    BigDecimal billedDiscount = BigDecimal.ZERO;
+    BigDecimal billedSubtotal = BigDecimal.ZERO;
+    for (SalesInvoice inv : live) {
+      if (inv.getDiscountTotal() != null) {
+        billedDiscount = billedDiscount.add(inv.getDiscountTotal());
+      }
+      if (inv.getSubtotal() != null) {
+        billedSubtotal = billedSubtotal.add(inv.getSubtotal());
+      }
+    }
+    BigDecimal remainingDiscount = order.getDiscountTotal().subtract(billedDiscount);
+    if (remainingDiscount.signum() <= 0) {
+      return BigDecimal.ZERO;
+    }
+    BigDecimal remainingSubtotal = order.getSubtotal().subtract(billedSubtotal);
+    // The completing invoice (or a degenerate zero/negative remainder, which only a reissue with
+    // corrected lines can produce) takes the exact remainder — that is what keeps the sum identity.
+    if (remainingSubtotal.signum() <= 0 || invoiceSubtotal.compareTo(remainingSubtotal) >= 0) {
+      return remainingDiscount.min(invoiceSubtotal.max(BigDecimal.ZERO)).max(BigDecimal.ZERO);
+    }
+    return remainingDiscount
+        .multiply(invoiceSubtotal)
+        .divide(remainingSubtotal, MONEY_SCALE, MONEY_ROUNDING);
   }
 
   /**

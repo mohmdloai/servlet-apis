@@ -99,6 +99,35 @@ class RateLimitFilterTest {
   }
 
   @Test
+  void couponValidate_selectsItsOwnStrictBucket_notThePublicReadOne() throws Exception {
+    // Roadmap item 9: the preview lives under /api/public/, so without its own branch it would
+    // inherit pub-read's generous budget — which is a code-scraping allowance on an endpoint whose
+    // whole job is answering "does this code exist?".
+    Fixture f = new Fixture(120, 5, false);
+    f.req("POST", "/api/public", "/acme/coupons/validate", "6.6.6.6");
+    when(f.jedis.incr("rl:pub-coupon:6.6.6.6")).thenReturn(1L);
+
+    f.filter.doFilter(f.request, f.response, f.chain);
+
+    verify(f.jedis).incr("rl:pub-coupon:6.6.6.6");
+    verify(f.jedis).expire("rl:pub-coupon:6.6.6.6", 60);
+    verify(f.jedis, never()).incr("rl:pub-read:6.6.6.6");
+    verify(f.chain).doFilter(f.request, f.response);
+  }
+
+  @Test
+  void couponValidate_eleventhRequestInWindow_trips429() throws Exception {
+    Fixture f = new Fixture(120, 5, false);
+    f.req("POST", "/api/public", "/acme/coupons/validate", "7.7.7.7");
+    when(f.jedis.incr("rl:pub-coupon:7.7.7.7")).thenReturn(11L); // default limit 10
+
+    f.filter.doFilter(f.request, f.response, f.chain);
+
+    verify(f.response).setStatus(429);
+    verify(f.chain, never()).doFilter(f.request, f.response);
+  }
+
+  @Test
   void register_fourthRequestInWindow_trips429() throws Exception {
     Fixture f = new Fixture(120, 5, false);
     f.req("POST", "/api/auth", "/register", "4.4.4.4");

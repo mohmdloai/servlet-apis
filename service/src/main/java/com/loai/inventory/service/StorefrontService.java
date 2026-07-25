@@ -391,6 +391,17 @@ public class StorefrontService {
     return null;
   }
 
+  /**
+   * Resolve a public org slug to its id through the same active-only, opaque-404 gate every other
+   * public read uses (roadmap item 9). Exposed because the coupon preview is org-scoped but is not
+   * a catalog read — it belongs to {@code CouponService}, which knows nothing about storefront
+   * slugs. The slug→id boundary stays in one place rather than being re-implemented next to the
+   * route.
+   */
+  public UUID profileOrgId(String orgSlug) {
+    return resolveOrg(orgSlug).getId();
+  }
+
   // collections (roadmap item 8)
 
   /**
@@ -444,11 +455,26 @@ public class StorefrontService {
       SalesOrderService.CustomerInput customer,
       List<CheckoutLine> lines,
       String notes,
-      String locale) {
+      String locale,
+      /**
+       * The optional coupon code the shopper applied (roadmap item 9). Null/blank = no coupon,
+       * which is every pre-V72 caller. Re-validated inside the placement txn, never trusted from
+       * the preview — the slot can vanish between the two.
+       */
+      String couponCode) {
     /** Locale-less convenience (→ org default) — pre-L2b callers. */
     public CheckoutInput(
         SalesOrderService.CustomerInput customer, List<CheckoutLine> lines, String notes) {
-      this(customer, lines, notes, null);
+      this(customer, lines, notes, null, null);
+    }
+
+    /** Coupon-less convenience — pre-V72 callers (every existing test and the locale-only path). */
+    public CheckoutInput(
+        SalesOrderService.CustomerInput customer,
+        List<CheckoutLine> lines,
+        String notes,
+        String locale) {
+      this(customer, lines, notes, locale, null);
     }
   }
 
@@ -535,7 +561,13 @@ public class StorefrontService {
     try {
       SalesOrderService.StorefrontPlaced placed =
           salesOrderService.placeStorefrontOrder(
-              orgId, input.customer(), orderLines, idempotencyKey, input.notes(), STOREFRONT_ACTOR);
+              orgId,
+              input.customer(),
+              orderLines,
+              idempotencyKey,
+              input.notes(),
+              input.couponCode(),
+              STOREFRONT_ACTOR);
       return new CheckoutResult(
           placed.order(),
           placed.lines(),
