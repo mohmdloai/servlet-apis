@@ -158,6 +158,15 @@ public interface ProductListingRepository {
       int offset,
       int limit);
 
+  /**
+   * The org's PUBLISHED listings among {@code ids}, in no guaranteed order (the caller re-imposes
+   * its own — see {@code StorefrontService.publishedViewsByIds}). Ids that are missing, belong to
+   * another org, or are not currently PUBLISHED are simply absent from the result rather than an
+   * error: this backs the portal wishlist, where an unpublished saved item must quietly stop
+   * serving without destroying the saved row (roadmap item 3).
+   */
+  List<ProductListing> findPublishedByIds(UUID orgId, Collection<UUID> ids);
+
   long count(UUID orgId);
 
   long countByStatus(UUID orgId, ListingStatus status);

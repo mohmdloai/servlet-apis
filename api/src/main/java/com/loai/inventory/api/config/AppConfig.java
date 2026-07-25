@@ -16,6 +16,7 @@ import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerAddressRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerMagicTokenRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.CustomerWishlistRepositoryFactory;
 import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
 import com.loai.inventory.domain.repository.ImpersonationEventRepository;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
@@ -49,6 +50,7 @@ import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerAddressRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
+import com.loai.inventory.repository.CustomerWishlistRepositoryFactoryImpl;
 import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
@@ -107,6 +109,7 @@ import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.StorefrontBannerService;
 import com.loai.inventory.service.StorefrontPageService;
 import com.loai.inventory.service.StorefrontService;
+import com.loai.inventory.service.WishlistService;
 import com.loai.inventory.service.auth.AccountService;
 import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.AuthService;
@@ -184,6 +187,7 @@ public class AppConfig {
   public final CustomerRepositoryFactory customerRepositoryFactory;
   public final CustomerAddressRepositoryFactory customerAddressRepositoryFactory;
   public final ListingReviewRepositoryFactory listingReviewRepositoryFactory;
+  public final CustomerWishlistRepositoryFactory customerWishlistRepositoryFactory;
   public final ListingCommentRepositoryFactory listingCommentRepositoryFactory;
   public final InventoryRepositoryFactory inventoryRepositoryFactory;
   public final InventoryLogRepositoryFactory inventoryLogRepositoryFactory;
@@ -228,6 +232,7 @@ public class AppConfig {
   public final CustomerAuthService customerAuthService;
   public final CustomerPortalService customerPortalService;
   public final ListingReviewService listingReviewService;
+  public final WishlistService wishlistService;
   public final ListingCommentService listingCommentService;
   public final ProductListingService productListingService;
   public final StorefrontBannerService storefrontBannerService;
@@ -307,6 +312,7 @@ public class AppConfig {
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
     this.customerAddressRepositoryFactory = new CustomerAddressRepositoryFactoryImpl();
     this.listingReviewRepositoryFactory = new ListingReviewRepositoryFactoryImpl();
+    this.customerWishlistRepositoryFactory = new CustomerWishlistRepositoryFactoryImpl();
     this.listingCommentRepositoryFactory = new ListingCommentRepositoryFactoryImpl();
     this.inventoryRepositoryFactory = new InventoryRepositoryFactoryImpl();
     this.inventoryLogRepositoryFactory = new InventoryLogRepositoryFactoryImpl();
@@ -606,6 +612,14 @@ public class AppConfig {
             customerRepositoryFactory,
             orgRepositoryFactory,
             notificationService);
+    // Wishlist (roadmap item 3): storage + the PUBLISHED-only read, which it borrows from the
+    // storefront service so a saved item renders as exactly the same card as a catalog one.
+    this.wishlistService =
+        new WishlistService(
+            dsl,
+            customerWishlistRepositoryFactory,
+            productListingRepositoryFactory,
+            storefrontService);
     this.creditNoteService =
         new CreditNoteService(
             dsl,

@@ -531,6 +531,22 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   }
 
   @Override
+  public List<ProductListing> findPublishedByIds(UUID orgId, Collection<UUID> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    return selectListing()
+        .where(
+            PRODUCT_LISTING
+                .ORG_ID
+                .eq(orgId)
+                .and(PRODUCT_LISTING.ID.in(ids))
+                .and(PRODUCT_LISTING.STATUS.eq(toGenerated(ListingStatus.PUBLISHED))))
+        .fetch()
+        .map(this::toListing);
+  }
+
+  @Override
   public List<ProductListing> findAll(UUID orgId, int offset, int limit) {
     return selectListing()
         .where(PRODUCT_LISTING.ORG_ID.eq(orgId))

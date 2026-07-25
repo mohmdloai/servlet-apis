@@ -606,17 +606,36 @@ public class StorefrontService {
             featuredOnly,
             soldOnly);
 
-    // One batched image query for the whole page (avoids an N+1), and the grid presigns only each
-    // listing's primary image — full galleries and category breadcrumbs are a detail-view concern.
+    return new ListingPage(
+        enrich(rows, orgId, listings, resolvedLocale, defaultLocale), total, page, size);
+  }
+
+  /**
+   * Turn a page of PUBLISHED listing rows into card {@link ListingView}s, batching every decoration
+   * so the cost stays four queries regardless of page size (no N+1): the primary image, stock
+   * availability, the APPROVED-review aggregate, and the per-language content.
+   *
+   * <p>Shared by the catalog read and the portal wishlist read, which is the point — a saved item
+   * must render as exactly the same card as the catalog one, down to the absent-not-zero rating and
+   * the quantity-free {@code in_stock} boolean. The returned list preserves {@code rows}' order, so
+   * the caller owns the ordering (catalog: the SQL sort; wishlist: save recency).
+   */
+  private List<ListingView> enrich(
+      List<ProductListing> rows,
+      UUID orgId,
+      ProductListingRepository listings,
+      String resolvedLocale,
+      String defaultLocale) {
+    List<UUID> listingIds = rows.stream().map(ProductListing::getId).toList();
+    // One batched image query for the whole page, and the grid presigns only each listing's primary
+    // image — full galleries and category breadcrumbs are a detail-view concern.
     Map<UUID, ProductListingImage> primaryByListing = new HashMap<>();
-    for (ProductListingImage img :
-        listings.findImagesForListings(rows.stream().map(ProductListing::getId).toList())) {
+    for (ProductListingImage img : listings.findImagesForListings(listingIds)) {
       // Ordered by sort_order asc, so the first one seen per listing is its primary image.
       primaryByListing.putIfAbsent(img.getListingId(), img);
     }
-    // One more batch query — availability by the page's product_ids (B2), mirroring the image
-    // batch.
-    // Untracked/absent → not in the map → not in stock.
+    // Availability by the page's product_ids (B2), mirroring the image batch. Untracked/absent →
+    // not in the map → not in stock.
     Map<UUID, Integer> availableByProduct =
         inventoryRepoFactory
             .create(rootDsl)
@@ -625,37 +644,70 @@ public class StorefrontService {
     // And the APPROVED-review aggregate for the page (R1, epic §8) — one grouped query, absent
     // when a listing has no approved review (never a fabricated zero).
     Map<UUID, ListingReviewRepository.Aggregate> aggregateByListing =
-        reviewRepoFactory
-            .create(rootDsl)
-            .findAggregates(orgId, rows.stream().map(ProductListing::getId).toList());
+        reviewRepoFactory.create(rootDsl).findAggregates(orgId, listingIds);
     // Batch the per-language content and resolve each listing to the requested locale (L2).
     Map<UUID, List<ProductListingTranslation>> translationsByListing =
-        listings.findTranslationsForListings(rows.stream().map(ProductListing::getId).toList());
-    List<ListingView> items =
-        rows.stream()
-            .map(
-                l -> {
-                  ProductListingImage primary = primaryByListing.get(l.getId());
-                  List<PublicImage> images =
-                      primary == null ? List.of() : List.of(toPublicImage(primary));
-                  boolean inStock = availableByProduct.getOrDefault(l.getProductId(), 0) > 0;
-                  ListingReviewRepository.Aggregate agg = aggregateByListing.get(l.getId());
-                  ResolvedContent content =
-                      resolveContent(
-                          translationsByListing.get(l.getId()), resolvedLocale, defaultLocale);
-                  return new ListingView(
-                      l.getSlug(),
-                      content.title(),
-                      content.marketingCopy(),
-                      l.getSalesPrice(),
-                      inStock,
-                      images,
-                      List.of(),
-                      formatRatingAvg(agg),
-                      agg == null ? null : agg.count());
-                })
-            .toList();
-    return new ListingPage(items, total, page, size);
+        listings.findTranslationsForListings(listingIds);
+    return rows.stream()
+        .map(
+            l -> {
+              ProductListingImage primary = primaryByListing.get(l.getId());
+              List<PublicImage> images =
+                  primary == null ? List.of() : List.of(toPublicImage(primary));
+              boolean inStock = availableByProduct.getOrDefault(l.getProductId(), 0) > 0;
+              ListingReviewRepository.Aggregate agg = aggregateByListing.get(l.getId());
+              ResolvedContent content =
+                  resolveContent(
+                      translationsByListing.get(l.getId()), resolvedLocale, defaultLocale);
+              return new ListingView(
+                  l.getSlug(),
+                  content.title(),
+                  content.marketingCopy(),
+                  l.getSalesPrice(),
+                  inStock,
+                  images,
+                  List.of(),
+                  formatRatingAvg(agg),
+                  agg == null ? null : agg.count());
+            })
+        .toList();
+  }
+
+  /**
+   * The PUBLISHED-only read behind the portal wishlist (roadmap item 3, {@code
+   * stories/customer_wishlist.md}): resolve saved listing ids to fully-enriched card views, in the
+   * <b>given id order</b> (the wishlist's save recency), dropping any id that is not currently
+   * PUBLISHED.
+   *
+   * <p>Dropping rather than erroring is the contract: a saved listing that the merchant unpublishes
+   * simply stops appearing and returns on republish — the saved row is never destroyed behind the
+   * customer's back, and the wishlist page never shows an item a shopper cannot buy.
+   *
+   * <p>Takes {@code orgId} rather than a slug because the caller is the portal, whose session
+   * principal already carries the org — there is no slug to resolve and no second lookup to pay
+   * for.
+   */
+  public List<ListingView> publishedViewsByIds(UUID orgId, List<UUID> ids, String locale) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    Org org =
+        orgRepoFactory
+            .create(rootDsl)
+            .findById(orgId)
+            .orElseThrow(() -> new NotFoundException("Org not found: " + orgId));
+    String defaultLocale = defaultLocaleOf(org);
+    String resolvedLocale = resolveRequestedLocale(locale, defaultLocale);
+    ProductListingRepository listings = listingRepoFactory.create(rootDsl);
+
+    Map<UUID, ProductListing> byId =
+        listings.findPublishedByIds(orgId, ids).stream()
+            .collect(java.util.stream.Collectors.toMap(ProductListing::getId, l -> l));
+    // Re-impose the caller's order on the set the query returned (SQL's IN says nothing about it),
+    // and drop the ids that no longer resolve as PUBLISHED.
+    List<ProductListing> rows =
+        ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
+    return enrich(rows, orgId, listings, resolvedLocale, defaultLocale);
   }
 
   /** Detail read without an explicit locale — resolves to the org's default locale. */
