@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.loai.inventory.api.support.TestWiring;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
@@ -130,7 +131,8 @@ class PaymentTransactionReadIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
             paymentService,
-            refundService);
+            refundService,
+            TestWiring.storage());
   }
 
   @AfterAll

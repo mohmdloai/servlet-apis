@@ -5,13 +5,18 @@ import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.loai.inventory.api.dto.PaymentTransactionResponse;
+import com.loai.inventory.api.support.TestWiring;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListFilter;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
@@ -114,7 +119,8 @@ class ShopperPaymentClaimIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
             paymentService,
-            refundService);
+            refundService,
+            TestWiring.storage());
   }
 
   @AfterAll
@@ -156,6 +162,62 @@ class ShopperPaymentClaimIT {
     // Surfaces in the staff UNVERIFIED queue and persisted the proof key.
     assertEquals(1, unverifiedCount(orgId));
     assertEquals(proofKey, storedProofKey(txn.getId()));
+  }
+
+  /**
+   * The other half of collecting evidence: an operator has to be able to look at it. The claim
+   * slice stored the key and stopped there, so the screenshot was reachable only by opening the
+   * bucket by hand — which meant the "attach a screenshot" ask was, in practice, theatre.
+   */
+  @Test
+  void staffDetailRead_presignsTheShoppersProof_andTheListDoesNot() {
+    UUID orgId = createOrg("acme");
+    UUID customer = createCustomer(orgId);
+    Order order = seedPendingOrder(orgId, customer, "250.00", "0.00");
+    String proofKey = ObjectStorage.paymentProofKeyPrefix(orgId, order.id()) + "receipt.png";
+    UUID txnId =
+        service
+            .claim(orgId, new ClaimCommand(order.id(), customer, nextRef(), proofKey, null))
+            .transaction()
+            .getId();
+
+    var detail = service.get(orgId, txnId);
+    String url = detail.proofUrl();
+    assertNotNull(url, "the detail read hands staff a viewable link");
+    assertTrue(url.contains("receipt.png"), url);
+    assertTrue(url.contains("X-Amz-Signature"), "presigned, not a raw bucket path: " + url);
+
+    // The response carries the time-boxed URL, never the stored key — a client gets something that
+    // expires, not a handle it could keep using.
+    assertEquals(
+        url,
+        PaymentTransactionResponse.withProof(detail.transaction(), null, null, url).getProofUrl());
+
+    // The worklist stays lean: presigning every row would mint credentials nobody asked for, and
+    // short-lived URLs have no business sitting in a paged response.
+    var page = service.list(orgId, new ListFilter(null, null, null, null, null), 0, 20);
+    assertEquals(1, page.items().size());
+    assertNull(
+        PaymentTransactionResponse.from(page.items().get(0), null, null).getProofUrl(),
+        "no proof_url on list rows");
+  }
+
+  @Test
+  void staffDetailRead_hasNoProofUrlWhenTheShopperAttachedNothing() {
+    UUID orgId = createOrg("acme");
+    UUID customer = createCustomer(orgId);
+    Order order = seedPendingOrder(orgId, customer, "250.00", "0.00");
+    UUID txnId =
+        service
+            .claim(orgId, new ClaimCommand(order.id(), customer, nextRef(), null, null))
+            .transaction()
+            .getId();
+
+    var detail = service.get(orgId, txnId);
+    assertNull(detail.proofUrl(), "absent, never a broken link to an object that was never sent");
+    assertNull(
+        PaymentTransactionResponse.withProof(detail.transaction(), null, null, null).getProofUrl(),
+        "null is omitted by the global mapper, so a client branches on presence");
   }
 
   @Test

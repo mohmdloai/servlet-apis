@@ -133,7 +133,8 @@ class TaxShippingConfigIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new PaymentRepositoryFactoryImpl(),
             paymentService,
-            refundService);
+            refundService,
+            TestWiring.storage());
     ReservationService reservationService =
         new ReservationService(
             new InventoryRepositoryFactoryImpl(),
