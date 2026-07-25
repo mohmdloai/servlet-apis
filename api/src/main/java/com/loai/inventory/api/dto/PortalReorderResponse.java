@@ -34,9 +34,14 @@ public class PortalReorderResponse {
     return unavailable;
   }
 
-  /** One buyable cart item — the storefront adds it by {@code listing_slug} at {@code qty}. */
+  /**
+   * One buyable cart item — the storefront adds it by {@code listing_slug} (plus {@code variant},
+   * VG2) at {@code qty}. A line bought as an option comes back naming that option, so "buy it
+   * again" restores the same size/colour rather than a different one at the parent's price.
+   */
   public static class Item {
     private String listingSlug;
+    private String variant;
     private String title;
     private BigDecimal unitPrice;
     private boolean inStock;
@@ -45,6 +50,7 @@ public class PortalReorderResponse {
     private static Item of(ReorderItem src) {
       Item i = new Item();
       i.listingSlug = src.slug();
+      i.variant = src.variant();
       i.title = src.title();
       i.unitPrice = src.unitPrice();
       i.inStock = src.inStock();
@@ -54,6 +60,10 @@ public class PortalReorderResponse {
 
     public String getListingSlug() {
       return listingSlug;
+    }
+
+    public String getVariant() {
+      return variant;
     }
 
     public String getTitle() {

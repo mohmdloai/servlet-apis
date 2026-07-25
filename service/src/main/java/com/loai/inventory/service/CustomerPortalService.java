@@ -330,9 +330,13 @@ public class CustomerPortalService {
 
   // reorder (slice P4)
 
-  /** One resolved, currently-buyable cart item from a past order line. */
+  /**
+   * One resolved, currently-buyable cart item from a past order line. Since VG2 a line bought as a
+   * variant comes back with that variant's {@code key} and its composed title ("Shirt — Red / M"),
+   * so "buy it again" re-adds the same option rather than a different size at the parent's price.
+   */
   public record ReorderItem(
-      String slug, String title, BigDecimal unitPrice, boolean inStock, int qty) {}
+      String slug, String variant, String title, BigDecimal unitPrice, boolean inStock, int qty) {}
 
   /** A past order line whose product is no longer purchasable — reported, never added. */
   public record UnavailableItem(String description, int qty) {}
@@ -377,9 +381,17 @@ public class CustomerPortalService {
       if (r == null) {
         unavailable.add(new UnavailableItem(line.getDescription(), line.getQuantity()));
       } else {
+        // The variant's label is composed onto the title the same way checkout composes it, so a
+        // reorder row reads exactly like the cart line it will become.
+        String title = r.variantLabel() == null ? r.title() : r.title() + " — " + r.variantLabel();
         items.add(
             new ReorderItem(
-                r.slug(), r.title(), r.salesPrice(), r.available() > 0, line.getQuantity()));
+                r.slug(),
+                r.variantKey(),
+                title,
+                r.salesPrice(),
+                r.available() > 0,
+                line.getQuantity()));
       }
     }
     return new ReorderResult(items, unavailable);
@@ -387,8 +399,16 @@ public class CustomerPortalService {
 
   // checkout (slice P6)
 
-  /** One cart line at the authenticated checkout: a public listing slug + quantity. */
-  public record CheckoutLine(String listingSlug, int quantity) {}
+  /**
+   * One cart line at the authenticated checkout: a public listing slug, an optional {@code
+   * variantKey}, and a quantity — the same wire as the anonymous checkout (VG2).
+   */
+  public record CheckoutLine(String listingSlug, String variantKey, int quantity) {
+    /** Variant-less convenience — a listing sold as a single product (today's path). */
+    public CheckoutLine(String listingSlug, int quantity) {
+      this(listingSlug, null, quantity);
+    }
+  }
 
   /**
    * The authenticated checkout body. The customer is the session — no identity fields here. Exactly
@@ -483,20 +503,27 @@ public class CustomerPortalService {
             orgId, requestedSlugs, ListingStatus.PUBLISHED, resolvedLocale, defaultLocale)) {
       bySlug.put(r.slug(), r);
     }
-    List<SalesOrderService.StorefrontLineInput> orderLines = new ArrayList<>(input.lines().size());
-    Map<UUID, String> titleByProduct = new HashMap<>();
-    Map<UUID, String> slugByProduct = new HashMap<>();
-    for (CheckoutLine line : input.lines()) {
-      CheckoutLineResolution res = bySlug.get(line.listingSlug());
-      if (res == null) {
-        throw new NotFoundException("Listing not available");
-      }
-      orderLines.add(
-          new SalesOrderService.StorefrontLineInput(
-              res.productId(), line.quantity(), res.salesPrice(), res.title()));
-      titleByProduct.put(res.productId(), res.title());
-      slugByProduct.put(res.productId(), res.slug());
-    }
+    // The same resolver the anonymous checkout runs (VG2) — including the variant rules: a
+    // has-variants listing with no variant named is a 400, a spurious variant is a 400, and an
+    // unknown or deactivated key is the same opaque 404 as an unknown slug. Sharing the code is
+    // what keeps the two planes from drifting on what a cart line means.
+    StorefrontService.ResolvedCart cart =
+        StorefrontService.resolveCart(
+            listings,
+            orgId,
+            input.lines().stream()
+                .map(
+                    l ->
+                        new StorefrontService.CheckoutLine(
+                            l.listingSlug(), l.variantKey(), l.quantity()))
+                .toList(),
+            bySlug,
+            resolvedLocale,
+            defaultLocale);
+    List<SalesOrderService.StorefrontLineInput> orderLines = cart.orderLines();
+    Map<UUID, String> titleByProduct = cart.titleByProduct();
+    Map<UUID, String> slugByProduct = cart.slugByProduct();
+    Map<UUID, String> variantByProduct = cart.variantByProduct();
 
     try {
       SalesOrderService.StorefrontPlaced placed =
@@ -547,6 +574,7 @@ public class CustomerPortalService {
                   s ->
                       new StorefrontService.StorefrontShortage(
                           slugByProduct.get(s.productId()),
+                          variantByProduct.get(s.productId()),
                           titleByProduct.get(s.productId()),
                           s.requested(),
                           s.available()))

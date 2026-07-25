@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.config.ObjectMapperProvider;
+import com.loai.inventory.api.dto.PublicListingResponse;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -68,8 +69,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * <p>The load-bearing claim under test is the architecture's central bet (§1): because a variant IS
  * a child {@code product}, per-variant stock, restock and barcode scanning work through the
  * <em>existing</em> inventory code with nothing new — {@link #childProducts_areOrdinaryStockRows()}
- * is what proves it. The other load-bearing claim is that this slice leaks nothing: {@link
- * #publicListingRead_isUnchangedByVariants()} pins the public detail byte-for-byte.
+ * is what proves it. The other load-bearing claim is that variants are pure <b>opt-in</b>: {@link
+ * #publicListingRead_isUnchangedForAVariantLessListing()} pins a no-variant listing's public detail
+ * byte-for-byte. (VG1 additionally kept the read unchanged for a listing WITH variants; VG2 is the
+ * slice that deliberately makes them public, so that half now lives in {@code VariantCommerceIT}.)
  */
 @Testcontainers
 class CatalogVariantsIT {
@@ -502,26 +505,38 @@ class CatalogVariantsIT {
     assertEquals(1, variants.getVariants(orgB, bListing.getId()).variants().size());
   }
 
-  // 7. the public read is untouched by this slice
+  // 7. the no-variant public read is untouched
 
   @Test
-  void publicListingRead_isUnchangedByVariants() throws Exception {
+  void publicListingRead_isUnchangedForAVariantLessListing() throws Exception {
     UUID org = createOrg("acme");
     String orgSlug = orgSlug(org);
-    ProductListing listing = aListing(org, "shirt", "Shirt");
-    listings.publish(org, listing.getId());
-    inventory.initialise(org, listing.getProductId(), 3, actor);
+    ProductListing plain = aListing(org, "mug", "Mug");
+    ProductListing shirt = aListing(org, "shirt", "Shirt");
+    listings.publish(org, plain.getId());
+    listings.publish(org, shirt.getId());
+    inventory.initialise(org, plain.getProductId(), 3, actor);
 
-    String before = JSON.writeValueAsString(storefront.getListing(orgSlug, "shirt"));
+    // Serialize the public DTO, not the service view — the DTO is what actually crosses the wire.
+    String before =
+        JSON.writeValueAsString(PublicListingResponse.from(storefront.getListing(orgSlug, "mug")));
 
+    // Give the OTHER listing variants. Variants are pure opt-in (architecture §1): a listing that
+    // has none must serve exactly the bytes it served before the feature existed — no empty
+    // `variants` array to break a client, no `has_variants` flip.
     variants.replaceVariants(
         org,
-        listing.getId(),
+        shirt.getId(),
         List.of(sizeAxis()),
         List.of(variant("m", "SKU-M", null, "249.00"), variant("s", "SKU-S", null, "179.00")));
 
-    // VG1 lands the model and the admin surface only — the storefront learns about variants in VG2.
-    assertEquals(before, JSON.writeValueAsString(storefront.getListing(orgSlug, "shirt")));
+    assertEquals(
+        before,
+        JSON.writeValueAsString(PublicListingResponse.from(storefront.getListing(orgSlug, "mug"))));
+    assertFalse(
+        before.contains("\"variants\""),
+        "a variant-less listing carries no variants block at all — an empty array would read as"
+            + " 'has options, none available', which is a different claim");
   }
 
   // helpers

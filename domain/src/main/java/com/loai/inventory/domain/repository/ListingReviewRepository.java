@@ -37,6 +37,17 @@ public interface ListingReviewRepository {
    */
   boolean hasDeliveredProduct(UUID orgId, UUID customerId, UUID productId);
 
+  /**
+   * The same eligibility predicate, asked of a whole <b>listing</b> rather than a single product
+   * (variants epic §5 #6): does the customer have a DELIVERED fulfillment line for the listing's
+   * parent product <b>or</b> any of its variants' child products?
+   *
+   * <p>Buying any variant earns the right to review the listing — reviews are listing-level (a
+   * shopper reviews "the shirt", not "the shirt in M"), so gating on the parent product alone would
+   * lock out exactly the customers who bought one, which is everyone once a listing has variants.
+   */
+  boolean hasDeliveredListing(UUID orgId, UUID customerId, UUID listingId);
+
   /** The customer's existing review of one listing, if any — the upsert pre-read. */
   Optional<ListingReview> findByCustomerAndListing(UUID orgId, UUID customerId, UUID listingId);
 

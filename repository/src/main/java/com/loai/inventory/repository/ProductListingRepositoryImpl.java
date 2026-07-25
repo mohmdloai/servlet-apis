@@ -1,5 +1,8 @@
 package com.loai.inventory.repository;
 
+import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE;
+import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE_VALUE;
+import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE_VALUE_TRANSLATION;
 import static com.loai.inventory.repository.generated.Tables.CATEGORY;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.ORG;
@@ -8,8 +11,10 @@ import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_CATEGORY;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_IMAGE;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_VARIANT;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
+import static com.loai.inventory.repository.generated.Tables.VARIANT_ATTRIBUTE_VALUE;
 
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.ListingSort;
@@ -30,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import org.jooq.Condition;
 import org.jooq.DSLContext;
@@ -132,11 +138,17 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     var defT = PRODUCT_LISTING_TRANSLATION.as("def_t");
     org.jooq.Field<String> resolvedTitle =
         org.jooq.impl.DSL.coalesce(reqT.TITLE, defT.TITLE).as("title");
+    // VG2: whether this listing sells through variants at all. The caller needs it to tell a
+    // legitimately variant-less line apart from one that forgot to name its option — the two are
+    // otherwise indistinguishable, and quietly charging the parent price for the second would sell
+    // a shopper an unspecified size.
+    org.jooq.Field<Boolean> hasVariants = activeVariantExists().as("has_variants");
     return dsl.select(
             PRODUCT_LISTING.SLUG,
             PRODUCT_LISTING.PRODUCT_ID,
             PRODUCT_LISTING.SALES_PRICE,
-            resolvedTitle)
+            resolvedTitle,
+            hasVariants)
         .from(PRODUCT_LISTING)
         .leftJoin(reqT)
         .on(reqT.LISTING_ID.eq(PRODUCT_LISTING.ID).and(reqT.LANGUAGE.eq(locale)))
@@ -154,7 +166,8 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                     r.get(PRODUCT_LISTING.SLUG),
                     r.get(PRODUCT_LISTING.PRODUCT_ID),
                     r.get(PRODUCT_LISTING.SALES_PRICE),
-                    r.get(resolvedTitle)));
+                    r.get(resolvedTitle),
+                    Boolean.TRUE.equals(r.get(hasVariants))));
   }
 
   @Override
@@ -165,12 +178,20 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     }
     // available = stock_qty - reserved_qty; untracked (no inventory row) → COALESCE 0. The join is
     // on (org_id, product_id) so a cross-org inventory row can never satisfy it.
+    //
+    // VG2 (architecture §4): a listing's availability is the union of its PARENT product and its
+    // ACTIVE variants' child products — "in stock" at listing level means *something* on this page
+    // is buyable. GREATEST over the two arms is enough because the caller only ever asks
+    // `available > 0`; a variant-less listing keeps exactly today's number.
     org.jooq.Field<Integer> available =
         org.jooq
             .impl
             .DSL
-            .coalesce(
-                INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY), org.jooq.impl.DSL.inline(0))
+            .greatest(
+                org.jooq.impl.DSL.coalesce(
+                    INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY), org.jooq.impl.DSL.inline(0)),
+                org.jooq.impl.DSL.coalesce(
+                    bestActiveVariantAvailable(), org.jooq.impl.DSL.inline(0)))
             .as("available");
     return dsl.select(PRODUCT_LISTING.SLUG, available)
         .from(PRODUCT_LISTING)
@@ -211,41 +232,359 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     // The reorder label is the listing title in the org's default locale (L6 — sourced from the
     // default-locale translation row now that product_listing.title is gone). A default-locale row
     // is guaranteed, so the title is never null.
-    return dsl.select(
-            PRODUCT_LISTING.PRODUCT_ID,
-            PRODUCT_LISTING.SLUG,
-            DEFAULT_T.TITLE,
-            PRODUCT_LISTING.SALES_PRICE,
-            available)
-        .from(PRODUCT_LISTING)
-        .join(ORG)
-        .on(ORG.ID.eq(PRODUCT_LISTING.ORG_ID))
-        .leftJoin(DEFAULT_T)
-        .on(
-            DEFAULT_T
-                .LISTING_ID
-                .eq(PRODUCT_LISTING.ID)
-                .and(DEFAULT_T.LANGUAGE.eq(ORG.DEFAULT_LOCALE)))
+    List<ReorderResolution> out =
+        new ArrayList<>(
+            dsl.select(
+                    PRODUCT_LISTING.PRODUCT_ID,
+                    PRODUCT_LISTING.SLUG,
+                    DEFAULT_T.TITLE,
+                    PRODUCT_LISTING.SALES_PRICE,
+                    available)
+                .from(PRODUCT_LISTING)
+                .join(ORG)
+                .on(ORG.ID.eq(PRODUCT_LISTING.ORG_ID))
+                .leftJoin(DEFAULT_T)
+                .on(
+                    DEFAULT_T
+                        .LISTING_ID
+                        .eq(PRODUCT_LISTING.ID)
+                        .and(DEFAULT_T.LANGUAGE.eq(ORG.DEFAULT_LOCALE)))
+                .leftJoin(INVENTORY)
+                .on(
+                    INVENTORY
+                        .ORG_ID
+                        .eq(PRODUCT_LISTING.ORG_ID)
+                        .and(INVENTORY.PRODUCT_ID.eq(PRODUCT_LISTING.PRODUCT_ID)))
+                .where(
+                    PRODUCT_LISTING
+                        .ORG_ID
+                        .eq(orgId)
+                        .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)))
+                        .and(PRODUCT_LISTING.PRODUCT_ID.in(productIds)))
+                .fetch(
+                    r ->
+                        new ReorderResolution(
+                            r.get(PRODUCT_LISTING.PRODUCT_ID),
+                            r.get(PRODUCT_LISTING.SLUG),
+                            r.get(DEFAULT_T.TITLE),
+                            r.get(PRODUCT_LISTING.SALES_PRICE),
+                            r.get(available) == null ? 0 : r.get(available),
+                            null,
+                            null)));
+
+    // VG2 §5 #7: a line bought as a variant carries the CHILD product id, which no listing owns.
+    // Resolve those through the bridge to (listing, variant) so a reorder re-adds the same option
+    // at its own current price. Only ACTIVE variants resolve — a discontinued option must fall
+    // through to the caller's `unavailable` list rather than silently becoming the parent.
+    out.addAll(resolveVariantsForReorder(orgId, productIds, status, available));
+    return out;
+  }
+
+  /** The variant half of {@link #resolveForReorder} — child product → its listing + variant. */
+  private List<ReorderResolution> resolveVariantsForReorder(
+      UUID orgId,
+      java.util.Collection<UUID> productIds,
+      ListingStatus status,
+      org.jooq.Field<Integer> available) {
+    var rows =
+        dsl.select(
+                PRODUCT_VARIANT.ID,
+                PRODUCT_VARIANT.PRODUCT_ID,
+                PRODUCT_VARIANT.VARIANT_KEY,
+                PRODUCT_VARIANT.SALES_PRICE,
+                PRODUCT_LISTING.SLUG,
+                DEFAULT_T.TITLE,
+                available)
+            .from(PRODUCT_VARIANT)
+            .join(PRODUCT_LISTING)
+            .on(PRODUCT_LISTING.ID.eq(PRODUCT_VARIANT.PRODUCT_LISTING_ID))
+            .join(ORG)
+            .on(ORG.ID.eq(PRODUCT_LISTING.ORG_ID))
+            .leftJoin(DEFAULT_T)
+            .on(
+                DEFAULT_T
+                    .LISTING_ID
+                    .eq(PRODUCT_LISTING.ID)
+                    .and(DEFAULT_T.LANGUAGE.eq(ORG.DEFAULT_LOCALE)))
+            .leftJoin(INVENTORY)
+            .on(
+                INVENTORY
+                    .ORG_ID
+                    .eq(PRODUCT_VARIANT.ORG_ID)
+                    .and(INVENTORY.PRODUCT_ID.eq(PRODUCT_VARIANT.PRODUCT_ID)))
+            .where(
+                PRODUCT_VARIANT
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(PRODUCT_VARIANT.ACTIVE.isTrue())
+                    .and(PRODUCT_VARIANT.PRODUCT_ID.in(productIds))
+                    .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status))))
+            .fetch();
+    if (rows.isEmpty()) {
+      return List.of();
+    }
+    // The label reads in the org's default locale — the reorder result has no requested locale, and
+    // the same default drives every other admin-facing/portal label on this path.
+    String defaultLocale =
+        dsl.select(ORG.DEFAULT_LOCALE)
+            .from(ORG)
+            .where(ORG.ID.eq(orgId))
+            .fetchOne(ORG.DEFAULT_LOCALE);
+    Map<UUID, Map<String, String>> optionsByVariant =
+        resolveVariantOptions(
+            rows.map(r -> r.get(PRODUCT_VARIANT.ID)), defaultLocale, defaultLocale);
+    List<ReorderResolution> out = new ArrayList<>(rows.size());
+    for (var r : rows) {
+      String label =
+          String.join(
+              " / ", optionsByVariant.getOrDefault(r.get(PRODUCT_VARIANT.ID), Map.of()).values());
+      out.add(
+          new ReorderResolution(
+              r.get(PRODUCT_VARIANT.PRODUCT_ID),
+              r.get(PRODUCT_LISTING.SLUG),
+              r.get(DEFAULT_T.TITLE),
+              r.get(PRODUCT_VARIANT.SALES_PRICE),
+              r.get(available) == null ? 0 : r.get(available),
+              r.get(PRODUCT_VARIANT.VARIANT_KEY),
+              label));
+    }
+    return out;
+  }
+
+  // --- variants on the public surface (slice VG2) ---
+
+  /**
+   * Correlated {@code EXISTS} over the listing's ACTIVE variants — the {@code has_variants} flag.
+   * Correlates on {@code PRODUCT_LISTING.ID}, so it composes into any query that already has the
+   * listing in scope.
+   */
+  private static org.jooq.Field<Boolean> activeVariantExists() {
+    return org.jooq.impl.DSL.field(
+        org.jooq.impl.DSL.exists(
+            org.jooq
+                .impl
+                .DSL
+                .selectOne()
+                .from(PRODUCT_VARIANT)
+                .where(
+                    PRODUCT_VARIANT
+                        .PRODUCT_LISTING_ID
+                        .eq(PRODUCT_LISTING.ID)
+                        .and(PRODUCT_VARIANT.ACTIVE.isTrue()))));
+  }
+
+  /**
+   * The best availability among the listing's ACTIVE variants ({@code MAX(stock - reserved)}), or
+   * NULL when it has none — the children half of the §4 union. A scalar subquery rather than a join
+   * so it cannot multiply the outer row.
+   */
+  private static org.jooq.Field<Integer> bestActiveVariantAvailable() {
+    return org.jooq.impl.DSL.field(
+        org.jooq
+            .impl
+            .DSL
+            .select(org.jooq.impl.DSL.max(INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY)))
+            .from(PRODUCT_VARIANT)
+            .leftJoin(INVENTORY)
+            .on(
+                INVENTORY
+                    .ORG_ID
+                    .eq(PRODUCT_VARIANT.ORG_ID)
+                    .and(INVENTORY.PRODUCT_ID.eq(PRODUCT_VARIANT.PRODUCT_ID)))
+            .where(
+                PRODUCT_VARIANT
+                    .PRODUCT_LISTING_ID
+                    .eq(PRODUCT_LISTING.ID)
+                    .and(PRODUCT_VARIANT.ACTIVE.isTrue())));
+  }
+
+  @Override
+  public List<PublicVariant> findPublicVariantsForSlugs(
+      UUID orgId,
+      Collection<String> slugs,
+      ListingStatus status,
+      String locale,
+      String defaultLocale) {
+    if (slugs == null || slugs.isEmpty()) {
+      return List.of();
+    }
+    return findPublicVariants(
+        orgId,
+        PRODUCT_LISTING.STATUS.eq(toGenerated(status)).and(PRODUCT_LISTING.SLUG.in(slugs)),
+        locale,
+        defaultLocale);
+  }
+
+  @Override
+  public List<PublicVariant> findPublicVariantsForListing(
+      UUID orgId, UUID listingId, String locale, String defaultLocale) {
+    return findPublicVariants(orgId, PRODUCT_LISTING.ID.eq(listingId), locale, defaultLocale);
+  }
+
+  /**
+   * Two queries, never per-variant: the active variant rows (with their availability — the same
+   * {@code stock - reserved} the rest of the storefront uses), then every option value they carry
+   * with its label resolved {@code locale} → {@code defaultLocale} → slug. Composing the label in
+   * Java rather than a SQL {@code string_agg} keeps that fallback chain readable and testable, and
+   * a variant carries at most 3 options, so there is nothing to optimize away.
+   */
+  private List<PublicVariant> findPublicVariants(
+      UUID orgId, Condition listingCondition, String locale, String defaultLocale) {
+    org.jooq.Field<Integer> available =
+        org.jooq
+            .impl
+            .DSL
+            .coalesce(
+                INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY), org.jooq.impl.DSL.inline(0))
+            .as("available");
+    var rows =
+        dsl.select(
+                PRODUCT_VARIANT.ID,
+                PRODUCT_LISTING.SLUG,
+                PRODUCT_VARIANT.VARIANT_KEY,
+                PRODUCT_VARIANT.PRODUCT_ID,
+                PRODUCT_VARIANT.SALES_PRICE,
+                PRODUCT_VARIANT.SORT_ORDER,
+                available)
+            .from(PRODUCT_VARIANT)
+            .join(PRODUCT_LISTING)
+            .on(PRODUCT_LISTING.ID.eq(PRODUCT_VARIANT.PRODUCT_LISTING_ID))
+            .leftJoin(INVENTORY)
+            .on(
+                INVENTORY
+                    .ORG_ID
+                    .eq(PRODUCT_VARIANT.ORG_ID)
+                    .and(INVENTORY.PRODUCT_ID.eq(PRODUCT_VARIANT.PRODUCT_ID)))
+            .where(
+                PRODUCT_VARIANT
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(PRODUCT_VARIANT.ACTIVE.isTrue())
+                    .and(listingCondition))
+            .orderBy(
+                PRODUCT_LISTING.SLUG.asc(),
+                PRODUCT_VARIANT.SORT_ORDER.asc(),
+                PRODUCT_VARIANT.VARIANT_KEY.asc())
+            .fetch();
+    if (rows.isEmpty()) {
+      return List.of();
+    }
+
+    List<UUID> variantIds = rows.map(r -> r.get(PRODUCT_VARIANT.ID));
+    Map<UUID, Map<String, String>> optionsByVariant =
+        resolveVariantOptions(variantIds, locale, defaultLocale);
+
+    List<PublicVariant> out = new ArrayList<>(rows.size());
+    for (var r : rows) {
+      Map<String, String> options =
+          optionsByVariant.getOrDefault(r.get(PRODUCT_VARIANT.ID), Map.of());
+      out.add(
+          new PublicVariant(
+              r.get(PRODUCT_LISTING.SLUG),
+              r.get(PRODUCT_VARIANT.VARIANT_KEY),
+              r.get(PRODUCT_VARIANT.PRODUCT_ID),
+              r.get(PRODUCT_VARIANT.SALES_PRICE),
+              options,
+              String.join(" / ", options.values()),
+              r.get(available) == null ? 0 : r.get(available),
+              r.get(PRODUCT_VARIANT.SORT_ORDER) == null ? 0 : r.get(PRODUCT_VARIANT.SORT_ORDER)));
+    }
+    return out;
+  }
+
+  /**
+   * {@code variantId → (axis slug → localized value label)}, sorted by axis slug so a composed
+   * label ("Red / M") is stable regardless of insertion order. The label falls back {@code locale}
+   * → {@code defaultLocale} → the value's own slug, so an un-translated option still renders as
+   * something a shopper can read rather than dropping out of the label.
+   */
+  private Map<UUID, Map<String, String>> resolveVariantOptions(
+      Collection<UUID> variantIds, String locale, String defaultLocale) {
+    var reqT = ATTRIBUTE_VALUE_TRANSLATION.as("req_vt");
+    var defT = ATTRIBUTE_VALUE_TRANSLATION.as("def_vt");
+    org.jooq.Field<String> label =
+        org.jooq.impl.DSL.coalesce(reqT.NAME, defT.NAME, ATTRIBUTE_VALUE.SLUG).as("label");
+    Map<UUID, Map<String, String>> byVariant = new HashMap<>();
+    dsl.select(VARIANT_ATTRIBUTE_VALUE.VARIANT_ID, ATTRIBUTE.SLUG, label)
+        .from(VARIANT_ATTRIBUTE_VALUE)
+        .join(ATTRIBUTE_VALUE)
+        .on(ATTRIBUTE_VALUE.ID.eq(VARIANT_ATTRIBUTE_VALUE.ATTRIBUTE_VALUE_ID))
+        .join(ATTRIBUTE)
+        .on(ATTRIBUTE.ID.eq(ATTRIBUTE_VALUE.ATTRIBUTE_ID))
+        .leftJoin(reqT)
+        .on(reqT.ATTRIBUTE_VALUE_ID.eq(ATTRIBUTE_VALUE.ID).and(reqT.LANGUAGE.eq(locale)))
+        .leftJoin(defT)
+        .on(defT.ATTRIBUTE_VALUE_ID.eq(ATTRIBUTE_VALUE.ID).and(defT.LANGUAGE.eq(defaultLocale)))
+        .where(VARIANT_ATTRIBUTE_VALUE.VARIANT_ID.in(variantIds))
+        .forEach(
+            r ->
+                byVariant
+                    .computeIfAbsent(r.value1(), k -> new TreeMap<>())
+                    .put(r.value2(), r.value3()));
+    return byVariant;
+  }
+
+  @Override
+  public Map<UUID, VariantSummary> findVariantSummaries(UUID orgId, Collection<UUID> listingIds) {
+    if (listingIds == null || listingIds.isEmpty()) {
+      return Map.of();
+    }
+    // One grouped query for the whole page: the "from" price and whether anything on the listing is
+    // buyable. A listing with no active variant produces no row, and that absence IS
+    // has_variants:false — no sentinel value, nothing to misread.
+    org.jooq.Field<java.math.BigDecimal> minPrice =
+        org.jooq.impl.DSL.min(PRODUCT_VARIANT.SALES_PRICE).as("min_price");
+    org.jooq.Field<Integer> bestAvailable =
+        org.jooq
+            .impl
+            .DSL
+            .max(
+                org.jooq.impl.DSL.coalesce(
+                    INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY), org.jooq.impl.DSL.inline(0)))
+            .as("best_available");
+    Map<UUID, VariantSummary> out = new HashMap<>();
+    dsl.select(PRODUCT_VARIANT.PRODUCT_LISTING_ID, minPrice, bestAvailable)
+        .from(PRODUCT_VARIANT)
         .leftJoin(INVENTORY)
         .on(
             INVENTORY
                 .ORG_ID
-                .eq(PRODUCT_LISTING.ORG_ID)
-                .and(INVENTORY.PRODUCT_ID.eq(PRODUCT_LISTING.PRODUCT_ID)))
+                .eq(PRODUCT_VARIANT.ORG_ID)
+                .and(INVENTORY.PRODUCT_ID.eq(PRODUCT_VARIANT.PRODUCT_ID)))
         .where(
-            PRODUCT_LISTING
+            PRODUCT_VARIANT
                 .ORG_ID
                 .eq(orgId)
-                .and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)))
-                .and(PRODUCT_LISTING.PRODUCT_ID.in(productIds)))
-        .fetch(
+                .and(PRODUCT_VARIANT.PRODUCT_LISTING_ID.in(listingIds))
+                .and(PRODUCT_VARIANT.ACTIVE.isTrue()))
+        .groupBy(PRODUCT_VARIANT.PRODUCT_LISTING_ID)
+        .forEach(
             r ->
-                new ReorderResolution(
-                    r.get(PRODUCT_LISTING.PRODUCT_ID),
-                    r.get(PRODUCT_LISTING.SLUG),
-                    r.get(DEFAULT_T.TITLE),
-                    r.get(PRODUCT_LISTING.SALES_PRICE),
-                    r.get(available) == null ? 0 : r.get(available)));
+                out.put(
+                    r.value1(),
+                    new VariantSummary(r.value2(), r.value3() != null && r.value3() > 0)));
+    return out;
+  }
+
+  /**
+   * {@code productId → listingId} for both halves of the model: a listing's own PARENT product, and
+   * every variant's CHILD product mapped to the listing it is sold through (§5 #5/#10). This one
+   * mapping is what keeps the portal order detail, the "rate this item" entry, and the order-line
+   * thumbnail working for a line that was bought as a variant.
+   */
+  private Map<UUID, UUID> listingIdsByProductIds(UUID orgId, Collection<UUID> productIds) {
+    Map<UUID, UUID> byProduct = new HashMap<>();
+    dsl.select(PRODUCT_LISTING.PRODUCT_ID, PRODUCT_LISTING.ID)
+        .from(PRODUCT_LISTING)
+        .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.PRODUCT_ID.in(productIds)))
+        .forEach(r -> byProduct.put(r.value1(), r.value2()));
+    dsl.select(PRODUCT_VARIANT.PRODUCT_ID, PRODUCT_VARIANT.PRODUCT_LISTING_ID)
+        .from(PRODUCT_VARIANT)
+        .where(PRODUCT_VARIANT.ORG_ID.eq(orgId).and(PRODUCT_VARIANT.PRODUCT_ID.in(productIds)))
+        // A product backs at most one of the two (UNIQUE(product_id) on each side), so there is no
+        // collision to resolve — putIfAbsent is belt-and-braces, not a precedence rule.
+        .forEach(r -> byProduct.putIfAbsent(r.value1(), r.value2()));
+    return byProduct;
   }
 
   @Override
@@ -275,10 +614,27 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     if (productIds == null || productIds.isEmpty()) {
       return Map.of();
     }
-    return dsl.select(PRODUCT_LISTING.PRODUCT_ID, PRODUCT_LISTING.SLUG)
-        .from(PRODUCT_LISTING)
-        .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.PRODUCT_ID.in(productIds)))
-        .fetchMap(PRODUCT_LISTING.PRODUCT_ID, PRODUCT_LISTING.SLUG);
+    // VG2 §5 #5: a product id off an order line may be a listing's parent OR a variant's child, and
+    // both must answer with the listing's public slug — otherwise a delivered "Red / M" line loses
+    // its "rate this item" entry on the portal order page.
+    Map<UUID, UUID> listingByProduct = listingIdsByProductIds(orgId, productIds);
+    if (listingByProduct.isEmpty()) {
+      return Map.of();
+    }
+    Map<UUID, String> slugByListing =
+        dsl.select(PRODUCT_LISTING.ID, PRODUCT_LISTING.SLUG)
+            .from(PRODUCT_LISTING)
+            .where(PRODUCT_LISTING.ID.in(listingByProduct.values()))
+            .fetchMap(PRODUCT_LISTING.ID, PRODUCT_LISTING.SLUG);
+    Map<UUID, String> out = new HashMap<>(listingByProduct.size());
+    listingByProduct.forEach(
+        (productId, listingId) -> {
+          String slug = slugByListing.get(listingId);
+          if (slug != null) {
+            out.put(productId, slug);
+          }
+        });
+    return out;
   }
 
   @Override
@@ -370,15 +726,22 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
             OffsetDateTime.class, org.jooq.impl.DSL.val(BEST_SELLING_WINDOW_DAYS));
     org.jooq.Field<OffsetDateTime> saleTs =
         org.jooq.impl.DSL.coalesce(SALES_ORDER.PLACED_AT, SALES_ORDER.CREATED_AT);
+    // VG2 §5 #8: the aggregate is keyed by LISTING, not product. A line's product_id may be a
+    // listing's parent or a variant's child, and both are sales *of that listing* — a shirt that
+    // sold 40 units across four sizes must out-rank one that sold 30 as a single product, not
+    // appear as four listings that sold 10 each (they are one page) or vanish entirely.
+    Table<?> productToListing = productListingMap(orgId);
+    org.jooq.Field<UUID> mappedProductId = productToListing.field("product_id", UUID.class);
+    org.jooq.Field<UUID> mappedListingId = productToListing.field("listing_id", UUID.class);
     return org.jooq
         .impl
         .DSL
-        .select(
-            SALES_ORDER_LINE.PRODUCT_ID,
-            org.jooq.impl.DSL.sum(SALES_ORDER_LINE.QUANTITY).as(SOLD_UNITS))
+        .select(mappedListingId, org.jooq.impl.DSL.sum(SALES_ORDER_LINE.QUANTITY).as(SOLD_UNITS))
         .from(SALES_ORDER_LINE)
         .join(SALES_ORDER)
         .on(SALES_ORDER_LINE.SALES_ORDER_ID.eq(SALES_ORDER.ID))
+        .join(productToListing)
+        .on(mappedProductId.eq(SALES_ORDER_LINE.PRODUCT_ID))
         .where(
             SALES_ORDER
                 .ORG_ID
@@ -386,8 +749,32 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                 .and(SALES_ORDER.STATUS.in(SALE_STATUSES))
                 .and(saleTs.ge(windowStart))
                 .and(saleTs.lt(now)))
-        .groupBy(SALES_ORDER_LINE.PRODUCT_ID)
+        .groupBy(mappedListingId)
         .asTable("sold");
+  }
+
+  /**
+   * {@code product_id → listing_id} over both halves of the variant model — a listing's own parent
+   * product, and every variant's child product mapped to the listing it sells through. The single
+   * place the "which page did this order line belong to?" question is answered in SQL.
+   */
+  private static Table<?> productListingMap(UUID orgId) {
+    return org.jooq
+        .impl
+        .DSL
+        .select(PRODUCT_LISTING.PRODUCT_ID.as("product_id"), PRODUCT_LISTING.ID.as("listing_id"))
+        .from(PRODUCT_LISTING)
+        .where(PRODUCT_LISTING.ORG_ID.eq(orgId))
+        .unionAll(
+            org.jooq
+                .impl
+                .DSL
+                .select(
+                    PRODUCT_VARIANT.PRODUCT_ID.as("product_id"),
+                    PRODUCT_VARIANT.PRODUCT_LISTING_ID.as("listing_id"))
+                .from(PRODUCT_VARIANT)
+                .where(PRODUCT_VARIANT.ORG_ID.eq(orgId)))
+        .asTable("pl_map");
   }
 
   /** The derived table's {@code SUM(quantity)} column, or null when the aggregate isn't joined. */
@@ -401,8 +788,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     if (sold == null) {
       return step;
     }
-    return step.leftJoin(sold)
-        .on(sold.field(SALES_ORDER_LINE.PRODUCT_ID).eq(PRODUCT_LISTING.PRODUCT_ID));
+    return step.leftJoin(sold).on(sold.field("listing_id", UUID.class).eq(PRODUCT_LISTING.ID));
   }
 
   /** The category narrow is a join only when requested — the unfiltered read stays join-free. */
@@ -836,19 +1222,32 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     if (productIds.isEmpty()) {
       return Map.of();
     }
-    // Ordered product → sort_order → created_at, so the first row seen per product is its primary
+    // VG2 §5 #10: resolve through the same product → listing mapping as the slug lookup, so a
+    // variant's child product shows its listing's image (v1 has no per-variant image) instead of a
+    // placeholder on every stock-overview row for a variant.
+    Map<UUID, UUID> listingByProduct = listingIdsByProductIds(orgId, productIds);
+    if (listingByProduct.isEmpty()) {
+      return Map.of();
+    }
+    // Ordered listing → sort_order → created_at, so the first row seen per listing is its primary
     // image; putIfAbsent keeps it (no DISTINCT ON needed, and a page is a bounded set of products).
-    Map<UUID, String> keys = new HashMap<>();
-    dsl.select(PRODUCT_LISTING.PRODUCT_ID, PRODUCT_LISTING_IMAGE.OBJECT_KEY)
-        .from(PRODUCT_LISTING)
-        .join(PRODUCT_LISTING_IMAGE)
-        .on(PRODUCT_LISTING_IMAGE.LISTING_ID.eq(PRODUCT_LISTING.ID))
-        .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.PRODUCT_ID.in(productIds)))
+    Map<UUID, String> keyByListing = new HashMap<>();
+    dsl.select(PRODUCT_LISTING_IMAGE.LISTING_ID, PRODUCT_LISTING_IMAGE.OBJECT_KEY)
+        .from(PRODUCT_LISTING_IMAGE)
+        .where(PRODUCT_LISTING_IMAGE.LISTING_ID.in(listingByProduct.values()))
         .orderBy(
-            PRODUCT_LISTING.PRODUCT_ID.asc(),
+            PRODUCT_LISTING_IMAGE.LISTING_ID.asc(),
             PRODUCT_LISTING_IMAGE.SORT_ORDER.asc(),
             PRODUCT_LISTING_IMAGE.CREATED_AT.asc())
-        .forEach(r -> keys.putIfAbsent(r.value1(), r.value2()));
+        .forEach(r -> keyByListing.putIfAbsent(r.value1(), r.value2()));
+    Map<UUID, String> keys = new HashMap<>();
+    listingByProduct.forEach(
+        (productId, listingId) -> {
+          String key = keyByListing.get(listingId);
+          if (key != null) {
+            keys.put(productId, key);
+          }
+        });
     return keys;
   }
 

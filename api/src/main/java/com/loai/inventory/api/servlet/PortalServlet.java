@@ -837,7 +837,9 @@ public class PortalServlet extends HttpServlet {
       for (PortalCheckoutRequest.LineBody l : body.getLines()) {
         lines.add(
             new CustomerPortalService.CheckoutLine(
-                l == null ? null : l.getListingSlug(), l == null ? 0 : l.getQuantity()));
+                l == null ? null : l.getListingSlug(),
+                l == null ? null : l.getVariant(),
+                l == null ? 0 : l.getQuantity()));
       }
     }
     CustomerPortalService.CheckoutInput input =
