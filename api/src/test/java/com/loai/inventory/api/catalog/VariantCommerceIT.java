@@ -606,6 +606,104 @@ class VariantCommerceIT {
   }
 
   @Test
+  void hasVariantsListing_withStockOnlyOnTheParent_isNeverAdvertisedInStock() {
+    Shop shop = shopWithShirt();
+    // The parent is stocked; every ACTIVE variant is not. Once a listing has variants the parent
+    // is unbuyable by construction -- checkout rejects a variant-less line for it -- so its stock
+    // says nothing about whether a shopper can buy anything on this page.
+    stock(shop.org, shop.parent, 50);
+
+    // The empirical half: nothing on this listing can actually be bought.
+    for (String key : List.of("m", "s")) {
+      assertThrows(
+          com.loai.inventory.common.exception.ConflictException.class,
+          () ->
+              storefront.checkout(
+                  shop.orgSlug, cart(line("shirt", key, 1)), UUID.randomUUID().toString()),
+          "no active variant has stock, so every purchase is a shortage");
+    }
+
+    // Therefore every surface that answers "can I buy this?" must say no. Saying yes sends the
+    // shopper to a picker where every option is disabled -- a dead end dressed as availability.
+    assertFalse(
+        storefront.getListing(shop.orgSlug, "shirt").inStock(),
+        "the detail must not claim in_stock on the strength of an unbuyable parent");
+    assertFalse(
+        rowOf(storefront.listPublished(shop.orgSlug, null, 0, 20), "shirt").inStock(),
+        "nor the grid card");
+    assertFalse(
+        availability(shop, "shirt").get(0).inStock(),
+        "nor the batch availability signal the cart polls");
+
+    // The control: restock one variant and all three flip back to true, so the assertion above is
+    // about the parent being irrelevant, not about the listing being unconditionally out of stock.
+    stock(shop.org, shop.child("m"), 3);
+    assertTrue(storefront.getListing(shop.orgSlug, "shirt").inStock());
+    assertTrue(rowOf(storefront.listPublished(shop.orgSlug, null, 0, 20), "shirt").inStock());
+    assertTrue(availability(shop, "shirt").get(0).inStock());
+  }
+
+  @Test
+  void reorder_ofALineBoughtBeforeVariantsExisted_neverHandsBackAnUnbuyableCart() {
+    Shop shop = shopWithShirt();
+    UUID customer = createCustomer(shop.org, "nadia@example.com");
+    stock(shop.org, shop.mugProduct, 20);
+
+    // Bought while the mug was a plain listing: the order line carries the PARENT product id and
+    // names no variant, because none existed.
+    CheckoutResult placed =
+        portal.checkout(
+            shop.org,
+            customer,
+            new CustomerPortalService.CheckoutInput(
+                List.of(new CustomerPortalService.CheckoutLine("mug", null, 1)),
+                null,
+                null,
+                new CustomerPortalService.AddressInput(null, "Nadia", "+20100", "1 Nile St", false),
+                false),
+            UUID.randomUUID().toString());
+
+    // The merchant later restructures the mug into options. The past line's product is still the
+    // listing's parent, so it still resolves -- but what it resolves to is no longer purchasable.
+    UUID mugListing =
+        dsl.select(com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING.ID)
+            .from(com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING)
+            .where(com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING.SLUG.eq("mug"))
+            .fetchSingle()
+            .value1();
+    variants.replaceVariants(
+        shop.org,
+        mugListing,
+        List.of(sizeAxis("s", "m")),
+        List.of(row("m", "MUG-M", "60.00"), row("s", "MUG-S", "50.00")));
+    stock(shop.org, variants.getVariants(shop.org, mugListing).variants().get(0).productId(), 5);
+
+    CustomerPortalService.ReorderResult again =
+        portal.reorder(shop.org, customer, placed.order().getOrderNumber());
+
+    // The contract reorder exists to keep: everything it hands back is something the shopper can
+    // actually check out. A parent line for a now-has-variants listing names no variant, and such
+    // a line is a 400 -- so it belongs in `unavailable`, not prefilled into a cart that dies on
+    // Pay.
+    for (CustomerPortalService.ReorderItem item : again.items()) {
+      portal.checkout(
+          shop.org,
+          customer,
+          new CustomerPortalService.CheckoutInput(
+              List.of(
+                  new CustomerPortalService.CheckoutLine(item.slug(), item.variant(), item.qty())),
+              null,
+              null,
+              new CustomerPortalService.AddressInput(null, "Nadia", "+20100", "1 Nile St", false),
+              false),
+          UUID.randomUUID().toString());
+    }
+    assertEquals(List.of(), again.items().stream().map(i -> i.slug()).toList());
+    assertEquals(1, again.unavailable().size(), "the restructured line is reported, not re-added");
+    assertEquals("Mug", again.unavailable().get(0).description());
+  }
+
+  @Test
   void bestSellers_ranksTheParentListingByItsChildrensSales() {
     Shop shop = shopWithShirt();
     UUID customer = createCustomer(shop.org, "nadia@example.com");

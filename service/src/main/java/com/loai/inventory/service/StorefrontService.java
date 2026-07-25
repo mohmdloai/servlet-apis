@@ -1117,17 +1117,20 @@ public class StorefrontService {
    * Validate + canonicalize the {@code attr_*} grammar. Blank slugs, empty value lists, and the
    * caps are 400s naming the parameter; values are trimmed, lower-cased and de-duplicated so {@code
    * attr_size=M,m} is one selection, not two.
+   *
+   * <p>The attribute <b>name</b> is lower-cased on the same principle, which means {@code
+   * attr_Size} and {@code attr_size} are one attribute — so their values are <b>folded
+   * together</b>, exactly as the servlet already folds a repeated same-case parameter. Overwriting
+   * instead (the first cut) silently dropped half a shopper's selection with no 400 to tell them.
+   * The caps are therefore applied to the <b>collapsed</b> map: six spellings of one axis is one
+   * filter, not six, and counting spellings turned that into a bogus "at most 5 attr_* filters".
    */
   private static Map<String, List<String>> normalizeAttributeFilters(
       Map<String, List<String>> raw) {
     if (raw == null || raw.isEmpty()) {
       return Map.of();
     }
-    if (raw.size() > MAX_FACET_ATTRIBUTES) {
-      throw new com.loai.inventory.common.exception.ValidationException(
-          "at most " + MAX_FACET_ATTRIBUTES + " attr_* filters");
-    }
-    Map<String, List<String>> out = new java.util.LinkedHashMap<>();
+    Map<String, LinkedHashSet<String>> folded = new java.util.LinkedHashMap<>();
     for (Map.Entry<String, List<String>> e : raw.entrySet()) {
       String attribute =
           e.getKey() == null ? null : e.getKey().trim().toLowerCase(java.util.Locale.ROOT);
@@ -1135,33 +1138,50 @@ public class StorefrontService {
         throw new com.loai.inventory.common.exception.ValidationException(
             "attr_ filter name must not be blank");
       }
-      LinkedHashSet<String> values = new LinkedHashSet<>();
+      LinkedHashSet<String> values = folded.computeIfAbsent(attribute, k -> new LinkedHashSet<>());
       for (String v : e.getValue() == null ? List.<String>of() : e.getValue()) {
         String value = v == null ? null : v.trim().toLowerCase(java.util.Locale.ROOT);
         if (value != null && !value.isBlank()) {
           values.add(value);
         }
       }
+    }
+    if (folded.size() > MAX_FACET_ATTRIBUTES) {
+      throw new com.loai.inventory.common.exception.ValidationException(
+          "at most " + MAX_FACET_ATTRIBUTES + " attr_* filters");
+    }
+    Map<String, List<String>> out = new java.util.LinkedHashMap<>();
+    for (Map.Entry<String, LinkedHashSet<String>> e : folded.entrySet()) {
+      LinkedHashSet<String> values = e.getValue();
       if (values.isEmpty()) {
         throw new com.loai.inventory.common.exception.ValidationException(
-            "attr_" + attribute + " must name at least one value");
+            "attr_" + e.getKey() + " must name at least one value");
       }
       if (values.size() > MAX_FACET_VALUES_PER_ATTRIBUTE) {
         throw new com.loai.inventory.common.exception.ValidationException(
-            "attr_" + attribute + " accepts at most " + MAX_FACET_VALUES_PER_ATTRIBUTE + " values");
+            "attr_"
+                + e.getKey()
+                + " accepts at most "
+                + MAX_FACET_VALUES_PER_ATTRIBUTE
+                + " values");
       }
-      out.put(attribute, List.copyOf(values));
+      out.put(e.getKey(), List.copyOf(values));
     }
     return out;
   }
 
-  /** {@code include_facets} is exactly {@code "true"} or absent — anything else is a 400. */
+  /**
+   * {@code include_facets} is exactly {@code "true"} or absent — anything else is a 400. Case
+   * <b>sensitive</b>, like the sibling {@code sold} / {@code featured} parsers on this same read:
+   * one endpoint should not answer the same wire value two ways depending on which parameter
+   * carries it.
+   */
   private static boolean parseIncludeFacets(String raw) {
     String value = trimToNull(raw);
     if (value == null) {
       return false;
     }
-    if (!"true".equalsIgnoreCase(value)) {
+    if (!"true".equals(value)) {
       throw new com.loai.inventory.common.exception.ValidationException(
           "include_facets must be 'true' when present (was '" + raw + "')");
     }
@@ -1217,10 +1237,14 @@ public class StorefrontService {
               List<PublicImage> images =
                   primary == null ? List.of() : List.of(toPublicImage(primary));
               ProductListingRepository.VariantSummary variants = variantSummaries.get(l.getId());
-              // The union (§4): a row is "in stock" when the parent OR any active variant is.
+              // §4: once a listing has active variants the PARENT is unbuyable by construction —
+              // checkout rejects a variant-less line for it — so its stock says nothing about
+              // whether anything on this page can be bought, and a union over it advertises a dead
+              // end. Variants present ⇒ the answer is the children's; absent ⇒ it is the parent's.
               boolean inStock =
-                  availableByProduct.getOrDefault(l.getProductId(), 0) > 0
-                      || (variants != null && variants.anyInStock());
+                  variants == null
+                      ? availableByProduct.getOrDefault(l.getProductId(), 0) > 0
+                      : variants.anyInStock();
               // With variants, the row shows the honest "from" price — the cheapest active option —
               // not the parent's sales_price, which nothing on the page is actually sold at.
               java.math.BigDecimal price =
@@ -1318,14 +1342,17 @@ public class StorefrontService {
         toVariantViews(
             listings.findPublicVariantsForListing(
                 orgId, listing.getId(), resolvedLocale, defaultLocale));
-    // §4: listing-level in_stock is the union — the parent's own stock OR any active variant's.
+    // §4: with active variants the listing's in_stock is theirs alone. The parent is unbuyable on
+    // a has-variants listing (checkout rejects a variant-less line), so folding its stock in would
+    // send the shopper to a picker where every option is disabled.
     boolean parentInStock =
         inventoryRepoFactory
                 .create(rootDsl)
                 .findAvailableByProductIds(orgId, List.of(listing.getProductId()))
                 .getOrDefault(listing.getProductId(), 0)
             > 0;
-    boolean inStock = parentInStock || variants.stream().anyMatch(VariantView::inStock);
+    boolean inStock =
+        variants.isEmpty() ? parentInStock : variants.stream().anyMatch(VariantView::inStock);
     ResolvedContent content =
         resolveContent(listings.findTranslations(listing.getId()), resolvedLocale, defaultLocale);
     return toView(listings, listing, inStock, categories, content, variants);

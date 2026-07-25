@@ -323,6 +323,85 @@ class AttributeFacetsIT {
   }
 
   @Test
+  void caseVariantAttrKeys_foldTogether_ratherThanOneSilentlyWinning() {
+    Shop shop = seed();
+    // The servlet keys the map on the RAW parameter name, so `?attr_Size=m&attr_size=l` arrives
+    // here as two entries. The service lower-cases the name to canonicalize it -- at which point
+    // one used to overwrite the other, and half the shopper's selection vanished with no 400 to
+    // say so. Two spellings of one attribute are one attribute: their values OR together, exactly
+    // as `attr_size=m,l` does.
+    // Both orderings, because "last one wins" and "first one wins" are each wrong in one direction
+    // and a single ordering can pass by luck: here size=m alone matches only the shirt while
+    // size=l matches both, so a dropped half is visible in the result either way.
+    List<String> merged = slugs(search(shop, Map.of("size", List.of("m", "l"))));
+    Map<String, List<String>> upperFirst = new java.util.LinkedHashMap<>();
+    upperFirst.put("Size", List.of("l"));
+    upperFirst.put("size", List.of("m"));
+    Map<String, List<String>> lowerFirst = new java.util.LinkedHashMap<>();
+    lowerFirst.put("size", List.of("m"));
+    lowerFirst.put("Size", List.of("l"));
+    assertEquals(merged, slugs(search(shop, upperFirst)), "attr_Size=l + attr_size=m");
+    assertEquals(merged, slugs(search(shop, lowerFirst)), "attr_size=m + attr_Size=l");
+
+    // And the ≤5 cap counts ATTRIBUTES, not spellings: six casings of one axis is one filter, so
+    // it must not be rejected as "at most 5 attr_* filters".
+    Map<String, List<String>> sixCasingsOfOneAxis = new java.util.LinkedHashMap<>();
+    for (String spelling : List.of("size", "Size", "SIZE", "SiZe", "sIzE", "siZE")) {
+      sixCasingsOfOneAxis.put(spelling, List.of("m"));
+    }
+    assertEquals(
+        slugs(search(shop, Map.of("size", List.of("m")))),
+        slugs(search(shop, sixCasingsOfOneAxis)),
+        "six spellings of one axis is one filter, not six");
+  }
+
+  @Test
+  void includeFacets_isCaseSensitive_likeItsSiblingBooleanParams() {
+    Shop shop = seed();
+    // One endpoint, one wire convention: `sold` and `featured` reject "TRUE" outright. There is no
+    // reason for include_facets to be the one parameter that quietly accepts a different spelling,
+    // and a client that gets away with `TRUE` here learns a rule the next parameter breaks.
+    assertThrows(
+        ValidationException.class,
+        () ->
+            storefront.listPublished(
+                shop.orgSlug,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "TRUE",
+                null,
+                Map.of(),
+                null,
+                0,
+                20),
+        "sold=TRUE is rejected");
+    assertThrows(
+        ValidationException.class,
+        () ->
+            storefront.listPublished(
+                shop.orgSlug,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Map.of(),
+                "TRUE",
+                0,
+                20),
+        "so include_facets=TRUE must be too");
+  }
+
+  @Test
   void includeFacets_acceptsOnlyTrue() {
     Shop shop = seed();
     ValidationException e =
