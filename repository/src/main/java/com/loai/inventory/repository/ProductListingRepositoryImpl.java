@@ -1,6 +1,7 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE;
+import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE_TRANSLATION;
 import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE_VALUE;
 import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE_VALUE_TRANSLATION;
 import static com.loai.inventory.repository.generated.Tables.CATEGORY;
@@ -31,6 +32,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -649,6 +651,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       java.math.BigDecimal maxPrice,
       boolean featuredOnly,
       boolean soldOnly,
+      Map<String, List<String>> attributeFilters,
       ListingSort sort,
       int offset,
       int limit) {
@@ -665,7 +668,8 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                 minPrice,
                 maxPrice,
                 featuredOnly,
-                soldOnly ? soldUnitsField(sold) : null))
+                soldOnly ? soldUnitsField(sold) : null,
+                attributeFilters))
         .orderBy(orderFields(sort, soldUnitsField(sold)))
         .offset(offset)
         .limit(limit)
@@ -684,7 +688,8 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       java.math.BigDecimal minPrice,
       java.math.BigDecimal maxPrice,
       boolean featuredOnly,
-      boolean soldOnly) {
+      boolean soldOnly,
+      Map<String, List<String>> attributeFilters) {
     SelectJoinStep<Record1<UUID>> step = dsl.select(PRODUCT_LISTING.ID).from(PRODUCT_LISTING);
     // The count mirrors findByFilters' predicates only — the sold aggregate is joined here just for
     // the ?sold=true narrow; the BEST_SELLING *order* changes no row's membership, so a plain
@@ -703,7 +708,8 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                     minPrice,
                     maxPrice,
                     featuredOnly,
-                    soldUnitsField(sold))));
+                    soldUnitsField(sold),
+                    attributeFilters)));
   }
 
   /**
@@ -823,7 +829,8 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       java.math.BigDecimal minPrice,
       java.math.BigDecimal maxPrice,
       boolean featuredOnly,
-      org.jooq.Field<java.math.BigDecimal> soldUnits) {
+      org.jooq.Field<java.math.BigDecimal> soldUnits,
+      Map<String, List<String>> attributeFilters) {
     Condition c =
         PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.STATUS.eq(toGenerated(status)));
     if (soldUnits != null) {
@@ -849,7 +856,46 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     if (maxPrice != null) {
       c = c.and(PRODUCT_LISTING.SALES_PRICE.le(maxPrice));
     }
+    // Facets (roadmap item 7): ONE EXISTS per attribute — OR within (the value list), AND across
+    // (the separate EXISTS clauses). Written as separate EXISTS rather than one join so a listing
+    // is never multiplied by its matching variants, and so "M and red" means the listing can
+    // satisfy both (possibly on different variants), which is what a shopper filtering a page
+    // means by it.
+    if (attributeFilters != null) {
+      for (Map.Entry<String, List<String>> e : attributeFilters.entrySet()) {
+        c = c.and(activeVariantWithAttributeValueExists(e.getKey(), e.getValue()));
+      }
+    }
     return c;
+  }
+
+  /**
+   * EXISTS an <b>active</b> variant of this listing carrying one of {@code valueSlugs} on the
+   * {@code attributeSlug} axis. An unknown attribute or value slug simply matches nothing — the
+   * category-filter convention, so a stale bookmark naming a deleted attribute renders the designed
+   * empty state instead of a 400 wall.
+   */
+  private static Condition activeVariantWithAttributeValueExists(
+      String attributeSlug, List<String> valueSlugs) {
+    return org.jooq.impl.DSL.exists(
+        org.jooq
+            .impl
+            .DSL
+            .selectOne()
+            .from(PRODUCT_VARIANT)
+            .join(VARIANT_ATTRIBUTE_VALUE)
+            .on(VARIANT_ATTRIBUTE_VALUE.VARIANT_ID.eq(PRODUCT_VARIANT.ID))
+            .join(ATTRIBUTE_VALUE)
+            .on(ATTRIBUTE_VALUE.ID.eq(VARIANT_ATTRIBUTE_VALUE.ATTRIBUTE_VALUE_ID))
+            .join(ATTRIBUTE)
+            .on(ATTRIBUTE.ID.eq(ATTRIBUTE_VALUE.ATTRIBUTE_ID))
+            .where(
+                PRODUCT_VARIANT
+                    .PRODUCT_LISTING_ID
+                    .eq(PRODUCT_LISTING.ID)
+                    .and(PRODUCT_VARIANT.ACTIVE.isTrue())
+                    .and(ATTRIBUTE.SLUG.eq(attributeSlug))
+                    .and(ATTRIBUTE_VALUE.SLUG.in(valueSlugs))));
   }
 
   /**
@@ -914,6 +960,214 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
               org.jooq.impl.DSL.coalesce(soldUnits, java.math.BigDecimal.ZERO).desc(),
               PRODUCT_LISTING.SLUG.asc());
     };
+  }
+
+  // --- attribute facets (roadmap item 7) ---
+
+  @Override
+  public List<FacetCount> facetCounts(
+      UUID orgId,
+      ListingStatus status,
+      UUID categoryId,
+      String q,
+      String locale,
+      String defaultLocale,
+      java.math.BigDecimal minPrice,
+      java.math.BigDecimal maxPrice,
+      boolean featuredOnly,
+      boolean soldOnly,
+      Map<String, List<String>> attributeFilters) {
+    Map<String, List<String>> selections = attributeFilters == null ? Map.of() : attributeFilters;
+
+    List<FacetCount> out = new ArrayList<>();
+    // Multi-select semantics, the standard e-commerce contract: an attribute's own selections must
+    // NOT narrow its own counts, or picking "M" would show "L (0)" and dead-end the shopper on the
+    // very filter they are using. Every OTHER attribute's selection still applies.
+    out.addAll(
+        facetCountsFor(
+            orgId,
+            status,
+            categoryId,
+            q,
+            locale,
+            defaultLocale,
+            minPrice,
+            maxPrice,
+            featuredOnly,
+            soldOnly,
+            selections,
+            selections.keySet(),
+            null));
+    for (String selected : selections.keySet()) {
+      Map<String, List<String>> others = new LinkedHashMap<>(selections);
+      others.remove(selected);
+      out.addAll(
+          facetCountsFor(
+              orgId,
+              status,
+              categoryId,
+              q,
+              locale,
+              defaultLocale,
+              minPrice,
+              maxPrice,
+              featuredOnly,
+              soldOnly,
+              others,
+              Set.of(),
+              selected));
+    }
+    return out;
+  }
+
+  /**
+   * One grouped facet query. {@code excludedAttributes} drops the already-selected axes from the
+   * "everything else" pass; {@code onlyAttribute} restricts the pass to a single axis (its own
+   * counts, computed without its own selection). Exactly one of the two is meaningful per call.
+   */
+  private List<FacetCount> facetCountsFor(
+      UUID orgId,
+      ListingStatus status,
+      UUID categoryId,
+      String q,
+      String locale,
+      String defaultLocale,
+      java.math.BigDecimal minPrice,
+      java.math.BigDecimal maxPrice,
+      boolean featuredOnly,
+      boolean soldOnly,
+      Map<String, List<String>> appliedFilters,
+      java.util.Set<String> excludedAttributes,
+      String onlyAttribute) {
+    if (onlyAttribute == null && excludedAttributes.isEmpty() && appliedFilters.isEmpty()) {
+      // Nothing selected: one pass over every attribute (the common catalog-page case).
+      return runFacetQuery(
+          orgId,
+          status,
+          categoryId,
+          q,
+          locale,
+          defaultLocale,
+          minPrice,
+          maxPrice,
+          featuredOnly,
+          soldOnly,
+          appliedFilters,
+          null,
+          null);
+    }
+    return runFacetQuery(
+        orgId,
+        status,
+        categoryId,
+        q,
+        locale,
+        defaultLocale,
+        minPrice,
+        maxPrice,
+        featuredOnly,
+        soldOnly,
+        appliedFilters,
+        onlyAttribute,
+        onlyAttribute == null ? excludedAttributes : null);
+  }
+
+  /**
+   * {@code COUNT(DISTINCT product_listing_id)} per {@code (attribute, value)} over the B3-filtered
+   * set, joined through {@code product_variant ⋈ variant_attribute_value} — the first grouped
+   * facet-count SQL in the repo, kept here beside {@code soldUnits} on purpose (both are "the
+   * catalog read's aggregates"). Labels resolve {@code locale} → {@code defaultLocale} → slug in
+   * the same query, so no second round trip per value.
+   */
+  private List<FacetCount> runFacetQuery(
+      UUID orgId,
+      ListingStatus status,
+      UUID categoryId,
+      String q,
+      String locale,
+      String defaultLocale,
+      java.math.BigDecimal minPrice,
+      java.math.BigDecimal maxPrice,
+      boolean featuredOnly,
+      boolean soldOnly,
+      Map<String, List<String>> appliedFilters,
+      String onlyAttribute,
+      java.util.Set<String> excludedAttributes) {
+    var attrReqT = ATTRIBUTE_TRANSLATION.as("f_at_req");
+    var attrDefT = ATTRIBUTE_TRANSLATION.as("f_at_def");
+    var valReqT = ATTRIBUTE_VALUE_TRANSLATION.as("f_vt_req");
+    var valDefT = ATTRIBUTE_VALUE_TRANSLATION.as("f_vt_def");
+    org.jooq.Field<String> attributeLabel =
+        org.jooq.impl.DSL.coalesce(attrReqT.NAME, attrDefT.NAME, ATTRIBUTE.SLUG).as("attr_label");
+    org.jooq.Field<String> valueLabel =
+        org.jooq
+            .impl
+            .DSL
+            .coalesce(valReqT.NAME, valDefT.NAME, ATTRIBUTE_VALUE.SLUG)
+            .as("value_label");
+    org.jooq.Field<Integer> listingCount =
+        org.jooq.impl.DSL.countDistinct(PRODUCT_LISTING.ID).as("listing_count");
+
+    Table<?> sold = soldOnly ? soldUnits(orgId) : null;
+    Condition where =
+        filterConditions(
+            orgId,
+            status,
+            categoryId,
+            q,
+            locale,
+            defaultLocale,
+            minPrice,
+            maxPrice,
+            featuredOnly,
+            soldUnitsField(sold),
+            appliedFilters);
+    if (onlyAttribute != null) {
+      where = where.and(ATTRIBUTE.SLUG.eq(onlyAttribute));
+    }
+    if (excludedAttributes != null && !excludedAttributes.isEmpty()) {
+      where = where.and(ATTRIBUTE.SLUG.notIn(excludedAttributes));
+    }
+
+    var step =
+        dsl.select(ATTRIBUTE.SLUG, attributeLabel, ATTRIBUTE_VALUE.SLUG, valueLabel, listingCount)
+            .from(PRODUCT_LISTING);
+    var joined = joinSoldIfNeeded(joinCategoryIfNeeded(step, categoryId), sold);
+    return joined
+        .join(PRODUCT_VARIANT)
+        .on(
+            PRODUCT_VARIANT
+                .PRODUCT_LISTING_ID
+                .eq(PRODUCT_LISTING.ID)
+                .and(PRODUCT_VARIANT.ACTIVE.isTrue()))
+        .join(VARIANT_ATTRIBUTE_VALUE)
+        .on(VARIANT_ATTRIBUTE_VALUE.VARIANT_ID.eq(PRODUCT_VARIANT.ID))
+        .join(ATTRIBUTE_VALUE)
+        .on(ATTRIBUTE_VALUE.ID.eq(VARIANT_ATTRIBUTE_VALUE.ATTRIBUTE_VALUE_ID))
+        .join(ATTRIBUTE)
+        .on(ATTRIBUTE.ID.eq(ATTRIBUTE_VALUE.ATTRIBUTE_ID))
+        .leftJoin(attrReqT)
+        .on(attrReqT.ATTRIBUTE_ID.eq(ATTRIBUTE.ID).and(attrReqT.LANGUAGE.eq(locale)))
+        .leftJoin(attrDefT)
+        .on(attrDefT.ATTRIBUTE_ID.eq(ATTRIBUTE.ID).and(attrDefT.LANGUAGE.eq(defaultLocale)))
+        .leftJoin(valReqT)
+        .on(valReqT.ATTRIBUTE_VALUE_ID.eq(ATTRIBUTE_VALUE.ID).and(valReqT.LANGUAGE.eq(locale)))
+        .leftJoin(valDefT)
+        .on(
+            valDefT
+                .ATTRIBUTE_VALUE_ID
+                .eq(ATTRIBUTE_VALUE.ID)
+                .and(valDefT.LANGUAGE.eq(defaultLocale)))
+        .where(where)
+        .groupBy(ATTRIBUTE.SLUG, attributeLabel, ATTRIBUTE_VALUE.SLUG, valueLabel)
+        .fetch(
+            r ->
+                new FacetCount(
+                    r.get(ATTRIBUTE.SLUG),
+                    r.get(attributeLabel),
+                    r.get(ATTRIBUTE_VALUE.SLUG),
+                    r.get(valueLabel),
+                    r.get(listingCount) == null ? 0L : r.get(listingCount).longValue()));
   }
 
   @Override
