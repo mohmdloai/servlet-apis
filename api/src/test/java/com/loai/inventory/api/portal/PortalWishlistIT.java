@@ -109,6 +109,7 @@ class PortalWishlistIT {
             new InventoryRepositoryFactoryImpl(),
             new StorefrontBannerRepositoryFactoryImpl(),
             new ListingReviewRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
             storage,
             // The wishlist read never places an order.
             null,

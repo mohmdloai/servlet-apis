@@ -6,6 +6,7 @@ import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.servlet.handler.BannerHandler;
 import com.loai.inventory.api.servlet.handler.CategoryHandler;
+import com.loai.inventory.api.servlet.handler.CollectionHandler;
 import com.loai.inventory.api.servlet.handler.CommentHandler;
 import com.loai.inventory.api.servlet.handler.CreditNoteHandler;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
@@ -84,6 +85,7 @@ public class OrgServlet extends HttpServlet {
             Map.entry("reports", new ReportsHandler(config.reportService, mapper)),
             Map.entry("products", new ProductHandler(config.productService, mapper)),
             Map.entry("categories", new CategoryHandler(config.categoryService, mapper)),
+            Map.entry("collections", new CollectionHandler(config.collectionService, mapper)),
             Map.entry("notifications", new NotificationHandler(config.notificationService, mapper)),
             Map.entry(
                 "notification-preferences",

@@ -105,6 +105,7 @@ class PublicReviewsIT {
             new com.loai.inventory.repository.InventoryRepositoryFactoryImpl(),
             new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
             new ListingReviewRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
             storage,
             null,
             null);

@@ -135,6 +135,19 @@ public class ProductListingService {
       return List.of();
     }
 
+    return enrich(listings, repo);
+  }
+
+  /**
+   * Decorate a page of listing rows with their categories, presigned images and translations —
+   * three batch queries for the whole page, never per row. The returned list preserves {@code
+   * listings}' order, so the caller owns the ordering (list: {@code created_at}; featured / a
+   * collection: the curated position).
+   */
+  private List<ListingView> enrich(List<ProductListing> listings, ProductListingRepository repo) {
+    if (listings.isEmpty()) {
+      return List.of();
+    }
     List<UUID> ids = listings.stream().map(ProductListing::getId).toList();
     Map<UUID, List<UUID>> categoriesByListing = repo.findCategoryIdsForListings(ids);
     Map<UUID, List<ImageView>> imagesByListing =
@@ -155,6 +168,33 @@ public class ProductListingService {
                     imagesByListing.getOrDefault(l.getId(), List.of()),
                     translationsByListing.getOrDefault(l.getId(), List.of())))
         .toList();
+  }
+
+  /**
+   * Enriched views for an explicit, already-ordered id list — the curation reads' shared back end
+   * (roadmap item 8's collection membership; the same {@link ListingView} shape the featured picker
+   * renders). Every status is included: a DRAFT may be staged for launch, and only PUBLISHED ever
+   * serves publicly. Ids not in the org are silently absent rather than an error — the caller
+   * validated ownership when it stored the membership, and a row that vanished is not the reader's
+   * problem. The returned list follows {@code orderedIds}, not the database's order.
+   */
+  public List<ListingView> viewsByIds(UUID orgId, List<UUID> orderedIds) {
+    if (orderedIds == null || orderedIds.isEmpty()) {
+      return List.of();
+    }
+    ProductListingRepository repo = repoFactory.create(rootDsl);
+    Map<UUID, ProductListing> byId = new LinkedHashMap<>();
+    for (ProductListing l : repo.findByIds(orgId, orderedIds)) {
+      byId.put(l.getId(), l);
+    }
+    List<ProductListing> ordered = new ArrayList<>(orderedIds.size());
+    for (UUID id : orderedIds) {
+      ProductListing l = byId.get(id);
+      if (l != null) {
+        ordered.add(l);
+      }
+    }
+    return enrich(ordered, repo);
   }
 
   public long count(UUID orgId, ListingStatus status) {
@@ -175,29 +215,7 @@ public class ProductListingService {
    */
   public List<ListingView> getFeatured(UUID orgId) {
     ProductListingRepository repo = repoFactory.create(rootDsl);
-    List<ProductListing> listings = repo.findFeatured(orgId);
-    if (listings.isEmpty()) {
-      return List.of();
-    }
-    List<UUID> ids = listings.stream().map(ProductListing::getId).toList();
-    Map<UUID, List<UUID>> categoriesByListing = repo.findCategoryIdsForListings(ids);
-    Map<UUID, List<ImageView>> imagesByListing =
-        repo.findImagesForListings(ids).stream()
-            .collect(
-                Collectors.groupingBy(
-                    ProductListingImage::getListingId,
-                    Collectors.mapping(this::toImageView, Collectors.toList())));
-    Map<UUID, List<ProductListingTranslation>> translationsByListing =
-        repo.findTranslationsForListings(ids);
-    return listings.stream()
-        .map(
-            l ->
-                new ListingView(
-                    l,
-                    categoriesByListing.getOrDefault(l.getId(), List.of()),
-                    imagesByListing.getOrDefault(l.getId(), List.of()),
-                    translationsByListing.getOrDefault(l.getId(), List.of())))
-        .toList();
+    return enrich(repo.findFeatured(orgId), repo);
   }
 
   /**

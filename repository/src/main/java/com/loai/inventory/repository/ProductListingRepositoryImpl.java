@@ -5,6 +5,7 @@ import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE_TRANSLATI
 import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE_VALUE;
 import static com.loai.inventory.repository.generated.Tables.ATTRIBUTE_VALUE_TRANSLATION;
 import static com.loai.inventory.repository.generated.Tables.CATEGORY;
+import static com.loai.inventory.repository.generated.Tables.COLLECTION_LISTING;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
@@ -644,6 +645,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
+      UUID collectionId,
       String q,
       String locale,
       String defaultLocale,
@@ -656,12 +658,15 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       int offset,
       int limit) {
     Table<?> sold = soldOnly || sort == ListingSort.BEST_SELLING ? soldUnits(orgId) : null;
-    return joinSoldIfNeeded(joinCategoryIfNeeded(selectListing(), categoryId), sold)
+    return joinSoldIfNeeded(
+            joinCollectionIfNeeded(joinCategoryIfNeeded(selectListing(), categoryId), collectionId),
+            sold)
         .where(
             filterConditions(
                 orgId,
                 status,
                 categoryId,
+                collectionId,
                 q,
                 locale,
                 defaultLocale,
@@ -682,6 +687,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
+      UUID collectionId,
       String q,
       String locale,
       String defaultLocale,
@@ -696,12 +702,14 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     // ?sort=best_selling count never pays for the join.
     Table<?> sold = soldOnly ? soldUnits(orgId) : null;
     return dsl.fetchCount(
-        joinSoldIfNeeded(joinCategoryIfNeeded(step, categoryId), sold)
+        joinSoldIfNeeded(
+                joinCollectionIfNeeded(joinCategoryIfNeeded(step, categoryId), collectionId), sold)
             .where(
                 filterConditions(
                     orgId,
                     status,
                     categoryId,
+                    collectionId,
                     q,
                     locale,
                     defaultLocale,
@@ -808,6 +816,21 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
   }
 
   /**
+   * The collection narrow (roadmap item 8) — a join rather than an EXISTS, because the curated
+   * {@code sort} column has to be reachable by {@link ListingSort#COLLECTION}'s ORDER BY. Safe to
+   * join: the membership PK is {@code (collection_id, product_listing_id)}, so one collection
+   * contributes at most one row per listing and the page count can't inflate.
+   */
+  private static <R extends Record> SelectJoinStep<R> joinCollectionIfNeeded(
+      SelectJoinStep<R> step, UUID collectionId) {
+    if (collectionId == null) {
+      return step;
+    }
+    return step.join(COLLECTION_LISTING)
+        .on(COLLECTION_LISTING.PRODUCT_LISTING_ID.eq(PRODUCT_LISTING.ID));
+  }
+
+  /**
    * The shared predicate set behind {@link #findByFilters} and {@link #countByFilters}: org +
    * status always; category / substring / price bounds each only when present.
    *
@@ -823,6 +846,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
+      UUID collectionId,
       String q,
       String locale,
       String defaultLocale,
@@ -840,6 +864,9 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     }
     if (categoryId != null) {
       c = c.and(PRODUCT_LISTING_CATEGORY.CATEGORY_ID.eq(categoryId));
+    }
+    if (collectionId != null) {
+      c = c.and(COLLECTION_LISTING.COLLECTION_ID.eq(collectionId));
     }
     if (featuredOnly) {
       c = c.and(PRODUCT_LISTING.FEATURED_SORT.isNotNull());
@@ -953,6 +980,9 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       case PRICE_DESC -> List.of(PRODUCT_LISTING.SALES_PRICE.desc(), PRODUCT_LISTING.SLUG.asc());
       case FEATURED ->
           List.of(PRODUCT_LISTING.FEATURED_SORT.asc().nullsLast(), PRODUCT_LISTING.SLUG.asc());
+      // Only reachable with the collection join in place (the service selects it exactly when
+      // ?collection= narrowed the read), so the membership `sort` column is always resolvable here.
+      case COLLECTION -> List.of(COLLECTION_LISTING.SORT.asc(), PRODUCT_LISTING.SLUG.asc());
       // COALESCE(0) rather than nullsLast(): a never-sold listing must sort *equal to* a listing
       // whose window sum is genuinely zero, and then fall to the slug tie-break with it.
       case BEST_SELLING ->
@@ -969,6 +999,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
+      UUID collectionId,
       String q,
       String locale,
       String defaultLocale,
@@ -988,6 +1019,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
             orgId,
             status,
             categoryId,
+            collectionId,
             q,
             locale,
             defaultLocale,
@@ -1006,6 +1038,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
               orgId,
               status,
               categoryId,
+              collectionId,
               q,
               locale,
               defaultLocale,
@@ -1029,6 +1062,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
+      UUID collectionId,
       String q,
       String locale,
       String defaultLocale,
@@ -1045,6 +1079,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
           orgId,
           status,
           categoryId,
+          collectionId,
           q,
           locale,
           defaultLocale,
@@ -1060,6 +1095,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
         orgId,
         status,
         categoryId,
+        collectionId,
         q,
         locale,
         defaultLocale,
@@ -1083,6 +1119,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
+      UUID collectionId,
       String q,
       String locale,
       String defaultLocale,
@@ -1114,6 +1151,7 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
             orgId,
             status,
             categoryId,
+            collectionId,
             q,
             locale,
             defaultLocale,
@@ -1132,7 +1170,9 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
     var step =
         dsl.select(ATTRIBUTE.SLUG, attributeLabel, ATTRIBUTE_VALUE.SLUG, valueLabel, listingCount)
             .from(PRODUCT_LISTING);
-    var joined = joinSoldIfNeeded(joinCategoryIfNeeded(step, categoryId), sold);
+    var joined =
+        joinSoldIfNeeded(
+            joinCollectionIfNeeded(joinCategoryIfNeeded(step, categoryId), collectionId), sold);
     return joined
         .join(PRODUCT_VARIANT)
         .on(
@@ -1182,6 +1222,17 @@ public final class ProductListingRepositoryImpl implements ProductListingReposit
                 .eq(orgId)
                 .and(PRODUCT_LISTING.ID.in(ids))
                 .and(PRODUCT_LISTING.STATUS.eq(toGenerated(ListingStatus.PUBLISHED))))
+        .fetch()
+        .map(this::toListing);
+  }
+
+  @Override
+  public List<ProductListing> findByIds(UUID orgId, Collection<UUID> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    return selectListing()
+        .where(PRODUCT_LISTING.ORG_ID.eq(orgId).and(PRODUCT_LISTING.ID.in(ids)))
         .fetch()
         .map(this::toListing);
   }
