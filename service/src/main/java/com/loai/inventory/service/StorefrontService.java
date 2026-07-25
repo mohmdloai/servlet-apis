@@ -166,8 +166,32 @@ public class StorefrontService {
   /** A node in the public category nav; {@code parentSlug} is null at the root. */
   public record CategoryNav(String name, String slug, String parentSlug) {}
 
-  /** A page of public listings. */
-  public record ListingPage(List<ListingView> items, long total, int page, int size) {}
+  /**
+   * A page of public listings. {@code facets} is <b>null</b> unless the caller asked for it
+   * (`?include_facets=true`) — only the catalog page pays for the extra queries, and the envelope
+   * stays byte-identical for every strip/home/availability reader that does not.
+   */
+  public record ListingPage(
+      List<ListingView> items, long total, int page, int size, List<FacetGroup> facets) {
+    /** Lean constructor — the pre-facets envelope, unchanged. */
+    public ListingPage(List<ListingView> items, long total, int page, int size) {
+      this(items, total, page, size, null);
+    }
+  }
+
+  /** One facet group: the axis plus its in-scope values, ordered count DESC then slug. */
+  public record FacetGroup(String slug, String label, List<FacetValue> values) {}
+
+  /**
+   * One selectable value with its honest count. {@code selected} echoes the caller's own filter, so
+   * the UI renders checked state from the response rather than re-parsing the URL.
+   */
+  public record FacetValue(String slug, String label, long count, boolean selected) {}
+
+  /** Grammar caps (cause-naming 400s) — bounded so the facet fan-out stays ≤ 5 extra queries. */
+  static final int MAX_FACET_ATTRIBUTES = 5;
+
+  static final int MAX_FACET_VALUES_PER_ATTRIBUTE = 10;
 
   /**
    * The public storefront profile — the whitelisted per-org identity ({@code
@@ -765,7 +789,52 @@ public class StorefrontService {
       String locale,
       int page,
       int size) {
+    return listPublished(
+        orgSlug,
+        categorySlug,
+        q,
+        minPrice,
+        maxPrice,
+        sort,
+        featured,
+        sold,
+        locale,
+        Map.of(),
+        null,
+        page,
+        size);
+  }
+
+  /**
+   * The facets-aware read (roadmap item 7, {@code stories/storefront_attribute_facets.md}).
+   *
+   * <p>{@code attributeFilters} is the parsed {@code attr_{slug}=v1,v2} grammar: OR within an
+   * attribute, AND across them, ANDed with every B3 filter. Malformed shapes are cause-naming 400s
+   * here; an <b>unknown</b> attribute or value slug is deliberately NOT an error — it resolves to
+   * the empty set (the category-filter convention), because a merchant deleting an attribute must
+   * not turn every stale bookmarked URL into an error wall.
+   *
+   * <p>{@code includeFacets} is opt-in and strictly {@code "true"} or absent (anything else → 400,
+   * the same no-silent-coercion discipline as {@code ?featured=}). Only the catalog page pays for
+   * the counts, so the cache-key space stays small and the strips keep the lean envelope.
+   */
+  public ListingPage listPublished(
+      String orgSlug,
+      String categorySlug,
+      String q,
+      String minPrice,
+      String maxPrice,
+      String sort,
+      String featured,
+      String sold,
+      String locale,
+      Map<String, List<String>> attributeFilters,
+      String includeFacets,
+      int page,
+      int size) {
     int offset = Pagination.offset(page, size);
+    Map<String, List<String>> attrs = normalizeAttributeFilters(attributeFilters);
+    boolean wantFacets = parseIncludeFacets(includeFacets);
 
     String query = trimToNull(q);
     boolean featuredOnly = parseFeatured(featured);
@@ -811,6 +880,7 @@ public class StorefrontService {
             max,
             featuredOnly,
             soldOnly,
+            attrs,
             listingSort,
             offset,
             size);
@@ -825,10 +895,139 @@ public class StorefrontService {
             min,
             max,
             featuredOnly,
-            soldOnly);
+            soldOnly,
+            attrs);
+
+    List<FacetGroup> facets =
+        wantFacets
+            ? buildFacets(
+                listings,
+                orgId,
+                categoryId,
+                query,
+                resolvedLocale,
+                defaultLocale,
+                min,
+                max,
+                featuredOnly,
+                soldOnly,
+                attrs)
+            : null;
 
     return new ListingPage(
-        enrich(rows, orgId, listings, resolvedLocale, defaultLocale), total, page, size);
+        enrich(rows, orgId, listings, resolvedLocale, defaultLocale), total, page, size, facets);
+  }
+
+  /**
+   * Group the repository's flat {@code (attribute, value, count)} rows into the response shape:
+   * attributes ordered by slug, values by <b>count DESC then slug</b> (the useful choices first),
+   * attributes with no in-scope value omitted entirely — an empty group is chrome that tells the
+   * shopper nothing.
+   */
+  private List<FacetGroup> buildFacets(
+      ProductListingRepository listings,
+      UUID orgId,
+      UUID categoryId,
+      String query,
+      String resolvedLocale,
+      String defaultLocale,
+      java.math.BigDecimal min,
+      java.math.BigDecimal max,
+      boolean featuredOnly,
+      boolean soldOnly,
+      Map<String, List<String>> attrs) {
+    List<ProductListingRepository.FacetCount> counts =
+        listings.facetCounts(
+            orgId,
+            ListingStatus.PUBLISHED,
+            categoryId,
+            query,
+            resolvedLocale,
+            defaultLocale,
+            min,
+            max,
+            featuredOnly,
+            soldOnly,
+            attrs);
+
+    Map<String, String> labelByAttribute = new java.util.TreeMap<>();
+    Map<String, List<FacetValue>> valuesByAttribute = new java.util.TreeMap<>();
+    for (ProductListingRepository.FacetCount fc : counts) {
+      if (fc.count() <= 0) {
+        continue;
+      }
+      labelByAttribute.putIfAbsent(fc.attributeSlug(), fc.attributeLabel());
+      boolean selected = attrs.getOrDefault(fc.attributeSlug(), List.of()).contains(fc.valueSlug());
+      valuesByAttribute
+          .computeIfAbsent(fc.attributeSlug(), k -> new ArrayList<>())
+          .add(new FacetValue(fc.valueSlug(), fc.valueLabel(), fc.count(), selected));
+    }
+
+    List<FacetGroup> groups = new ArrayList<>(valuesByAttribute.size());
+    valuesByAttribute.forEach(
+        (attributeSlug, values) -> {
+          values.sort(
+              java.util.Comparator.comparingLong(FacetValue::count)
+                  .reversed()
+                  .thenComparing(FacetValue::slug));
+          groups.add(new FacetGroup(attributeSlug, labelByAttribute.get(attributeSlug), values));
+        });
+    return groups;
+  }
+
+  /**
+   * Validate + canonicalize the {@code attr_*} grammar. Blank slugs, empty value lists, and the
+   * caps are 400s naming the parameter; values are trimmed, lower-cased and de-duplicated so {@code
+   * attr_size=M,m} is one selection, not two.
+   */
+  private static Map<String, List<String>> normalizeAttributeFilters(
+      Map<String, List<String>> raw) {
+    if (raw == null || raw.isEmpty()) {
+      return Map.of();
+    }
+    if (raw.size() > MAX_FACET_ATTRIBUTES) {
+      throw new com.loai.inventory.common.exception.ValidationException(
+          "at most " + MAX_FACET_ATTRIBUTES + " attr_* filters");
+    }
+    Map<String, List<String>> out = new java.util.LinkedHashMap<>();
+    for (Map.Entry<String, List<String>> e : raw.entrySet()) {
+      String attribute =
+          e.getKey() == null ? null : e.getKey().trim().toLowerCase(java.util.Locale.ROOT);
+      if (attribute == null || attribute.isBlank()) {
+        throw new com.loai.inventory.common.exception.ValidationException(
+            "attr_ filter name must not be blank");
+      }
+      LinkedHashSet<String> values = new LinkedHashSet<>();
+      for (String v : e.getValue() == null ? List.<String>of() : e.getValue()) {
+        String value = v == null ? null : v.trim().toLowerCase(java.util.Locale.ROOT);
+        if (value != null && !value.isBlank()) {
+          values.add(value);
+        }
+      }
+      if (values.isEmpty()) {
+        throw new com.loai.inventory.common.exception.ValidationException(
+            "attr_" + attribute + " must name at least one value");
+      }
+      if (values.size() > MAX_FACET_VALUES_PER_ATTRIBUTE) {
+        throw new com.loai.inventory.common.exception.ValidationException(
+            "attr_" + attribute + " accepts at most " + MAX_FACET_VALUES_PER_ATTRIBUTE + " values");
+      }
+      out.put(attribute, List.copyOf(values));
+    }
+    return out;
+  }
+
+  /** {@code include_facets} is exactly {@code "true"} or absent — anything else is a 400. */
+  private static boolean parseIncludeFacets(String raw) {
+    String value = trimToNull(raw);
+    if (value == null) {
+      return false;
+    }
+    if (!"true".equalsIgnoreCase(value)) {
+      throw new com.loai.inventory.common.exception.ValidationException(
+          "include_facets must be 'true' when present (was '" + raw + "')");
+    }
+    return true;
   }
 
   /**

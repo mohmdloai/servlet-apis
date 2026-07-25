@@ -15,6 +15,7 @@ import com.loai.inventory.api.dto.PublicCheckoutError;
 import com.loai.inventory.api.dto.PublicCheckoutRequest;
 import com.loai.inventory.api.dto.PublicCommentResponse;
 import com.loai.inventory.api.dto.PublicListingResponse;
+import com.loai.inventory.api.dto.PublicListingsPageResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
 import com.loai.inventory.api.dto.PublicPageResponse;
 import com.loai.inventory.api.dto.PublicPageSummaryResponse;
@@ -192,6 +193,42 @@ public class PublicStorefrontServlet extends HttpServlet {
     }
   }
 
+  /**
+   * Pull every {@code attr_{slug}=v1,v2} query parameter into {@code slug → [values]}. Splitting on
+   * commas is all that happens here; the caps, blank checks and canonicalization are the service's
+   * (one place, so the 400s read the same however the read is reached). Parameter names are the
+   * grammar, so a repeated {@code attr_size} folds its values together rather than one winning.
+   */
+  private static java.util.Map<String, List<String>> attributeFilters(HttpServletRequest req) {
+    java.util.Map<String, List<String>> out = new java.util.LinkedHashMap<>();
+    java.util.Enumeration<String> names = req.getParameterNames();
+    if (names == null) {
+      return out;
+    }
+    while (names.hasMoreElements()) {
+      String name = names.nextElement();
+      if (name == null || !name.startsWith(ATTR_PARAM_PREFIX)) {
+        continue;
+      }
+      String attribute = name.substring(ATTR_PARAM_PREFIX.length());
+      String[] raws = req.getParameterValues(name);
+      if (raws == null) {
+        continue;
+      }
+      List<String> values = new java.util.ArrayList<>();
+      for (String raw : raws) {
+        if (raw != null) {
+          java.util.Collections.addAll(values, raw.split(",", -1));
+        }
+      }
+      out.computeIfAbsent(attribute, k -> new java.util.ArrayList<>()).addAll(values);
+    }
+    return out;
+  }
+
+  /** The facet-filter parameter prefix — {@code ?attr_size=m,l}. */
+  private static final String ATTR_PARAM_PREFIX = "attr_";
+
   private void doListings(
       HttpServletRequest req, HttpServletResponse resp, String orgSlug, String[] parts)
       throws IOException {
@@ -208,6 +245,10 @@ public class PublicStorefrontServlet extends HttpServlet {
       // Roadmap item 4 (storefront_best_sellers.md): ?sort=best_selling ranks by units actually
       // sold, and ?sold=true narrows to listings that sold at all in the window (the home strip's
       // collapse-when-empty guard). Both forwarded as-is; validated in the service.
+      // Roadmap item 7 (storefront_attribute_facets.md): every `attr_{slug}=v1,v2` param is one
+      // multi-select filter (OR within, AND across, ANDed with everything above); `include_facets`
+      // opts into the counts. Both validated in the service — malformed shape → 400 naming the
+      // parameter, unknown slug → the empty set (a stale bookmark must not be an error wall).
       ListingPage p =
           service.listPublished(
               orgSlug,
@@ -219,11 +260,17 @@ public class PublicStorefrontServlet extends HttpServlet {
               req.getParameter("featured"),
               req.getParameter("sold"),
               req.getParameter("locale"),
+              attributeFilters(req),
+              req.getParameter("include_facets"),
               page,
               size);
       List<PublicListingResponse> data =
           p.items().stream().map(PublicListingResponse::from).toList();
-      writeJson(resp, 200, new PageResponse<>(data, p.total(), p.page(), p.size()), CACHE_LISTINGS);
+      writeJson(
+          resp,
+          200,
+          PublicListingsPageResponse.of(data, p.total(), p.page(), p.size(), p.facets()),
+          CACHE_LISTINGS);
     } else if (parts.length == 3) {
       writeJson(
           resp,

@@ -233,6 +233,7 @@ public interface ProductListingRepository {
       BigDecimal maxPrice,
       boolean featuredOnly,
       boolean soldOnly,
+      Map<String, List<String>> attributeFilters,
       ListingSort sort,
       int offset,
       int limit);
@@ -264,7 +265,45 @@ public interface ProductListingRepository {
       BigDecimal minPrice,
       BigDecimal maxPrice,
       boolean featuredOnly,
-      boolean soldOnly);
+      boolean soldOnly,
+      Map<String, List<String>> attributeFilters);
+
+  // --- attribute facets (roadmap item 7, stories/storefront_attribute_facets.md) ---
+
+  /**
+   * One {@code (attribute, value)} bucket with the number of listings behind it, labels already
+   * locale-resolved. {@code count} is a {@code COUNT(DISTINCT product_listing_id)} — a listing with
+   * two red variants counts <b>once</b>, because the shopper is choosing between pages, not rows.
+   */
+  record FacetCount(
+      String attributeSlug,
+      String attributeLabel,
+      String valueSlug,
+      String valueLabel,
+      long count) {}
+
+  /**
+   * Facet counts over the B3-filtered listing set, with <b>multi-select</b> semantics: each
+   * attribute's own selections are excluded from its own counts (so picking "M" leaves "L" visible
+   * and correctly counted), while every other attribute's selections still apply.
+   *
+   * <p>{@code attributeFilters} is the full selection map; the implementation runs one grouped
+   * query for all unselected attributes plus one per selected attribute (bounded at ≤ 5 by the
+   * grammar). Attribute filters mean "EXISTS an <b>active</b> variant carrying this value", so a
+   * parent-only listing matches no facet and never appears in a count.
+   */
+  List<FacetCount> facetCounts(
+      UUID orgId,
+      ListingStatus status,
+      UUID categoryId,
+      String q,
+      String locale,
+      String defaultLocale,
+      BigDecimal minPrice,
+      BigDecimal maxPrice,
+      boolean featuredOnly,
+      boolean soldOnly,
+      Map<String, List<String>> attributeFilters);
 
   // --- translations (content-localization slice L2) ---
 
