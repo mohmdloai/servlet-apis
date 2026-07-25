@@ -13,6 +13,7 @@ import com.loai.inventory.api.dto.PublicBannerResponse;
 import com.loai.inventory.api.dto.PublicCategoryResponse;
 import com.loai.inventory.api.dto.PublicCheckoutError;
 import com.loai.inventory.api.dto.PublicCheckoutRequest;
+import com.loai.inventory.api.dto.PublicCollectionResponse;
 import com.loai.inventory.api.dto.PublicCommentResponse;
 import com.loai.inventory.api.dto.PublicListingResponse;
 import com.loai.inventory.api.dto.PublicListingsPageResponse;
@@ -54,6 +55,9 @@ import java.util.List;
  *       in_stock}, B2; {@code ?q=&min_price=&max_price=&sort=} search/filters, B3); {@code
  *       max-age=60}
  *   <li>{@code GET /api/public/{orgSlug}/categories} — category nav; {@code max-age=60}
+ *   <li>{@code GET /api/public/{orgSlug}/collections} — the collections rail (roadmap item 8): only
+ *       collections holding ≥1 PUBLISHED listing, {@code {slug, name}} locale-resolved; {@code
+ *       max-age=300}
  *   <li>{@code GET /api/public/{orgSlug}/og-image} — the stable social-share image stream (bytes,
  *       og key → logo fallback → 404, C2); {@code max-age=3600}
  *   <li>{@code GET /api/public/{orgSlug}/availability?slugs=a,b,c} — batch in-stock (B2); {@code
@@ -159,6 +163,20 @@ public class PublicStorefrontServlet extends HttpServlet {
                   .toList();
           writeJson(resp, 200, data, CACHE_LISTINGS);
         }
+        case "collections" -> {
+          if (parts.length != 2) {
+            throw new ValidationException("Unknown route");
+          }
+          // Roadmap item 8: the rail read. ?locale= resolves each name server-side (unknown → 400
+          // in the service); the locale is part of the URL, so the profile-tier max-age cache is
+          // naturally per-(org, locale). Collections change at merchandising cadence, not catalog
+          // cadence, hence CACHE_PROFILE rather than CACHE_LISTINGS.
+          List<PublicCollectionResponse> data =
+              service.collections(orgSlug, req.getParameter("locale")).stream()
+                  .map(PublicCollectionResponse::from)
+                  .toList();
+          writeJson(resp, 200, data, CACHE_PROFILE);
+        }
         case "availability" -> doAvailability(req, resp, orgSlug, parts);
         case "pages" -> doPages(req, resp, orgSlug, parts);
         case "banners" -> {
@@ -245,6 +263,10 @@ public class PublicStorefrontServlet extends HttpServlet {
       // Roadmap item 4 (storefront_best_sellers.md): ?sort=best_selling ranks by units actually
       // sold, and ?sold=true narrows to listings that sold at all in the window (the home strip's
       // collapse-when-empty guard). Both forwarded as-is; validated in the service.
+      // Roadmap item 8 (storefront_collections.md): ?collection={slug} narrows to one merchant
+      // collection's curated membership and (absent an explicit ?sort=) orders by the curated
+      // position. An unknown slug is the empty result, not a 404 — a renamed shelf must not turn
+      // every stale bookmark into an error wall.
       // Roadmap item 7 (storefront_attribute_facets.md): every `attr_{slug}=v1,v2` param is one
       // multi-select filter (OR within, AND across, ANDed with everything above); `include_facets`
       // opts into the counts. Both validated in the service — malformed shape → 400 naming the
@@ -253,6 +275,7 @@ public class PublicStorefrontServlet extends HttpServlet {
           service.listPublished(
               orgSlug,
               category,
+              req.getParameter("collection"),
               req.getParameter("q"),
               req.getParameter("min_price"),
               req.getParameter("max_price"),

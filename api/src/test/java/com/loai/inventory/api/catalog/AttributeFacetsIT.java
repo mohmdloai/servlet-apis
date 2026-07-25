@@ -120,6 +120,7 @@ class AttributeFacetsIT {
             new InventoryRepositoryFactoryImpl(),
             new StorefrontBannerRepositoryFactoryImpl(),
             new ListingReviewRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
             storage,
             null,
             null);

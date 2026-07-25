@@ -221,11 +221,18 @@ public interface ProductListingRepository {
    * listing query) precisely so they compose with {@code offset}/{@code limit} — a post-fetch sort
    * would corrupt page ≥ 1. The two are independent: the sort alone never hides a never-sold
    * listing (it ranks last), and {@code soldOnly} narrows under any sort.
+   *
+   * <p>Collections (roadmap item 8, {@code stories/storefront_collections.md}): {@code
+   * collectionId} narrows to one collection's curated membership via the {@code collection_listing}
+   * join (null = all), and {@link ListingSort#COLLECTION} orders by that join's {@code sort} — the
+   * merchant's curated position. The join can never multiply a row: {@code (collection_id,
+   * product_listing_id)} is the membership PK.
    */
   List<ProductListing> findByFilters(
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
+      UUID collectionId,
       String q,
       String locale,
       String defaultLocale,
@@ -247,6 +254,14 @@ public interface ProductListingRepository {
    */
   List<ProductListing> findPublishedByIds(UUID orgId, Collection<UUID> ids);
 
+  /**
+   * The org's listings among {@code ids} in <b>any</b> status, unordered (the caller re-imposes its
+   * own order). The admin-plane twin of {@link #findPublishedByIds}: it backs the
+   * collection-curation read, where a staged DRAFT must appear in the picker even though it never
+   * serves publicly. Ids missing or owned by another org are simply absent.
+   */
+  List<ProductListing> findByIds(UUID orgId, Collection<UUID> ids);
+
   long count(UUID orgId);
 
   long countByStatus(UUID orgId, ListingStatus status);
@@ -259,6 +274,7 @@ public interface ProductListingRepository {
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
+      UUID collectionId,
       String q,
       String locale,
       String defaultLocale,
@@ -296,6 +312,7 @@ public interface ProductListingRepository {
       UUID orgId,
       ListingStatus status,
       UUID categoryId,
+      UUID collectionId,
       String q,
       String locale,
       String defaultLocale,

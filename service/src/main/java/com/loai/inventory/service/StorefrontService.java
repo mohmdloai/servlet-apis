@@ -20,6 +20,7 @@ import com.loai.inventory.domain.model.StorefrontBanner;
 import com.loai.inventory.domain.model.StorefrontBannerTranslation;
 import com.loai.inventory.domain.repository.CategoryRepository;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
+import com.loai.inventory.domain.repository.CollectionRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.ListingReviewRepository;
 import com.loai.inventory.domain.repository.ListingReviewRepositoryFactory;
@@ -60,6 +61,7 @@ public class StorefrontService {
   private final InventoryRepositoryFactory inventoryRepoFactory;
   private final StorefrontBannerRepositoryFactory bannerRepoFactory;
   private final ListingReviewRepositoryFactory reviewRepoFactory;
+  private final CollectionRepositoryFactory collectionRepoFactory;
   private final ObjectStorage storage;
   private final SalesOrderService salesOrderService;
   private final OgImageSource ogImageSource;
@@ -72,6 +74,7 @@ public class StorefrontService {
       InventoryRepositoryFactory inventoryRepoFactory,
       StorefrontBannerRepositoryFactory bannerRepoFactory,
       ListingReviewRepositoryFactory reviewRepoFactory,
+      CollectionRepositoryFactory collectionRepoFactory,
       ObjectStorage storage,
       SalesOrderService salesOrderService,
       OgImageSource ogImageSource) {
@@ -82,6 +85,7 @@ public class StorefrontService {
     this.inventoryRepoFactory = inventoryRepoFactory;
     this.bannerRepoFactory = bannerRepoFactory;
     this.reviewRepoFactory = reviewRepoFactory;
+    this.collectionRepoFactory = collectionRepoFactory;
     this.storage = storage;
     this.salesOrderService = salesOrderService;
     this.ogImageSource = ogImageSource;
@@ -385,6 +389,36 @@ public class StorefrontService {
       }
     }
     return null;
+  }
+
+  // collections (roadmap item 8)
+
+  /**
+   * A public collection row — the rail/nav shape, whitelisted to exactly {@code {slug, name}}. The
+   * slug is the public handle ({@code /col/{slug}} and {@code ?collection=}); no internal id, sort
+   * order, or membership size crosses. A merchant's shelf sizes are their business, not the
+   * shopper's.
+   */
+  public record PublicCollectionView(String slug, String name) {}
+
+  /**
+   * The storefront's collections rail: the org's collections that hold at least one
+   * <b>PUBLISHED</b> listing, in the merchant's rail order ({@code sort_order ASC, slug ASC}), each
+   * name resolved {@code requested locale → default locale → slug}. The "at least one published"
+   * rule lives in the SQL, so an all-drafts shelf is never advertised and the frontend rail
+   * collapses for free — the same honesty posture as {@code ?sold=true} on the best-sellers strip.
+   * 404 on an unknown/inactive org slug (opaque, via {@link #resolveOrg}); unknown locale → 400.
+   */
+  public List<PublicCollectionView> collections(String orgSlug, String locale) {
+    Org org = resolveOrg(orgSlug);
+    String defaultLocale = defaultLocaleOf(org);
+    String resolvedLocale = resolveRequestedLocale(locale, defaultLocale);
+    return collectionRepoFactory
+        .create(rootDsl)
+        .findPublicRail(org.getId(), resolvedLocale, defaultLocale)
+        .stream()
+        .map(c -> new PublicCollectionView(c.getSlug(), c.getName()))
+        .toList();
   }
 
   // checkout (B5)
@@ -832,6 +866,50 @@ public class StorefrontService {
       String includeFacets,
       int page,
       int size) {
+    return listPublished(
+        orgSlug,
+        categorySlug,
+        null,
+        q,
+        minPrice,
+        maxPrice,
+        sort,
+        featured,
+        sold,
+        locale,
+        attributeFilters,
+        includeFacets,
+        page,
+        size);
+  }
+
+  /**
+   * The collections-aware read (roadmap item 8, {@code stories/storefront_collections.md}).
+   *
+   * <p>{@code collectionSlug} is one more optional predicate, ANDed with the whole B3 grammar
+   * (q/price/category/featured/sold/{@code attr_*}/paging). Two rules make it behave like the rest
+   * of the family: when it is present and no explicit {@code ?sort=} was given, the default order
+   * becomes the merchant's curated position inside that collection (an explicit sort still
+   * overrides — the grammar stays uniform); and an <b>unknown</b> slug resolves to the <b>empty
+   * result, not a 404</b>, the category-filter convention, so a stale bookmark or a renamed
+   * collection renders the designed empty landing page instead of an error wall. A
+   * blank-but-present value is still a 400 — that is a caller bug, not a stale link.
+   */
+  public ListingPage listPublished(
+      String orgSlug,
+      String categorySlug,
+      String collectionSlug,
+      String q,
+      String minPrice,
+      String maxPrice,
+      String sort,
+      String featured,
+      String sold,
+      String locale,
+      Map<String, List<String>> attributeFilters,
+      String includeFacets,
+      int page,
+      int size) {
     int offset = Pagination.offset(page, size);
     Map<String, List<String>> attrs = normalizeAttributeFilters(attributeFilters);
     boolean wantFacets = parseIncludeFacets(includeFacets);
@@ -839,11 +917,17 @@ public class StorefrontService {
     String query = trimToNull(q);
     boolean featuredOnly = parseFeatured(featured);
     boolean soldOnly = parseSold(sold);
-    // featured + no explicit sort → curated order; otherwise the usual grammar (blank = NEWEST).
+    String wantedCollection = parseCollection(collectionSlug);
+    // featured / a collection + no explicit sort → curated order; otherwise the usual grammar
+    // (blank = NEWEST). A collection's own curated order wins over featured's when both are asked
+    // for: the shopper navigated to a named shelf, so that shelf's arrangement is the one they
+    // mean.
     String sortTrim = trimToNull(sort);
     ListingSort listingSort =
         sortTrim == null
-            ? (featuredOnly ? ListingSort.FEATURED : ListingSort.NEWEST)
+            ? (wantedCollection != null
+                ? ListingSort.COLLECTION
+                : (featuredOnly ? ListingSort.FEATURED : ListingSort.NEWEST))
             : parseSort(sortTrim);
     java.math.BigDecimal min = parsePrice("min_price", minPrice);
     java.math.BigDecimal max = parsePrice("max_price", maxPrice);
@@ -868,11 +952,29 @@ public class StorefrontService {
       categoryId = category.getId();
     }
 
+    UUID collectionId = null;
+    if (wantedCollection != null) {
+      collectionId =
+          collectionRepoFactory
+              .create(rootDsl)
+              .findBySlug(orgId, wantedCollection)
+              .map(com.loai.inventory.domain.model.Collection::getId)
+              .orElse(null);
+      if (collectionId == null) {
+        // Unknown collection → the empty page, never a 404. Short-circuited rather than passed
+        // through as a null predicate, because a null id would also drop the narrow entirely and
+        // serve the whole catalog under a stale shelf's name — the one wrong answer here.
+        return new ListingPage(List.of(), 0L, page, size, wantFacets ? List.of() : null);
+      }
+    }
+
+    final UUID narrowedCollectionId = collectionId;
     List<ProductListing> rows =
         listings.findByFilters(
             orgId,
             ListingStatus.PUBLISHED,
             categoryId,
+            narrowedCollectionId,
             query,
             resolvedLocale,
             defaultLocale,
@@ -889,6 +991,7 @@ public class StorefrontService {
             orgId,
             ListingStatus.PUBLISHED,
             categoryId,
+            narrowedCollectionId,
             query,
             resolvedLocale,
             defaultLocale,
@@ -904,6 +1007,7 @@ public class StorefrontService {
                 listings,
                 orgId,
                 categoryId,
+                narrowedCollectionId,
                 query,
                 resolvedLocale,
                 defaultLocale,
@@ -928,6 +1032,7 @@ public class StorefrontService {
       ProductListingRepository listings,
       UUID orgId,
       UUID categoryId,
+      UUID collectionId,
       String query,
       String resolvedLocale,
       String defaultLocale,
@@ -941,6 +1046,7 @@ public class StorefrontService {
             orgId,
             ListingStatus.PUBLISHED,
             categoryId,
+            collectionId,
             query,
             resolvedLocale,
             defaultLocale,
@@ -1287,6 +1393,24 @@ public class StorefrontService {
     }
     throw new com.loai.inventory.common.exception.ValidationException(
         "Parameter 'featured' must be 'true' or absent");
+  }
+
+  /**
+   * Parse the {@code collection} param (roadmap item 8): absent → null (no narrow); otherwise the
+   * trimmed, lower-cased slug. A <b>present but blank</b> value is a 400 — a caller that sent
+   * {@code ?collection=} meant to narrow and got it wrong, which is different from a stale slug
+   * that no longer resolves (that is the empty result, decided at resolution time, not here).
+   */
+  private static String parseCollection(String raw) {
+    if (raw == null) {
+      return null;
+    }
+    String t = raw.trim();
+    if (t.isEmpty()) {
+      throw new com.loai.inventory.common.exception.ValidationException(
+          "Parameter 'collection' must name a collection slug when present");
+    }
+    return t.toLowerCase(java.util.Locale.ROOT);
   }
 
   /** Parse a price bound: absent/blank → null; non-numeric or negative → a cause-naming 400. */

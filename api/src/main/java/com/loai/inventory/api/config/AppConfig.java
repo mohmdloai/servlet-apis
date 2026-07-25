@@ -12,6 +12,7 @@ import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.storage.ObjectStorageFactory;
 import com.loai.inventory.domain.repository.AppUserMagicTokenRepositoryFactory;
 import com.loai.inventory.domain.repository.CategoryRepositoryFactory;
+import com.loai.inventory.domain.repository.CollectionRepositoryFactory;
 import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerAddressRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerMagicTokenRepositoryFactory;
@@ -48,6 +49,7 @@ import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
+import com.loai.inventory.repository.CollectionRepositoryFactoryImpl;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerAddressRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
@@ -83,6 +85,7 @@ import com.loai.inventory.repository.StorefrontPageRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CategoryService;
+import com.loai.inventory.service.CollectionService;
 import com.loai.inventory.service.CreditNoteService;
 import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.CustomerService;
@@ -182,6 +185,7 @@ public class AppConfig {
   public final UserRepository userRepository;
   public final ImpersonationEventRepository impersonationEventRepository;
   public final CategoryRepositoryFactory categoryRepositoryFactory;
+  public final CollectionRepositoryFactory collectionRepositoryFactory;
   public final NotificationRepositoryFactory notificationRepositoryFactory;
   public final NotificationPreferenceRepositoryFactory notificationPreferenceRepositoryFactory;
   public final CustomerMagicTokenRepositoryFactory customerMagicTokenRepositoryFactory;
@@ -232,6 +236,7 @@ public class AppConfig {
   public final UserAdminService userAdminService;
   public final ProductService productService;
   public final CategoryService categoryService;
+  public final CollectionService collectionService;
   public final NotificationService notificationService;
   public final MagicLinkService magicLinkService;
   public final CustomerOtpStore customerOtpStore;
@@ -309,6 +314,7 @@ public class AppConfig {
     this.userRepository = new UserRepositoryImpl(dsl);
     this.impersonationEventRepository = new ImpersonationEventRepositoryImpl(dsl);
     this.categoryRepositoryFactory = new CategoryRepositoryFactoryImpl();
+    this.collectionRepositoryFactory = new CollectionRepositoryFactoryImpl();
     this.notificationRepositoryFactory = new NotificationRepositoryFactoryImpl();
     this.notificationPreferenceRepositoryFactory =
         new NotificationPreferenceRepositoryFactoryImpl();
@@ -475,6 +481,15 @@ public class AppConfig {
             orgRepositoryFactory,
             productVariantRepositoryFactory,
             objectStorage);
+    // After productListingService — the curation read reuses its enrichment (thumbnails, status
+    // badges) so a collection row renders exactly like a featured one.
+    this.collectionService =
+        new CollectionService(
+            dsl,
+            collectionRepositoryFactory,
+            productListingRepositoryFactory,
+            orgRepositoryFactory,
+            productListingService);
     this.productVariantService =
         new ProductVariantService(
             dsl,
@@ -602,6 +617,7 @@ public class AppConfig {
             inventoryRepositoryFactory,
             storefrontBannerRepositoryFactory,
             listingReviewRepositoryFactory,
+            collectionRepositoryFactory,
             objectStorage,
             salesOrderService,
             new PresignedOgImageSource(objectStorage));
