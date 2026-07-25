@@ -94,7 +94,9 @@ public class ListingReviewService {
                   .findBySlug(orgId, listingSlug.trim())
                   .orElseThrow(() -> new NotFoundException("Listing not found: " + listingSlug));
           ListingReviewRepository reviews = reviewRepoFactory.create(txDsl);
-          if (!reviews.hasDeliveredProduct(orgId, customerId, listing.getProductId())) {
+          // Gate on the whole listing, parent product ∪ its variants' children (variants epic
+          // §5 #6) — buying any variant is buying this listing, and reviews are listing-level.
+          if (!reviews.hasDeliveredListing(orgId, customerId, listing.getId())) {
             throw new AuthorizationException(NOT_ELIGIBLE_MESSAGE);
           }
           String displayName = freezeDisplayName(txDsl, orgId, customerId);

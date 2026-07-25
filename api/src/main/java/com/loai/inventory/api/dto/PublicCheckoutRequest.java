@@ -92,6 +92,14 @@ public class PublicCheckoutRequest {
 
   public static class LineBody {
     private String listingSlug;
+
+    /**
+     * The variant's public key ("red-m"), when the listing sells through variants (VG2). Required
+     * for such a listing (400 otherwise) and rejected for one that has none — the key is the ONLY
+     * public handle a variant has; no product id or SKU is representable here.
+     */
+    private String variant;
+
     private int quantity;
 
     public String getListingSlug() {
@@ -100,6 +108,14 @@ public class PublicCheckoutRequest {
 
     public void setListingSlug(String listingSlug) {
       this.listingSlug = listingSlug;
+    }
+
+    public String getVariant() {
+      return variant;
+    }
+
+    public void setVariant(String variant) {
+      this.variant = variant;
     }
 
     public int getQuantity() {

@@ -6,8 +6,8 @@ import java.util.List;
 /**
  * The {@code 409} body for an anonymous checkout shortage: the standard {@code
  * status/error/message} shape plus {@code shortages}, each re-keyed to {@code listing_slug} +
- * {@code title} — <b>never</b> {@code product_id} (the no-leak invariant, {@code
- * public_checkout.md} §No-leak).
+ * {@code variant} + {@code title} — <b>never</b> {@code product_id} (the no-leak invariant, {@code
+ * public_checkout.md} §No-leak; the variant key is the only public handle a variant has).
  */
 public class PublicCheckoutError {
 
@@ -25,7 +25,10 @@ public class PublicCheckoutError {
     return new PublicCheckoutError(
         message,
         shortages.stream()
-            .map(s -> new Shortage(s.listingSlug(), s.title(), s.requested(), s.available()))
+            .map(
+                s ->
+                    new Shortage(
+                        s.listingSlug(), s.variant(), s.title(), s.requested(), s.available()))
             .toList());
   }
 
@@ -45,6 +48,11 @@ public class PublicCheckoutError {
     return shortages;
   }
 
-  /** A per-line shortage — slug-keyed, no internal id. */
-  public record Shortage(String listingSlug, String title, int requested, int available) {}
+  /**
+   * A per-line shortage — slug-keyed, no internal id. {@code variant} (VG2) is the key of the
+   * option that fell short, absent on a variant-less line, so a cart holding two sizes of one
+   * listing highlights only the size that is actually short.
+   */
+  public record Shortage(
+      String listingSlug, String variant, String title, int requested, int available) {}
 }

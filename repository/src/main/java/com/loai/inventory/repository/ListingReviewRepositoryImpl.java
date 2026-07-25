@@ -7,6 +7,7 @@ import static com.loai.inventory.repository.generated.Tables.LISTING_REVIEW;
 import static com.loai.inventory.repository.generated.Tables.ORG;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_TRANSLATION;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_VARIANT;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 
@@ -57,6 +58,35 @@ public final class ListingReviewRepositoryImpl implements ListingReviewRepositor
             .join(SALES_ORDER)
             .on(SALES_ORDER.ID.eq(FULFILLMENT.SALES_ORDER_ID))
             .where(SALES_ORDER_LINE.PRODUCT_ID.eq(productId))
+            .and(
+                FULFILLMENT.STATUS.eq(
+                    com.loai.inventory.repository.generated.enums.FulfillmentStatus.DELIVERED))
+            .and(SALES_ORDER.ORG_ID.eq(orgId))
+            .and(SALES_ORDER.CUSTOMER_ID.eq(customerId)));
+  }
+
+  @Override
+  public boolean hasDeliveredListing(UUID orgId, UUID customerId, UUID listingId) {
+    // Same EXISTS as hasDeliveredProduct, but the product side is the listing's whole sellable set:
+    // its parent product UNION every variant's child product (variants epic §5 #6).
+    return dsl.fetchExists(
+        dsl.selectOne()
+            .from(FULFILLMENT_LINE)
+            .join(SALES_ORDER_LINE)
+            .on(SALES_ORDER_LINE.ID.eq(FULFILLMENT_LINE.SALES_ORDER_LINE_ID))
+            .join(FULFILLMENT)
+            .on(FULFILLMENT.ID.eq(FULFILLMENT_LINE.FULFILLMENT_ID))
+            .join(SALES_ORDER)
+            .on(SALES_ORDER.ID.eq(FULFILLMENT.SALES_ORDER_ID))
+            .where(
+                SALES_ORDER_LINE.PRODUCT_ID.in(
+                    DSL.select(PRODUCT_LISTING.PRODUCT_ID)
+                        .from(PRODUCT_LISTING)
+                        .where(PRODUCT_LISTING.ID.eq(listingId))
+                        .unionAll(
+                            DSL.select(PRODUCT_VARIANT.PRODUCT_ID)
+                                .from(PRODUCT_VARIANT)
+                                .where(PRODUCT_VARIANT.PRODUCT_LISTING_ID.eq(listingId)))))
             .and(
                 FULFILLMENT.STATUS.eq(
                     com.loai.inventory.repository.generated.enums.FulfillmentStatus.DELIVERED))

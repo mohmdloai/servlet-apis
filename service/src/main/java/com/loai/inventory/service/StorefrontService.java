@@ -109,7 +109,59 @@ public class StorefrontService {
       List<PublicImage> images,
       List<CategoryRef> categories,
       String ratingAvg,
-      Long ratingCount) {}
+      Long ratingCount,
+      /**
+       * True when this listing sells through variants (VG2). On a <b>row</b> it is the signal that
+       * {@code salesPrice} is a "from" price and that the shopper must open the detail to choose;
+       * on the <b>detail</b> it says {@link #variants} is the thing to buy, not the listing itself.
+       */
+      boolean hasVariants,
+      /**
+       * The active variants, in curated order — <b>detail only</b>; a row carries an empty list (a
+       * grid must not pay for it). Each is the public shape: key, label, option labels, its own
+       * price and its own stock. No {@code product_id}, SKU or barcode is representable here.
+       */
+      List<VariantView> variants) {
+
+    /** Row constructor — no variants block, {@code hasVariants} still honest. */
+    public ListingView(
+        String slug,
+        String title,
+        String marketingCopy,
+        java.math.BigDecimal salesPrice,
+        boolean inStock,
+        List<PublicImage> images,
+        List<CategoryRef> categories,
+        String ratingAvg,
+        Long ratingCount,
+        boolean hasVariants) {
+      this(
+          slug,
+          title,
+          marketingCopy,
+          salesPrice,
+          inStock,
+          images,
+          categories,
+          ratingAvg,
+          ratingCount,
+          hasVariants,
+          List.of());
+    }
+  }
+
+  /**
+   * One selectable variant on the public detail (VG2, architecture §3). {@code key} is the only
+   * handle that crosses — it is what a cart line and the availability batch name it by. {@code
+   * options} maps each axis slug to the value's localized <b>label</b> ("size" → "M"), so the
+   * picker renders without a second lookup, and {@code label} is those joined ("Red / M").
+   */
+  public record VariantView(
+      String key,
+      String label,
+      Map<String, String> options,
+      java.math.BigDecimal price,
+      boolean inStock) {}
 
   /** A node in the public category nav; {@code parentSlug} is null at the root. */
   public record CategoryNav(String name, String slug, String parentSlug) {}
@@ -313,8 +365,17 @@ public class StorefrontService {
 
   // checkout (B5)
 
-  /** One cart line at checkout: a public listing slug + quantity. */
-  public record CheckoutLine(String listingSlug, int quantity) {}
+  /**
+   * One cart line at checkout: a public listing slug, an optional {@code variantKey}, and a
+   * quantity. The key is the ONLY public handle for a variant (architecture §3) — no product id or
+   * SKU is representable on this wire.
+   */
+  public record CheckoutLine(String listingSlug, String variantKey, int quantity) {
+    /** Variant-less convenience — a listing sold as a single product (today's path). */
+    public CheckoutLine(String listingSlug, int quantity) {
+      this(listingSlug, null, quantity);
+    }
+  }
 
   /**
    * The anonymous checkout request: customer form + cart lines + optional notes + optional {@code
@@ -333,9 +394,14 @@ public class StorefrontService {
     }
   }
 
-  /** A re-keyed shortage — slug + title, never {@code product_id}. */
+  /**
+   * A re-keyed shortage — slug + title, never {@code product_id}. Since VG2 it also names the
+   * {@code variant} that fell short (null on a variant-less line), and the {@code title} is the
+   * composed one ("Shirt — Red / M"), so a cart with two sizes of the same listing highlights the
+   * line that is actually short instead of both.
+   */
   public record StorefrontShortage(
-      String listingSlug, String title, int requested, int available) {}
+      String listingSlug, String variant, String title, int requested, int available) {}
 
   /**
    * 409 raised from {@link #checkout} when the reservation engine reports a shortage — the internal
@@ -401,24 +467,12 @@ public class StorefrontService {
             orgId, requestedSlugs, ListingStatus.PUBLISHED, resolvedLocale, defaultLocale)) {
       bySlug.put(r.slug(), r);
     }
-
-    // Build placement lines in request order; carry the slug/title per product for response labels
-    // and 409 re-keying. Any unresolved slug is an opaque 404 (never distinguishes unknown vs
-    // draft). The resolved title is snapshotted onto the order line (L2b) and reused as the label.
-    List<SalesOrderService.StorefrontLineInput> orderLines = new ArrayList<>(input.lines().size());
-    Map<UUID, String> titleByProduct = new HashMap<>();
-    Map<UUID, String> slugByProduct = new HashMap<>();
-    for (CheckoutLine line : input.lines()) {
-      CheckoutLineResolution res = bySlug.get(line.listingSlug());
-      if (res == null) {
-        throw new NotFoundException("Listing not available");
-      }
-      orderLines.add(
-          new SalesOrderService.StorefrontLineInput(
-              res.productId(), line.quantity(), res.salesPrice(), res.title()));
-      titleByProduct.put(res.productId(), res.title());
-      slugByProduct.put(res.productId(), res.slug());
-    }
+    ResolvedCart cart =
+        resolveCart(listings, orgId, input.lines(), bySlug, resolvedLocale, defaultLocale);
+    List<SalesOrderService.StorefrontLineInput> orderLines = cart.orderLines();
+    Map<UUID, String> titleByProduct = cart.titleByProduct();
+    Map<UUID, String> slugByProduct = cart.slugByProduct();
+    Map<UUID, String> variantByProduct = cart.variantByProduct();
 
     try {
       SalesOrderService.StorefrontPlaced placed =
@@ -439,6 +493,7 @@ public class StorefrontService {
                   s ->
                       new StorefrontShortage(
                           slugByProduct.get(s.productId()),
+                          variantByProduct.get(s.productId()),
                           titleByProduct.get(s.productId()),
                           s.requested(),
                           s.available()))
@@ -447,9 +502,128 @@ public class StorefrontService {
     }
   }
 
+  /**
+   * A resolved cart: the placement lines plus the per-<b>child-product</b> maps the response labels
+   * and the 409 re-key need. Every map is keyed by the product actually reserved — the parent for a
+   * variant-less line, the child for a variant one — which is what makes two variants of one
+   * listing two independently-reportable lines.
+   */
+  record ResolvedCart(
+      List<SalesOrderService.StorefrontLineInput> orderLines,
+      Map<UUID, String> titleByProduct,
+      Map<UUID, String> slugByProduct,
+      Map<UUID, String> variantByProduct) {}
+
+  /**
+   * Resolve cart lines → placement lines, in request order (architecture §5 #2). Shared verbatim by
+   * the anonymous and the portal checkout, so the two can never drift on what a variant line means.
+   *
+   * <p>The rules, all cause-naming:
+   *
+   * <ul>
+   *   <li>unknown / non-PUBLISHED slug → opaque 404 (unchanged — never says which);
+   *   <li>listing HAS variants and the line names none → <b>400</b>. Falling back to the parent
+   *       would charge the listing price and reserve the parent's stock for an option the shopper
+   *       never chose;
+   *   <li>listing has NO variants and the line names one → 400 (the client is out of sync);
+   *   <li>unknown or deactivated variant key → opaque 404, the same shape as an unknown slug.
+   * </ul>
+   *
+   * <p>A variant line resolves to the child product, the variant's own price, and the composed
+   * title ("Shirt — Red / M") that gets frozen onto the order line — the {@code
+   * OrderLineTitleSnapshotIT} precedent, one level down.
+   */
+  static ResolvedCart resolveCart(
+      ProductListingRepository listings,
+      UUID orgId,
+      List<CheckoutLine> lines,
+      Map<String, CheckoutLineResolution> bySlug,
+      String locale,
+      String defaultLocale) {
+    // Only fetch variants for the slugs that actually named one — a variant-less cart pays nothing.
+    LinkedHashSet<String> variantSlugs = new LinkedHashSet<>();
+    for (CheckoutLine line : lines) {
+      if (line.variantKey() != null && !line.variantKey().isBlank()) {
+        variantSlugs.add(line.listingSlug());
+      }
+    }
+    Map<String, ProductListingRepository.PublicVariant> byVariantToken = new HashMap<>();
+    if (!variantSlugs.isEmpty()) {
+      for (ProductListingRepository.PublicVariant v :
+          listings.findPublicVariantsForSlugs(
+              orgId, variantSlugs, ListingStatus.PUBLISHED, locale, defaultLocale)) {
+        byVariantToken.put(variantToken(v.listingSlug(), v.variantKey()), v);
+      }
+    }
+
+    List<SalesOrderService.StorefrontLineInput> orderLines = new ArrayList<>(lines.size());
+    Map<UUID, String> titleByProduct = new HashMap<>();
+    Map<UUID, String> slugByProduct = new HashMap<>();
+    Map<UUID, String> variantByProduct = new HashMap<>();
+    for (CheckoutLine line : lines) {
+      CheckoutLineResolution res = bySlug.get(line.listingSlug());
+      if (res == null) {
+        throw new NotFoundException("Listing not available");
+      }
+      String variantKey =
+          line.variantKey() == null || line.variantKey().isBlank()
+              ? null
+              : line.variantKey().trim();
+
+      if (variantKey == null) {
+        if (res.hasVariants()) {
+          throw new com.loai.inventory.common.exception.ValidationException(
+              "variant is required for " + line.listingSlug());
+        }
+        orderLines.add(
+            new SalesOrderService.StorefrontLineInput(
+                res.productId(), line.quantity(), res.salesPrice(), res.title()));
+        titleByProduct.put(res.productId(), res.title());
+        slugByProduct.put(res.productId(), res.slug());
+        continue;
+      }
+
+      if (!res.hasVariants()) {
+        throw new com.loai.inventory.common.exception.ValidationException(
+            line.listingSlug() + " has no variants");
+      }
+      ProductListingRepository.PublicVariant variant =
+          byVariantToken.get(variantToken(line.listingSlug(), variantKey));
+      if (variant == null) {
+        // Unknown or deactivated — the same opaque 404 as an unknown slug, so the endpoint never
+        // becomes an oracle for which options a merchant has retired.
+        throw new NotFoundException("Listing not available");
+      }
+      String composedTitle = res.title() + " — " + variant.label();
+      orderLines.add(
+          new SalesOrderService.StorefrontLineInput(
+              variant.productId(), line.quantity(), variant.salesPrice(), composedTitle));
+      titleByProduct.put(variant.productId(), composedTitle);
+      slugByProduct.put(variant.productId(), res.slug());
+      variantByProduct.put(variant.productId(), variant.variantKey());
+    }
+    return new ResolvedCart(orderLines, titleByProduct, slugByProduct, variantByProduct);
+  }
+
+  /**
+   * The public composite token for a variant — {@code "{slug}::{variantKey}"}. One spelling, used
+   * by both the availability batch's request grammar and the cart-resolution lookup, so the two can
+   * never disagree about what identifies a variant.
+   */
+  public static String variantToken(String slug, String variantKey) {
+    return slug + VARIANT_TOKEN_SEPARATOR + variantKey;
+  }
+
+  /** The separator in a {@code slug::variantKey} availability token. */
+  public static final String VARIANT_TOKEN_SEPARATOR = "::";
+
   // availability (B2)
 
-  /** One availability row: a public slug + the boolean {@code inStock} (never a quantity). */
+  /**
+   * One availability row, keyed by the <b>token the caller asked with</b> — a bare {@code slug} or
+   * a {@code slug::variantKey} (VG2). Echoing the request token rather than re-deriving it is what
+   * lets a client zip the response onto its cart lines without re-parsing anything.
+   */
   public record AvailabilityView(String slug, boolean inStock) {}
 
   /**
@@ -461,20 +635,67 @@ public class StorefrontService {
    * order.
    */
   public List<AvailabilityView> availability(String orgSlug, List<String> slugs) {
-    UUID orgId = resolveOrg(orgSlug).getId();
+    Org org = resolveOrg(orgSlug);
+    UUID orgId = org.getId();
+    String defaultLocale = defaultLocaleOf(org);
     LinkedHashSet<String> ordered = new LinkedHashSet<>(slugs);
+
+    // VG2: a token is either a bare slug (listing-level = "any active variant or the parent has
+    // stock", today's meaning preserved) or "slug::variantKey" (that one option). Both resolve in
+    // the same two queries; the response stays one row per requested token, in request order.
+    LinkedHashSet<String> listingSlugs = new LinkedHashSet<>();
+    LinkedHashSet<String> variantSlugs = new LinkedHashSet<>();
+    for (String token : ordered) {
+      String slug = listingSlugOf(token);
+      listingSlugs.add(slug);
+      if (variantKeyOf(token) != null) {
+        variantSlugs.add(slug);
+      }
+    }
+
     ProductListingRepository listings = listingRepoFactory.create(rootDsl);
     Map<String, Integer> availableBySlug = new HashMap<>();
     for (ProductListingRepository.ListingAvailability a :
-        listings.resolveAvailability(orgId, ordered, ListingStatus.PUBLISHED)) {
+        listings.resolveAvailability(orgId, listingSlugs, ListingStatus.PUBLISHED)) {
       availableBySlug.put(a.slug(), a.available());
     }
+    Map<String, Integer> availableByVariant = new HashMap<>();
+    if (!variantSlugs.isEmpty()) {
+      for (ProductListingRepository.PublicVariant v :
+          listings.findPublicVariantsForSlugs(
+              orgId, variantSlugs, ListingStatus.PUBLISHED, defaultLocale, defaultLocale)) {
+        availableByVariant.put(variantToken(v.listingSlug(), v.variantKey()), v.available());
+      }
+    }
+
     List<AvailabilityView> out = new ArrayList<>(ordered.size());
-    for (String slug : ordered) {
-      Integer available = availableBySlug.get(slug);
-      out.add(new AvailabilityView(slug, available != null && available > 0));
+    for (String token : ordered) {
+      Integer available =
+          variantKeyOf(token) == null
+              ? availableBySlug.get(listingSlugOf(token))
+              // An unknown or deactivated variant is `false`, exactly like an unknown slug —
+              // opaque,
+              // never a 404, never an oracle for which options exist.
+              : availableByVariant.get(token);
+      out.add(new AvailabilityView(token, available != null && available > 0));
     }
     return out;
+  }
+
+  /** The listing half of an availability token ({@code "shirt::red-m"} → {@code "shirt"}). */
+  private static String listingSlugOf(String token) {
+    int at = token.indexOf(VARIANT_TOKEN_SEPARATOR);
+    return at < 0 ? token : token.substring(0, at);
+  }
+
+  /** The variant half, or null for a bare listing token. A trailing {@code "::"} reads as null. */
+  private static String variantKeyOf(String token) {
+    int at = token.indexOf(VARIANT_TOKEN_SEPARATOR);
+    if (at < 0) {
+      return null;
+    }
+    String key = token.substring(at + VARIANT_TOKEN_SEPARATOR.length());
+    return key.isBlank() ? null : key;
   }
 
   /** The unfiltered/category-only read — delegates with no search, no bounds, default sort. */
@@ -648,13 +869,27 @@ public class StorefrontService {
     // Batch the per-language content and resolve each listing to the requested locale (L2).
     Map<UUID, List<ProductListingTranslation>> translationsByListing =
         listings.findTranslationsForListings(listingIds);
+    // VG2: one grouped query gives the page its "from" prices and the children half of the §4
+    // in_stock union. A listing absent from this map simply has no variants — the row is unchanged.
+    Map<UUID, ProductListingRepository.VariantSummary> variantSummaries =
+        listings.findVariantSummaries(orgId, listingIds);
     return rows.stream()
         .map(
             l -> {
               ProductListingImage primary = primaryByListing.get(l.getId());
               List<PublicImage> images =
                   primary == null ? List.of() : List.of(toPublicImage(primary));
-              boolean inStock = availableByProduct.getOrDefault(l.getProductId(), 0) > 0;
+              ProductListingRepository.VariantSummary variants = variantSummaries.get(l.getId());
+              // The union (§4): a row is "in stock" when the parent OR any active variant is.
+              boolean inStock =
+                  availableByProduct.getOrDefault(l.getProductId(), 0) > 0
+                      || (variants != null && variants.anyInStock());
+              // With variants, the row shows the honest "from" price — the cheapest active option —
+              // not the parent's sales_price, which nothing on the page is actually sold at.
+              java.math.BigDecimal price =
+                  variants == null || variants.minPrice() == null
+                      ? l.getSalesPrice()
+                      : variants.minPrice();
               ListingReviewRepository.Aggregate agg = aggregateByListing.get(l.getId());
               ResolvedContent content =
                   resolveContent(
@@ -663,12 +898,13 @@ public class StorefrontService {
                   l.getSlug(),
                   content.title(),
                   content.marketingCopy(),
-                  l.getSalesPrice(),
+                  price,
                   inStock,
                   images,
                   List.of(),
                   formatRatingAvg(agg),
-                  agg == null ? null : agg.count());
+                  agg == null ? null : agg.count(),
+                  variants != null);
             })
         .toList();
   }
@@ -740,15 +976,22 @@ public class StorefrontService {
                             catTranslations.get(c.getId()), resolvedLocale, defaultLocale),
                         c.getSlug()))
             .toList();
-    boolean inStock =
+    // VG2: the active variants, with per-variant price + stock and locale-resolved option labels.
+    List<VariantView> variants =
+        toVariantViews(
+            listings.findPublicVariantsForListing(
+                orgId, listing.getId(), resolvedLocale, defaultLocale));
+    // §4: listing-level in_stock is the union — the parent's own stock OR any active variant's.
+    boolean parentInStock =
         inventoryRepoFactory
                 .create(rootDsl)
                 .findAvailableByProductIds(orgId, List.of(listing.getProductId()))
                 .getOrDefault(listing.getProductId(), 0)
             > 0;
+    boolean inStock = parentInStock || variants.stream().anyMatch(VariantView::inStock);
     ResolvedContent content =
         resolveContent(listings.findTranslations(listing.getId()), resolvedLocale, defaultLocale);
-    return toView(listings, listing, inStock, categories, content);
+    return toView(listings, listing, inStock, categories, content, variants);
   }
 
   /** Nav read without an explicit locale — resolves to the org's default locale. */
@@ -880,7 +1123,8 @@ public class StorefrontService {
       ProductListing l,
       boolean inStock,
       List<CategoryRef> categories,
-      ResolvedContent content) {
+      ResolvedContent content,
+      List<VariantView> variants) {
     List<PublicImage> images =
         listings.findImages(l.getId()).stream().map(this::toPublicImage).toList();
     ListingReviewRepository.Aggregate agg =
@@ -897,7 +1141,20 @@ public class StorefrontService {
         images,
         categories,
         formatRatingAvg(agg),
-        agg == null ? null : agg.count());
+        agg == null ? null : agg.count(),
+        !variants.isEmpty(),
+        variants);
+  }
+
+  /** Repository variant rows → the whitelisted public shape (no product id, no SKU, no barcode). */
+  private static List<VariantView> toVariantViews(
+      List<ProductListingRepository.PublicVariant> variants) {
+    return variants.stream()
+        .map(
+            v ->
+                new VariantView(
+                    v.variantKey(), v.label(), v.options(), v.salesPrice(), v.available() > 0))
+        .toList();
   }
 
   // locale resolution (content-localization slice L2)

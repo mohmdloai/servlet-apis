@@ -326,7 +326,9 @@ public class PublicStorefrontServlet extends HttpServlet {
       for (PublicCheckoutRequest.LineBody l : body.getLines()) {
         lines.add(
             new CheckoutLine(
-                l == null ? null : l.getListingSlug(), l == null ? 0 : l.getQuantity()));
+                l == null ? null : l.getListingSlug(),
+                l == null ? null : l.getVariant(),
+                l == null ? 0 : l.getQuantity()));
       }
     }
     CheckoutInput input = new CheckoutInput(customer, lines, body.getNotes(), body.getLocale());

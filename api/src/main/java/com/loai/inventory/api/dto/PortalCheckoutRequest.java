@@ -76,7 +76,22 @@ public class PortalCheckoutRequest {
 
   public static class LineBody {
     private String listingSlug;
+
+    /**
+     * The variant's public key ("red-m") when the listing sells through variants (VG2) — the same
+     * wire as the anonymous checkout, and the only public handle a variant has.
+     */
+    private String variant;
+
     private int quantity;
+
+    public String getVariant() {
+      return variant;
+    }
+
+    public void setVariant(String variant) {
+      this.variant = variant;
+    }
 
     public String getListingSlug() {
       return listingSlug;

@@ -23,7 +23,17 @@ public interface ProductListingRepository {
    * stories/public_checkout.md}.
    */
   record CheckoutLineResolution(
-      String slug, UUID productId, java.math.BigDecimal salesPrice, String title) {}
+      String slug,
+      UUID productId,
+      java.math.BigDecimal salesPrice,
+      String title,
+      /**
+       * True when the listing sells through variants (VG2). A cart line for such a listing MUST
+       * name one — the parent product is the listing's identity, not a sellable option — so the
+       * caller turns a variant-less line into a cause-naming 400 rather than quietly charging the
+       * listing price for an unspecified option.
+       */
+      boolean hasVariants) {}
 
   /**
    * Resolve a cart's listing slugs → {@link CheckoutLineResolution} in one query, constrained to
@@ -35,6 +45,10 @@ public interface ProductListingRepository {
    * {@code product_listing_translation.title}, else the {@code defaultLocale} row's, else the
    * legacy {@code product_listing.title} — so the title snapshotted onto the order line matches the
    * locale the shopper checked out in, never the internal {@code product.name}.
+   *
+   * <p>The resolution is the <b>parent</b> product's (today's path). A variant line resolves
+   * through {@link #findPublicVariantsForSlugs} instead, to the child product and the variant's own
+   * price — see {@code docs/catalog-variants-architecture.md} §5 #2.
    */
   List<CheckoutLineResolution> resolveForCheckout(
       UUID orgId,
@@ -42,6 +56,55 @@ public interface ProductListingRepository {
       ListingStatus status,
       String locale,
       String defaultLocale);
+
+  // --- variants on the public surface (slice VG2) ---
+
+  /**
+   * One <b>active</b> variant of a PUBLISHED listing, resolved for the public surface (VG2).
+   *
+   * <p>{@code variantKey} is the only public handle; {@code productId} is the child product and
+   * stays repository-side (it is what the checkout reserves and snapshots against, and it never
+   * crosses the public boundary). {@code options} maps each axis slug to the value's <b>localized
+   * label</b> ("size" → "M"), and {@code label} is those labels joined ("Red / M") — the string the
+   * order line's description is composed from.
+   */
+  record PublicVariant(
+      String listingSlug,
+      String variantKey,
+      UUID productId,
+      java.math.BigDecimal salesPrice,
+      java.util.Map<String, String> options,
+      String label,
+      int available,
+      int sortOrder) {}
+
+  /**
+   * Active variants of the listings behind {@code slugs}, constrained to {@code status} — the
+   * checkout and availability resolution path. Ordered by listing slug then {@code sort_order}.
+   * Labels resolve {@code locale} → {@code defaultLocale} → the value slug.
+   */
+  List<PublicVariant> findPublicVariantsForSlugs(
+      UUID orgId,
+      Collection<String> slugs,
+      ListingStatus status,
+      String locale,
+      String defaultLocale);
+
+  /** Active variants of one listing by id — the detail read's {@code variants} block. */
+  List<PublicVariant> findPublicVariantsForListing(
+      UUID orgId, UUID listingId, String locale, String defaultLocale);
+
+  /**
+   * The per-listing variant rollup a catalog <b>row</b> needs (VG2): the minimum active-variant
+   * price — the honest "from" price a list row shows instead of the parent's {@code sales_price} —
+   * and whether any active variant currently has stock, which is the children half of the §4 {@code
+   * in_stock} union. A listing with no active variant is simply absent from the map, and that
+   * absence IS {@code has_variants: false}.
+   */
+  record VariantSummary(java.math.BigDecimal minPrice, boolean anyInStock) {}
+
+  /** Batch the rollup for a whole page — one query, never one per row. */
+  Map<UUID, VariantSummary> findVariantSummaries(UUID orgId, Collection<UUID> listingIds);
 
   /**
    * One PUBLISHED listing's advisory availability: the public {@code slug} mapped to its {@code
@@ -70,7 +133,17 @@ public interface ProductListingRepository {
    * in_stock} and never lets {@code productId} cross the customer boundary.
    */
   record ReorderResolution(
-      UUID productId, String slug, String title, BigDecimal salesPrice, int available) {}
+      UUID productId,
+      String slug,
+      String title,
+      BigDecimal salesPrice,
+      int available,
+      /**
+       * The variant this line was bought as, when its product is a variant's child (VG2, §5 #7).
+       */
+      String variantKey,
+      /** That variant's localized label — composed into the reorder item's title. */
+      String variantLabel) {}
 
   /**
    * Resolve a set of {@code productId}s → their current PUBLISHED {@link ReorderResolution} in one
@@ -78,6 +151,12 @@ public interface ProductListingRepository {
    * status} (PUBLISHED) and {@code orgId}. A product with no listing in {@code status} is simply
    * absent from the result — the caller reports it under {@code unavailable}, never a 404. Product
    * ⇄ listing is 1:1 per org (unique index), so at most one row per id.
+   *
+   * <p>Since VG2 this also resolves <b>child</b> products through the variant bridge (§5 #7): a
+   * past line bought as "Red / M" comes back with that variant's key, label, and current price, so
+   * a reorder re-adds the same option rather than silently the parent. A variant that has since
+   * been deactivated resolves to nothing and lands in the caller's {@code unavailable} list — which
+   * is the honest answer, since that option is no longer for sale.
    */
   List<ReorderResolution> resolveForReorder(
       UUID orgId, Collection<UUID> productIds, ListingStatus status);
