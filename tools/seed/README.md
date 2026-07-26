@@ -47,3 +47,85 @@ Defaults produce roughly: 147k products/listings, ~295k translations, ~400k imag
   HTTP p50/p95 through the running app pointed at perfdb.
 - Re-run the identical measurement after each index batch (P1 → P2 → P3), and record the
   write-side cost (index count × insert rate) alongside the read wins.
+
+## Running the full stack against perfdb
+
+perfdb boots the real app: after seeding, copy the Flyway history in (so startup doesn't
+try to re-migrate) and create the bench login once:
+
+```bash
+docker exec inventory_db sh -c \
+  "pg_dump -U postgres --data-only -t inventorydb.flyway_schema_history inventorydb | psql -q -U postgres -d perfdb"
+# bench user: see "Login" below — created with a known bcrypt hash, email pre-verified,
+# OWNER of three stores + platform ADMIN (the run.sh output names the granted slugs).
+```
+
+**Login** (works for the org dashboards *and* the platform console):
+- email `bench@bench.test` · password `benchpass-123`
+- OWNER of `store-102`, `store-103`, `store-104`; ADMIN sees all 200 orgs under `/admin`
+
+**Backend** (beside the dev stack — the launcher takes `SERVER_PORT`):
+
+```bash
+# from servlet-apis/
+set -a; source .env.local; set +a
+DB_URL="jdbc:postgresql://localhost:5433/perfdb?currentSchema=inventorydb" \
+SERVER_PORT=8081 ORDER_SWEEPER_BACKGROUND_ENABLED=false mvn exec:java -pl api
+```
+
+**Frontends** (from `frontst/`). Two things bite here:
+
+- The `/api` rewrite target is baked at **build** time (`BACKEND_API_URL` build arg), so a
+  different backend port means a rebuild, not just a restart.
+- Both apps are built with `output: 'standalone'` (for the Docker image). **`next start`
+  does not work with standalone** — it boots a degraded server whose *server-side* `fetch`
+  throws `transformAlgorithm is not a function`, so RSC loaders (`/api/me`, `/api/orgs`)
+  fail and the platform console shows "Console unavailable" even though the browser and
+  login work. Run the standalone `server.js` instead, and set `BACKEND_API_URL` at
+  **runtime** too (server-side `apiBaseUrl()` reads it live; without it, RSC fetches hit
+  the dead default `:8080`).
+
+```bash
+# build (bakes the rewrite target)
+BACKEND_API_URL=http://localhost:8081 pnpm --dir apps/admin build
+BACKEND_API_URL=http://localhost:8081 pnpm --dir apps/storefront build
+
+# standalone needs static + public copied in once per build (the Dockerfile does this in prod)
+for app in admin storefront; do
+  SA=apps/$app/.next/standalone/apps/$app
+  cp -r apps/$app/.next/static "$SA/.next/static"
+  [ -d apps/$app/public ] && cp -r apps/$app/public "$SA/public"
+done
+
+# run the standalone servers (runtime BACKEND_API_URL + PORT)
+BACKEND_API_URL=http://localhost:8081 PORT=3000 node apps/admin/.next/standalone/apps/admin/server.js
+BACKEND_API_URL=http://localhost:8081 PORT=3200 node apps/storefront/.next/standalone/apps/storefront/server.js
+# admin      → http://localhost:3000  (login bench@bench.test / benchpass-123; console at /en/admin)
+# storefront → http://localhost:3200/en/store-102  (org slug required; store-0 … store-199)
+```
+
+Note: listing images render as empty placeholders — the harness seeds image *rows* with
+real ABO object keys but deliberately never uploads bytes to MinIO (bytes don't touch
+query plans).
+
+## Migration mismatches: NEVER delete the volume
+
+perfdb and the dev `inventorydb` live in **one Postgres cluster on one volume**
+(`servlet-apis_postgres_data`). `docker compose down -v` destroys BOTH — dev data and the
+seeded benchmark database — permanently. This has happened once; don't repeat it.
+
+The situation that tempts it: you switch to a branch whose migration files don't include a
+version the shared DB already has applied ("applied but missing"), and Flyway validation
+fails. The non-destructive playbook, in order of preference:
+
+1. **Scratch database** (best): run codegen/tests against a clone instead of the shared DB —
+   `CREATE DATABASE scratch; pg_dump --schema-only inventorydb | psql scratch` — the same
+   trick this harness uses for perfdb. The shared DB should only ever hold **master-lineage**
+   migrations.
+2. **Repair**: delete the stray row from `flyway_schema_history` and revert its DDL by hand
+   (usually one column/table), or `flyway repair`.
+3. **Temporarily copy** the missing `V*_.sql` file in from the other branch just for codegen.
+
+And at merge time: whichever branch merges **second** must verify its migration number is
+still above every applied version (renumber if not) — otherwise Flyway on prod silently
+skips it.
