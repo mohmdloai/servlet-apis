@@ -7,6 +7,7 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.servlet.handler.AdminResourceHandler;
 import com.loai.inventory.api.servlet.handler.AuditAdminHandler;
 import com.loai.inventory.api.servlet.handler.OrgAdminHandler;
+import com.loai.inventory.api.servlet.handler.OverviewAdminHandler;
 import com.loai.inventory.api.servlet.handler.UserAdminHandler;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -30,6 +31,8 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code POST /sweep} - the manual order-TTL sweep (folded in from the old AdminSweepServlet)
  *   <li>{@code /orgs[/{orgId}[/…]]} → {@link OrgAdminHandler} (cross-org read console + lifecycle)
  *   <li>{@code /users[/{userId}[/…]]} → {@link UserAdminHandler} (user/role admin + session ops)
+ *   <li>{@code /audit} → {@link AuditAdminHandler} (the append-only platform audit ledger)
+ *   <li>{@code /overview} → {@link OverviewAdminHandler} (the operator's home rollup)
  * </ul>
  *
  * <p>{@code /api/admin/impersonate/*} is mapped to the more-specific {@code
@@ -60,7 +63,9 @@ public class AdminServlet extends HttpServlet {
             new UserAdminHandler(
                 config.userAdminService, config.authService, config.platformAuditService, mapper),
             "audit",
-            new AuditAdminHandler(config.platformAuditService, mapper));
+            new AuditAdminHandler(config.platformAuditService, mapper),
+            "overview",
+            new OverviewAdminHandler(config.platformOverviewService, mapper));
   }
 
   @Override

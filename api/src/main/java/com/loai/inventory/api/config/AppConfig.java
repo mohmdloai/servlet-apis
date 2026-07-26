@@ -35,6 +35,7 @@ import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.PlatformAuditRepositoryFactory;
+import com.loai.inventory.domain.repository.PlatformStatsRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
 import com.loai.inventory.domain.repository.ProductRepositoryFactory;
@@ -73,6 +74,7 @@ import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
+import com.loai.inventory.repository.PlatformStatsRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
@@ -139,12 +141,18 @@ import com.loai.inventory.service.email.EmailSenderFactory;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
+import com.loai.inventory.service.platform.PlatformOverviewService;
 import com.loai.inventory.service.platform.UserAdminService;
 import com.zaxxer.hikari.HikariDataSource;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.flywaydb.core.Flyway;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.scheduling.JobScheduler;
+import org.jobrunr.scheduling.cron.CronExpression;
 import org.jobrunr.server.JobActivator;
 import org.jobrunr.storage.StorageProviderUtils.DatabaseOptions;
 import org.jobrunr.storage.sql.common.SqlStorageProviderFactory;
@@ -168,11 +176,28 @@ public class AppConfig {
   private static final long DEFAULT_ACCESS_TTL_MILLIS = 15 * 60 * 1000L;
   private static final long DEFAULT_IMPERSONATION_TTL_MILLIS = 5 * 60 * 1000L;
 
+  /**
+   * The recurring-job ids this application registers with JobRunr. Named constants because the
+   * platform overview reads job health back by exactly these ids — a typo on either side would show
+   * an operator a silently empty job panel.
+   */
+  public static final String JOB_ORDER_TTL_SWEEPER = "order-ttl-sweeper";
+
+  public static final String JOB_NOTIFICATION_DELIVERY_SWEEPER = "notification-delivery-sweeper";
+  public static final String JOB_UNVERIFIED_ACCOUNT_PURGE = "unverified-account-purge";
+
   // Infrastructure
   public final HikariDataSource dataSource;
   public final JedisPool jedisPool;
   public final DSLContext dsl;
   public final ObjectMapper objectMapper;
+
+  /**
+   * When this composition root was constructed — i.e. when this process came up. The platform
+   * overview's build tile reports it, so an operator can tell a restart from a hang.
+   */
+  public final Instant startedAt;
+
   public final JwtUtil jwtUtil;
   public final JwtUtil customerJwtUtil;
   public final ObjectStorage objectStorage;
@@ -211,6 +236,7 @@ public class AppConfig {
   public final OrgHealthRepository orgHealthRepository;
   public final ReportRepository reportRepository;
   public final PlatformAuditRepositoryFactory platformAuditRepositoryFactory;
+  public final PlatformStatsRepositoryFactory platformStatsRepositoryFactory;
   public final SalesOrderRepositoryFactory salesOrderRepositoryFactory;
   public final InventoryReservationRepositoryFactory inventoryReservationRepositoryFactory;
   public final PaymentTransactionRepositoryFactory paymentTransactionRepositoryFactory;
@@ -237,6 +263,7 @@ public class AppConfig {
   public final PlatformAuditService platformAuditService;
   public final OrgStatusService orgStatusService;
   public final PlatformOrgService platformOrgService;
+  public final PlatformOverviewService platformOverviewService;
   public final UserAdminService userAdminService;
   public final ProductService productService;
   public final CategoryService categoryService;
@@ -281,6 +308,7 @@ public class AppConfig {
 
   public AppConfig() {
     log.info("Initialising application context...");
+    this.startedAt = Instant.now();
 
     String jwtSecret = System.getenv("JWT_SECRET");
     if (jwtSecret == null || jwtSecret.isBlank()) {
@@ -343,6 +371,7 @@ public class AppConfig {
     this.orgHealthRepository = new OrgHealthRepositoryImpl(dsl);
     this.reportRepository = new ReportRepositoryImpl(dsl);
     this.platformAuditRepositoryFactory = new PlatformAuditRepositoryFactoryImpl();
+    this.platformStatsRepositoryFactory = new PlatformStatsRepositoryFactoryImpl();
     this.salesOrderRepositoryFactory = new SalesOrderRepositoryFactoryImpl();
     this.inventoryReservationRepositoryFactory = new InventoryReservationRepositoryFactoryImpl();
     this.paymentTransactionRepositoryFactory = new PaymentTransactionRepositoryFactoryImpl();
@@ -710,9 +739,67 @@ public class AppConfig {
     // only through POST /api/admin/sweep) can keep expiry deterministic. Default: enabled.
     boolean enableSweeper =
         !"false".equalsIgnoreCase(System.getenv("ORDER_SWEEPER_BACKGROUND_ENABLED"));
-    this.jobRunrStarted = enableSweeper && startSweeperScheduler();
+    // One resolution of the crons, shared by the scheduler that registers the jobs and the overview
+    // that judges them. Reading the same env vars in two places is how a re-tuned interval would
+    // silently start reporting a healthy job as stale.
+    Map<String, String> jobCrons = resolveJobCrons();
+    this.jobRunrStarted = enableSweeper && startSweeperScheduler(jobCrons);
+
+    this.platformOverviewService =
+        new PlatformOverviewService(
+            dsl,
+            platformStatsRepositoryFactory,
+            enableSweeper,
+            jobCrons.entrySet().stream()
+                .map(
+                    e ->
+                        new PlatformOverviewService.JobConfig(e.getKey(), cronPeriod(e.getValue())))
+                .toList(),
+            System.getenv("BUILD_COMMIT"),
+            startedAt);
 
     log.info("Application context ready.");
+  }
+
+  /**
+   * The recurring jobs this app registers, id → cron, read from the same env vars (with the same
+   * defaults) that {@link #startSweeperScheduler} schedules them with.
+   */
+  private static Map<String, String> resolveJobCrons() {
+    Map<String, String> crons = new LinkedHashMap<>();
+    crons.put(JOB_ORDER_TTL_SWEEPER, getenvOrDefault("ORDER_SWEEPER_INTERVAL", "*/30 * * * * *"));
+    crons.put(
+        JOB_NOTIFICATION_DELIVERY_SWEEPER,
+        getenvOrDefault("NOTIFICATION_SWEEPER_INTERVAL", "*/10 * * * * *"));
+    // Daily is plenty — the login gate already neutralizes unverified accounts; this only GCs rows.
+    crons.put(
+        JOB_UNVERIFIED_ACCOUNT_PURGE, getenvOrDefault("UNVERIFIED_PURGE_INTERVAL", "0 0 4 * * *"));
+    return crons;
+  }
+
+  /**
+   * The interval a cron implies, measured as the gap between its next two firings. The platform
+   * overview uses it to size the staleness window per job, so a 10s sweeper and a daily purge are
+   * each judged against their own cadence instead of one arbitrary wall-clock window.
+   *
+   * <p>Returns {@code null} for an unparseable cron rather than guessing — downstream that reads as
+   * {@code UNKNOWN}, which is the honest answer when we cannot say what "on time" means.
+   */
+  private static Duration cronPeriod(String cron) {
+    try {
+      CronExpression expression = new CronExpression(cron);
+      Instant now = Instant.now();
+      Instant first = expression.next(now, now, ZoneOffset.UTC);
+      Instant second = expression.next(now, first, ZoneOffset.UTC);
+      if (!second.isAfter(first)) {
+        second = expression.next(now, first.plusMillis(1), ZoneOffset.UTC);
+      }
+      Duration period = Duration.between(first, second);
+      return period.isZero() || period.isNegative() ? null : period;
+    } catch (RuntimeException e) {
+      log.warn("Cannot derive a period from cron '{}'; job health will read UNKNOWN", cron, e);
+      return null;
+    }
   }
 
   /**
@@ -722,8 +809,8 @@ public class AppConfig {
    * JobActivator} hands JobRunr our pre-wired {@link OrderTtlSweeperJob} so it keeps its injected
    * service. Returns {@code true} if the scheduler started.
    */
-  private boolean startSweeperScheduler() {
-    String cron = getenvOrDefault("ORDER_SWEEPER_INTERVAL", "*/30 * * * * *");
+  private boolean startSweeperScheduler(Map<String, String> jobCrons) {
+    String cron = jobCrons.get(JOB_ORDER_TTL_SWEEPER);
     JobActivator activator =
         new JobActivator() {
           @Override
@@ -751,18 +838,17 @@ public class AppConfig {
             .getJobScheduler();
 
     scheduler.<OrderTtlSweeperJob>scheduleRecurrently(
-        "order-ttl-sweeper", cron, OrderTtlSweeperJob::run);
+        JOB_ORDER_TTL_SWEEPER, cron, OrderTtlSweeperJob::run);
     log.info("Order-TTL sweeper scheduled (cron='{}')", cron);
 
-    String notifyCron = getenvOrDefault("NOTIFICATION_SWEEPER_INTERVAL", "*/10 * * * * *");
+    String notifyCron = jobCrons.get(JOB_NOTIFICATION_DELIVERY_SWEEPER);
     scheduler.<NotificationDeliverySweeperJob>scheduleRecurrently(
-        "notification-delivery-sweeper", notifyCron, NotificationDeliverySweeperJob::run);
+        JOB_NOTIFICATION_DELIVERY_SWEEPER, notifyCron, NotificationDeliverySweeperJob::run);
     log.info("Notification-delivery sweeper scheduled (cron='{}')", notifyCron);
 
-    // Daily is plenty — the login gate already neutralizes unverified accounts; this only GCs rows.
-    String purgeCron = getenvOrDefault("UNVERIFIED_PURGE_INTERVAL", "0 0 4 * * *");
+    String purgeCron = jobCrons.get(JOB_UNVERIFIED_ACCOUNT_PURGE);
     scheduler.<UnverifiedAccountPurgeJob>scheduleRecurrently(
-        "unverified-account-purge", purgeCron, UnverifiedAccountPurgeJob::run);
+        JOB_UNVERIFIED_ACCOUNT_PURGE, purgeCron, UnverifiedAccountPurgeJob::run);
     log.info("Unverified-account purge scheduled (cron='{}')", purgeCron);
     return true;
   }

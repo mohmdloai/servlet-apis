@@ -24,6 +24,14 @@ COPY api/target/classes/ ./classes/
 RUN chown -R app:app /app
 USER app
 
+# Build identity, baked into the image rather than passed at runtime. The platform overview's
+# build tile reports it, and a tile that is confidently wrong is the failure that dashboard exists
+# to prevent — so the SHA must travel *with* the image. Storing it beside the image (a runtime env
+# var on the compose service) would let a manual `docker compose up -d backend` leave the tile
+# naming a build that is not running. Unset locally → the UI says "dev".
+ARG BUILD_COMMIT=dev
+ENV BUILD_COMMIT=${BUILD_COMMIT}
+
 EXPOSE 8080
 
 # JVM tuning: honour container memory limits; sane defaults overridable via JAVA_OPTS.

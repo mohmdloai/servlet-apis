@@ -69,6 +69,8 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
+          build-args: |
+            BUILD_COMMIT=${{ github.sha }}
 
   deploy:
     needs: build-and-push
