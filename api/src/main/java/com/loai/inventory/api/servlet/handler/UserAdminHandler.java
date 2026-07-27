@@ -7,6 +7,8 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CreateUserRequest;
 import com.loai.inventory.api.dto.OrgRoleRequest;
 import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.dto.ResendVerificationRequest;
+import com.loai.inventory.api.dto.ResendVerificationResponse;
 import com.loai.inventory.api.dto.ResetPasswordRequest;
 import com.loai.inventory.api.dto.SessionResponse;
 import com.loai.inventory.api.dto.SetUserActiveRequest;
@@ -27,6 +29,7 @@ import com.loai.inventory.service.platform.UserAdminService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -44,6 +47,7 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code POST /users/{id}/system-roles} · {@code DELETE .../system-roles/{role}}
  *   <li>{@code POST /users/{id}/org-roles} · {@code DELETE .../org-roles/{orgId}/{role}}
  *   <li>{@code POST /users/{id}/reset-password}
+ *   <li>{@code POST /users/{id}/resend-verification}
  *   <li>{@code GET /users/{id}/sessions} · {@code DELETE .../sessions/{familyId}} · {@code POST
  *       .../logout-all}
  * </ul>
@@ -151,6 +155,7 @@ public class UserAdminHandler implements AdminResourceHandler {
       case "system-roles" -> systemRoles(method, req, resp, userId, path.rest());
       case "org-roles" -> orgRoles(method, req, resp, userId, path.rest());
       case "reset-password" -> resetPassword(method, req, resp, userId);
+      case "resend-verification" -> resendVerification(method, req, resp, userId);
       case "sessions" -> sessions(method, req, resp, userId, path.rest());
       case "logout-all" -> logoutAll(method, req, resp, userId);
       default -> writeError(resp, 404, "Unknown user endpoint");
@@ -213,6 +218,35 @@ public class UserAdminHandler implements AdminResourceHandler {
       }
       default -> writeError(resp, 405, "Method not allowed");
     }
+  }
+
+  /**
+   * {@code POST /users/{id}/resend-verification} — mint a fresh verification link and mail it.
+   *
+   * <p>{@code requireAdmin}, not {@code requirePlatformRead}: this is a mutation. It sends mail on
+   * the platform's behalf and re-arms a credential link, superseding any live one. A read tier
+   * (SUPPORT) can see that an account never verified and cannot act on it.
+   *
+   * <p><b>There is deliberately no rate-limit bucket here</b>, unlike the anonymous {@code POST
+   * /api/auth/resend-verification} which shares {@code AUTH_FORGOT_LIMIT}. The admin gate plus one
+   * audit row per call is the control; a per-IP bucket sized for anonymous abuse would throttle a
+   * support desk clearing a backlog of stuck signups and protect nothing an ADMIN could not already
+   * do by other means. Said here so the omission is visibly a decision.
+   */
+  private void resendVerification(
+      String method, HttpServletRequest req, HttpServletResponse resp, UUID userId)
+      throws IOException {
+    if (!"POST".equals(method)) {
+      writeError(resp, 405, "Method not allowed");
+      return;
+    }
+    SecurityContext ctx = AuthzHelper.requireAdmin(req);
+    ResendVerificationRequest body = readBodyOrNull(req, ResendVerificationRequest.class);
+    String rawOrgId = body == null ? null : body.getOrgId();
+    UUID orgId = (rawOrgId == null || rawOrgId.isBlank()) ? null : parseUuid(rawOrgId, "org_id");
+    var result =
+        userAdminService.resendVerification(ctx, env(req), userId, orgId, OffsetDateTime.now());
+    writeJson(resp, 200, ResendVerificationResponse.from(result));
   }
 
   private void resetPassword(
@@ -365,6 +399,21 @@ public class UserAdminHandler implements AdminResourceHandler {
     } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
       // Empty/truncated/malformed body — a 400, not an unhandled 500.
       throw new ValidationException("request body is required and must be valid JSON");
+    }
+  }
+
+  /**
+   * Body-optional variant ({@code OrgAdminHandler}'s suspend precedent): no body and {@code {}} are
+   * the same request. Malformed JSON is still a 400 — optional does not mean unparsed.
+   */
+  private <T> T readBodyOrNull(HttpServletRequest req, Class<T> type) throws IOException {
+    if (req.getContentLength() <= 0) {
+      return null;
+    }
+    try {
+      return mapper.readValue(req.getInputStream(), type);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new ValidationException("malformed JSON body");
     }
   }
 

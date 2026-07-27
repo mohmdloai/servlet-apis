@@ -166,7 +166,13 @@ class PlatformOrgTimelineIT {
     // this IT off the session machinery, which is covered elsewhere.
     userAdminService =
         new UserAdminService(
-            dsl, userRepoFactory, orgRepoFactory, Mockito.mock(AuthService.class), audit);
+            dsl,
+            userRepoFactory,
+            orgRepoFactory,
+            Mockito.mock(AuthService.class),
+            audit,
+            credentialTokenService,
+            new AuthMailer(msg -> {}));
 
     timelineService =
         new PlatformOrgTimelineService(dsl, new OrgTimelineRepositoryFactoryImpl(), orgRepoFactory);

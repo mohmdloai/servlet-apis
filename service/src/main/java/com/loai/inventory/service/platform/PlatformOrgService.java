@@ -11,6 +11,7 @@ import com.loai.inventory.domain.model.AppUserTokenPurpose;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgHealth;
+import com.loai.inventory.domain.model.OrgMember;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.PlatformAuditEvent;
@@ -79,8 +80,17 @@ public class PlatformOrgService {
   /** A page of orgs with the total count for pagination. */
   public record OrgPage(List<OrgListItem> items, long total, int page, int size) {}
 
-  /** One org plus its full operational rollup, for the drill-down view. */
-  public record OrgWithHealth(Org org, OrgHealth health) {}
+  /**
+   * One org plus its full operational rollup and the members holding OWNER, for the drill-down
+   * view.
+   *
+   * <p>{@code owners} rather than the whole roster: {@code health.memberCount} already says how
+   * many people are in there, and what the detail page lacked was <em>who to act on</em>. On every
+   * path that reaches this page — a PENDING tenant waiting on a verification click above all — the
+   * answer is an owner. Plural because {@code user_org_role} permits several and a provisioned org
+   * can gain more.
+   */
+  public record OrgWithHealth(Org org, OrgHealth health, List<OrgMember> owners) {}
 
   /**
    * The outcome of provisioning a client org: the org, its OWNER, and whether that owner account
@@ -115,11 +125,18 @@ public class PlatformOrgService {
     return new OrgPage(items, total, p, s);
   }
 
-  /** One org plus its health rollup. 404 if the org does not exist. */
+  /** One org plus its health rollup and its OWNERs. 404 if the org does not exist. */
   public OrgWithHealth getWithHealth(UUID orgId) {
     OrgRepository orgRepo = orgRepoFactory.create(dsl);
     Org org = orgRepo.findById(orgId).orElseThrow(() -> new NotFoundException("Org", orgId));
-    return new OrgWithHealth(org, orgHealthRepo.health(orgId));
+    // Narrowed in Java, not in SQL: membersWhere groups each member's roles, so filtering the join
+    // to OWNER would hand back an OrgMember whose `roles` omits the other roles that member holds
+    // — accurate for this caller's needs and a trap for the next one. A roster is an org team.
+    List<OrgMember> owners =
+        userRepoFactory.create(dsl).findMembers(orgId).stream()
+            .filter(m -> m.roles().contains(OrgRole.OWNER))
+            .toList();
+    return new OrgWithHealth(org, orgHealthRepo.health(orgId), owners);
   }
 
   /**

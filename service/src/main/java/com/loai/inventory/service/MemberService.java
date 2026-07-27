@@ -170,7 +170,8 @@ public class MemberService {
         u.getDisplayName(),
         repo.findRolesInOrg(userId, orgId),
         u.isActive(),
-        u.getCreatedAt());
+        u.getCreatedAt(),
+        u.getEmailVerifiedAt());
   }
 
   private static int rank(OrgRole r) {
