@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -255,7 +256,7 @@ class UserAdminHandlerAuthTest {
             "/" + USER + "/sessions/" + FAMILY);
     assertEquals(204, resp.status);
     verify(m.auth).revokeSession(USER, FAMILY);
-    verify(m.audit).record(any(), any(), eq("SESSION_REVOKE"), any(), eq(FAMILY), any());
+    verify(m.audit).record(any(), any(), isNull(), eq("SESSION_REVOKE"), any(), eq(FAMILY), any());
   }
 
   @Test
@@ -270,7 +271,7 @@ class UserAdminHandlerAuthTest {
             "/" + USER + "/logout-all");
     assertEquals(204, resp.status);
     verify(m.auth).logoutAll(USER);
-    verify(m.audit).record(any(), any(), eq("FORCE_LOGOUT_ALL"), any(), eq(USER), any());
+    verify(m.audit).record(any(), any(), isNull(), eq("FORCE_LOGOUT_ALL"), any(), eq(USER), any());
   }
 
   @Test

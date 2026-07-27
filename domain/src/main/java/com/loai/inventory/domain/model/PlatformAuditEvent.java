@@ -9,6 +9,13 @@ import java.util.UUID;
  * so it is not part of the insert contract.
  *
  * @param actorId the platform admin who performed the action
+ * @param orgId the tenant this action happened <em>to</em>, or {@code null} when it concerns no
+ *     tenant. Deliberately <strong>not</strong> derivable from {@code targetType}/{@code targetId}:
+ *     a third of the vocabulary targets the USER while still being an event in a tenant's history
+ *     ({@code ORG_ROLE_GRANT}, the provisioned owner's {@code USER_CREATE}), and another third
+ *     targets the USER while concerning no tenant at all ({@code SYSTEM_ROLE_GRANT}, {@code
+ *     FORCE_LOGOUT_ALL}). Only the caller knows which, so V76 made it a column and this a required
+ *     component — see {@code stories/platform_org_timeline.md}.
  * @param action a stable verb, e.g. {@code ORG_SUSPEND}, {@code ROLE_GRANT}, {@code FORCE_LOGOUT}
  * @param targetType the kind of entity acted on: {@code ORG}, {@code USER}, {@code SESSION}
  * @param targetId the acted-on entity id, when there is a single one; {@code null} otherwise
@@ -18,6 +25,7 @@ import java.util.UUID;
  */
 public record PlatformAuditEvent(
     UUID actorId,
+    UUID orgId,
     String action,
     String targetType,
     UUID targetId,

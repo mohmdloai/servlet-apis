@@ -64,7 +64,8 @@ public class AdminServlet extends HttpServlet {
     this.resources =
         Map.of(
             "orgs",
-            new OrgAdminHandler(config.platformOrgService, mapper),
+            new OrgAdminHandler(
+                config.platformOrgService, config.platformOrgTimelineService, mapper),
             "users",
             new UserAdminHandler(
                 config.userAdminService, config.authService, config.platformAuditService, mapper),

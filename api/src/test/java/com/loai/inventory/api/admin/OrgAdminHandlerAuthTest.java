@@ -66,7 +66,11 @@ class OrgAdminHandlerAuthTest {
   }
 
   private OrgAdminHandler handler(PlatformOrgService service) {
-    return new OrgAdminHandler(service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    return new OrgAdminHandler(
+        service,
+        org.mockito.Mockito.mock(
+            com.loai.inventory.service.platform.PlatformOrgTimelineService.class),
+        com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 
   private PlatformOrgService.OrgPage emptyPage() {

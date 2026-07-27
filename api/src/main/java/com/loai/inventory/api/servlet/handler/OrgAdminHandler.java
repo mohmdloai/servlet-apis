@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.AdminCreateOrgRequest;
 import com.loai.inventory.api.dto.AdminOrgDetailResponse;
 import com.loai.inventory.api.dto.AdminOrgSummaryResponse;
+import com.loai.inventory.api.dto.AdminOrgTimelineResponse;
 import com.loai.inventory.api.dto.AdminProvisionOrgResponse;
 import com.loai.inventory.api.dto.AdminUpdateOrgRequest;
 import com.loai.inventory.api.dto.ApiError;
@@ -19,6 +20,7 @@ import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.platform.PlatformOrgService;
+import com.loai.inventory.service.platform.PlatformOrgTimelineService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -36,18 +38,34 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code GET /api/admin/orgs?page&size&status=active|pending|suspended} - paged list + member
  *       counts
  *   <li>{@code GET /api/admin/orgs/{orgId}} - org + operational rollup
+ *   <li>{@code GET /api/admin/orgs/{orgId}/timeline?page&size} - the tenant's platform history
  *   <li>{@code POST /api/admin/orgs/{orgId}/suspend} · {@code .../reactivate} - ADMIN only
  * </ul>
+ *
+ * <p><strong>An unknown {@code orgId} on {@code /timeline} is a 404, not an empty page</strong>
+ * (slice 4). That is the deliberate opposite of slice 2's {@code GET
+ * /api/admin/queues/{kind}?org_id=}, where an unknown org yields an empty page. The difference is
+ * the point and it is not an inconsistency to be tidied away: <em>a path segment names a thing</em>
+ * — and a thing that does not exist is absent — whereas <em>a query parameter narrows a set</em>,
+ * and a narrow that matches nothing is empty. Do not "fix" either one to match the other.
  */
 public class OrgAdminHandler implements AdminResourceHandler {
 
   private static final Logger log = LoggerFactory.getLogger(OrgAdminHandler.class);
 
+  /** The one read-only subresource under {@code /{orgId}}. */
+  private static final String TIMELINE = "timeline";
+
   private final PlatformOrgService platformOrgService;
+  private final PlatformOrgTimelineService platformOrgTimelineService;
   private final ObjectMapper mapper;
 
-  public OrgAdminHandler(PlatformOrgService platformOrgService, ObjectMapper mapper) {
+  public OrgAdminHandler(
+      PlatformOrgService platformOrgService,
+      PlatformOrgTimelineService platformOrgTimelineService,
+      ObjectMapper mapper) {
     this.platformOrgService = platformOrgService;
+    this.platformOrgTimelineService = platformOrgTimelineService;
     this.mapper = mapper;
   }
 
@@ -57,6 +75,12 @@ public class OrgAdminHandler implements AdminResourceHandler {
       throws IOException {
     try {
       Path path = parsePath(remaining);
+      // The timeline is a read-only subresource, so every other verb on it is a 405 rather than
+      // the collection's 404/400 - the resource exists, the method does not apply to it.
+      if (TIMELINE.equals(path.action()) && !"GET".equals(method)) {
+        writeError(resp, 405, "Method not allowed");
+        return;
+      }
       switch (method) {
         case "GET" -> doGet(req, resp, path);
         case "POST" -> doPost(req, resp, path);
@@ -84,9 +108,17 @@ public class OrgAdminHandler implements AdminResourceHandler {
       List<AdminOrgSummaryResponse> data =
           result.items().stream().map(AdminOrgSummaryResponse::from).toList();
       writeJson(resp, 200, new PageResponse<>(data, result.total(), result.page(), result.size()));
-    } else {
+    } else if (path.action() == null) {
       PlatformOrgService.OrgWithHealth detail = platformOrgService.getWithHealth(path.orgId());
       writeJson(resp, 200, AdminOrgDetailResponse.from(detail));
+    } else if (TIMELINE.equals(path.action())) {
+      int page = intParam(req, "page", 0);
+      int size = intParam(req, "size", PlatformOrgTimelineService.DEFAULT_PAGE_SIZE);
+      PlatformOrgTimelineService.TimelinePage result =
+          platformOrgTimelineService.list(path.orgId(), page, size);
+      writeJson(resp, 200, AdminOrgTimelineResponse.from(result, mapper));
+    } else {
+      writeError(resp, 404, "Unknown org subresource: " + path.action());
     }
   }
 
