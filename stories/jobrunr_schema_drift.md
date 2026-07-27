@@ -153,6 +153,17 @@ would come with its own thinking and its own slice. Leave the door alone.
   fails if the *library* changes, the other if the *schema* does, and being told which is the
   whole diagnostic value.
 
+  **Correction found in build — the method name overpromises, and this story caused that.** It said
+  to assert both columns "because those are what JobRunr 8 reads." Only `awaiting` is read.
+  Disassembling `JobStatsView` from the 8.7.1 jar shows it issues `SELECT *` and then names exactly
+  eleven columns — `total, awaiting, scheduled, enqueued, processing, failed, succeeded,
+  allTimeSucceeded, deleted, nbrOfRecurringJobs, nbrOfBackgroundJobServers` — and `processed` is not
+  among them; `JobStats` has no accessor for it either. So **the single column whose absence throws
+  is `awaiting`**, and `processed` exists in our schema only because the vendored file puts it there.
+  Keeping the assertion is right — carrying whatever the jar carries *is* the point of vendoring
+  verbatim — but the test asserts our fidelity to the file, not the library's requirements, and its
+  name should not be read as a claim about the library.
+
 `PlatformOverviewIT` must keep passing untouched — the overview reads the tables, not the view, and
 that separation is what kept this from being an outage. If it needs editing, something in V74 went
 wider than intended.
