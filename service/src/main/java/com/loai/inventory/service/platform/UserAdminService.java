@@ -137,10 +137,13 @@ public class UserAdminService {
           // never be 403-blocked at login.
           toInsert.setEmailVerifiedAt(java.time.OffsetDateTime.now());
           AppUser created = userRepo.insert(toInsert);
+          // null: an admin-plane account creation belongs to no tenant. The provisioning path's
+          // USER_CREATE (PlatformOrgService) does carry an org — same verb, different event.
           audit.recordInTx(
               tx,
               actor,
               env,
+              null,
               "USER_CREATE",
               PlatformAuditEvent.Target.USER,
               created.getId(),
@@ -173,10 +176,13 @@ public class UserAdminService {
                 assertNotSoleOwnerAnywhere(repo, userId);
               }
               AppUser u = repo.setActive(userId, active);
+              // null: enabling/disabling an identity is platform-wide. Attributing it to an org
+              // the user happens to belong to would claim that tenant was touched when it was not.
               audit.recordInTx(
                   tx,
                   actor,
                   env,
+                  null,
                   active ? "USER_ENABLE" : "USER_DISABLE",
                   PlatformAuditEvent.Target.USER,
                   userId,
@@ -197,10 +203,12 @@ public class UserAdminService {
         cfg -> {
           DSLContext tx = DSL.using(cfg);
           userRepoFactory.create(tx).insertSystemRole(userId, role);
+          // null: a system role is authority over the platform, not over any one tenant.
           audit.recordInTx(
               tx,
               actor,
               env,
+              null,
               "SYSTEM_ROLE_GRANT",
               PlatformAuditEvent.Target.USER,
               userId,
@@ -229,10 +237,12 @@ public class UserAdminService {
               if (deleted == 0) {
                 return null; // idempotent no-op: user never held the role, so nothing to audit
               }
+              // null: platform-wide, same as the grant.
               audit.recordInTx(
                   tx,
                   actor,
                   env,
+                  null,
                   "SYSTEM_ROLE_REVOKE",
                   PlatformAuditEvent.Target.USER,
                   userId,
@@ -252,10 +262,14 @@ public class UserAdminService {
         cfg -> {
           DSLContext tx = DSL.using(cfg);
           userRepoFactory.create(tx).insertOrgRole(userId, orgId, role);
+          // The tenant, explicitly. This row targets the USER, so before V76 it was invisible to
+          // any per-tenant read — and "who was given access to this tenant, and when" is the whole
+          // of an access-review question, not a footnote. This is the slice.
           audit.recordInTx(
               tx,
               actor,
               env,
+              orgId,
               "ORG_ROLE_GRANT",
               PlatformAuditEvent.Target.USER,
               userId,
@@ -289,6 +303,7 @@ public class UserAdminService {
                   tx,
                   actor,
                   env,
+                  orgId,
                   "ORG_ROLE_REVOKE",
                   PlatformAuditEvent.Target.USER,
                   userId,
@@ -314,10 +329,12 @@ public class UserAdminService {
               DSLContext tx = DSL.using(cfg);
               UserRepository repo = userRepoFactory.create(tx);
               repo.updatePasswordHash(userId, hash);
+              // null: a credential belongs to the identity, not to any tenant it has roles in.
               audit.recordInTx(
                   tx,
                   actor,
                   env,
+                  null,
                   "PASSWORD_RESET",
                   PlatformAuditEvent.Target.USER,
                   userId,

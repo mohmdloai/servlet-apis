@@ -167,7 +167,14 @@ class PlatformTenantStatesIT {
             com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
             orgStatus);
 
-    orgHandler = new OrgAdminHandler(orgService, mapper);
+    orgHandler =
+        new OrgAdminHandler(
+            orgService,
+            new com.loai.inventory.service.platform.PlatformOrgTimelineService(
+                dsl,
+                new com.loai.inventory.repository.OrgTimelineRepositoryFactoryImpl(),
+                orgRepoFactory),
+            mapper);
     overviewHandler =
         new OverviewAdminHandler(
             new PlatformOverviewService(

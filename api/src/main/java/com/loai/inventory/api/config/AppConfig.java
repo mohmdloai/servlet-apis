@@ -31,6 +31,7 @@ import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.NumberSequenceReconciliationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgTimelineRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
@@ -72,6 +73,7 @@ import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
 import com.loai.inventory.repository.NumberSequenceReconciliationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgTimelineRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
@@ -145,6 +147,7 @@ import com.loai.inventory.service.email.EmailSenderFactory;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
+import com.loai.inventory.service.platform.PlatformOrgTimelineService;
 import com.loai.inventory.service.platform.PlatformOverviewService;
 import com.loai.inventory.service.platform.PlatformQueueService;
 import com.loai.inventory.service.platform.PlatformSearchService;
@@ -241,6 +244,7 @@ public class AppConfig {
   public final OrgRepositoryFactory orgRepositoryFactory;
   public final OrgHealthRepository orgHealthRepository;
   public final ReportRepository reportRepository;
+  public final OrgTimelineRepositoryFactory orgTimelineRepositoryFactory;
   public final PlatformAuditRepositoryFactory platformAuditRepositoryFactory;
   public final PlatformStatsRepositoryFactory platformStatsRepositoryFactory;
   public final PlatformQueueRepositoryFactory platformQueueRepositoryFactory;
@@ -271,6 +275,7 @@ public class AppConfig {
   public final PlatformAuditService platformAuditService;
   public final OrgStatusService orgStatusService;
   public final PlatformOrgService platformOrgService;
+  public final PlatformOrgTimelineService platformOrgTimelineService;
   public final PlatformOverviewService platformOverviewService;
   public final PlatformQueueService platformQueueService;
   public final PlatformSearchService platformSearchService;
@@ -380,6 +385,7 @@ public class AppConfig {
     this.orgRepositoryFactory = new OrgRepositoryFactoryImpl();
     this.orgHealthRepository = new OrgHealthRepositoryImpl(dsl);
     this.reportRepository = new ReportRepositoryImpl(dsl);
+    this.orgTimelineRepositoryFactory = new OrgTimelineRepositoryFactoryImpl();
     this.platformAuditRepositoryFactory = new PlatformAuditRepositoryFactoryImpl();
     this.platformStatsRepositoryFactory = new PlatformStatsRepositoryFactoryImpl();
     this.platformQueueRepositoryFactory = new PlatformQueueRepositoryFactoryImpl();
@@ -472,6 +478,8 @@ public class AppConfig {
             orgStatusService,
             credentialTokenService,
             authMailer);
+    this.platformOrgTimelineService =
+        new PlatformOrgTimelineService(dsl, orgTimelineRepositoryFactory, orgRepositoryFactory);
     this.userAdminService =
         new UserAdminService(
             dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);

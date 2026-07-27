@@ -252,9 +252,11 @@ public class UserAdminHandler implements AdminResourceHandler {
         UUID familyId = parseUuid(rest.get(0), "family id");
         // Intent-first: write the audit row before the irreversible Redis revoke, so a security
         // op can never leave the session killed but untraceable if the audit write fails.
+        // null: a session is an identity's, not a tenant's — there is no org in scope here at all.
         audit.record(
             ctx,
             env(req),
+            null,
             "SESSION_REVOKE",
             PlatformAuditEvent.Target.SESSION,
             familyId,
@@ -275,8 +277,9 @@ public class UserAdminHandler implements AdminResourceHandler {
     }
     SecurityContext ctx = AuthzHelper.requireAdmin(req);
     // Intent-first: audit the forced logout before it takes effect (see revoke above).
+    // null: killing every session of an identity concerns no single tenant.
     audit.record(
-        ctx, env(req), "FORCE_LOGOUT_ALL", PlatformAuditEvent.Target.USER, userId, Map.of());
+        ctx, env(req), null, "FORCE_LOGOUT_ALL", PlatformAuditEvent.Target.USER, userId, Map.of());
     authService.logoutAll(userId);
     resp.setStatus(204);
   }

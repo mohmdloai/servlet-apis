@@ -188,10 +188,15 @@ public class PlatformOrgService {
               userRepo.insertOrgRole(owner.getId(), saved.getId(), OrgRole.OWNER);
 
               if (minted) {
+                // The org this owner was minted FOR. Its target is the user, but it is an event in
+                // this tenant's history — the row V76's backfill has to recover by joining
+                // ORG_CREATE's {owner_id, owner_minted}. Written directly from here on, so no
+                // future row needs recovering.
                 audit.recordInTx(
                     tx,
                     actor,
                     env,
+                    saved.getId(),
                     "USER_CREATE",
                     PlatformAuditEvent.Target.USER,
                     owner.getId(),
@@ -205,6 +210,7 @@ public class PlatformOrgService {
                   tx,
                   actor,
                   env,
+                  saved.getId(),
                   "ORG_CREATE",
                   PlatformAuditEvent.Target.ORG,
                   saved.getId(),
@@ -333,7 +339,7 @@ public class PlatformOrgService {
             }
           }
           audit.recordInTx(
-              tx, actor, env, "ORG_UPDATE", PlatformAuditEvent.Target.ORG, orgId, detail);
+              tx, actor, env, orgId, "ORG_UPDATE", PlatformAuditEvent.Target.ORG, orgId, detail);
           return updated;
         });
   }
@@ -374,6 +380,7 @@ public class PlatformOrgService {
               tx,
               actor,
               env,
+              orgId,
               suspended ? "ORG_SUSPEND" : "ORG_REACTIVATE",
               PlatformAuditEvent.Target.ORG,
               orgId,

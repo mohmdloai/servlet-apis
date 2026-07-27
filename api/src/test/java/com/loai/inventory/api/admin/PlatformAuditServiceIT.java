@@ -81,6 +81,12 @@ class PlatformAuditServiceIT {
     dsl.execute("TRUNCATE platform_audit, app_user RESTART IDENTITY CASCADE");
   }
 
+  private UUID org(String slug) {
+    UUID id = UUID.randomUUID();
+    dsl.execute("INSERT INTO org(id,name,slug) VALUES (?,?,?)", id, slug, slug);
+    return id;
+  }
+
   private UUID user(String email) {
     UUID id = UUID.randomUUID();
     dsl.execute(
@@ -169,11 +175,13 @@ class PlatformAuditServiceIT {
   @Test
   void list_detailRoundTrips() {
     UUID actor = user("admin@x.io");
-    UUID orgId = UUID.randomUUID();
+    // A real org row: since V76, platform_audit.org_id is a FK, so a fabricated id is rejected.
+    UUID orgId = org("round-trip-co");
     // Write through the real service path so the stored JSON matches production shape.
     service.record(
         admin(actor),
         new Environment(Instant.now(), "1.2.3.4", "junit"),
+        orgId,
         "ORG_SUSPEND",
         PlatformAuditEvent.Target.ORG,
         orgId,

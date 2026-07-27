@@ -25,6 +25,7 @@ public final class PlatformAuditRepositoryImpl implements PlatformAuditRepositor
   public void insert(PlatformAuditEvent e) {
     dsl.insertInto(PLATFORM_AUDIT)
         .set(PLATFORM_AUDIT.ACTOR_ID, e.actorId())
+        .set(PLATFORM_AUDIT.ORG_ID, e.orgId())
         .set(PLATFORM_AUDIT.ACTION, e.action())
         .set(PLATFORM_AUDIT.TARGET_TYPE, e.targetType())
         .set(PLATFORM_AUDIT.TARGET_ID, e.targetId())

@@ -52,15 +52,23 @@ public class PlatformAuditService {
         repo.find(offset, s, targetType, actorId), repo.count(targetType, actorId), p, s);
   }
 
-  /** Audit outside any transaction, on the root context. */
+  /**
+   * Audit outside any transaction, on the root context.
+   *
+   * <p>{@code orgId} is a <strong>required</strong> argument, explicitly {@code null} for
+   * platform-wide actions. There is deliberately no overload that lets a caller omit it: the column
+   * V76 added is only as good as the write site, and a parameter you must decide is the only kind
+   * that survives the next contributor. See {@link PlatformAuditEvent#orgId()}.
+   */
   public void record(
       SecurityContext actor,
       Environment env,
+      UUID orgId,
       String action,
       String targetType,
       UUID targetId,
       Map<String, Object> detail) {
-    recordInTx(rootDsl, actor, env, action, targetType, targetId, detail);
+    recordInTx(rootDsl, actor, env, orgId, action, targetType, targetId, detail);
   }
 
   /** Audit inside {@code ctx}'s transaction, so it is atomic with the action being recorded. */
@@ -68,6 +76,7 @@ public class PlatformAuditService {
       DSLContext ctx,
       SecurityContext actor,
       Environment env,
+      UUID orgId,
       String action,
       String targetType,
       UUID targetId,
@@ -77,6 +86,7 @@ public class PlatformAuditService {
         .insert(
             new PlatformAuditEvent(
                 actor.actorId(),
+                orgId,
                 action,
                 targetType,
                 targetId,
