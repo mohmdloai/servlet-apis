@@ -27,7 +27,15 @@
         <jedis.version>5.1.0</jedis.version>
         <jjwt.version>0.13.0</jjwt.version>
         <jbcrypt.version>0.4</jbcrypt.version>
-        <!-- Pinned: the V29 JobRunr DDL is generated from this exact version. Bump in lockstep. -->
+        <!-- JobRunr runs with DatabaseOptions.SKIP_CREATE, so Flyway owns its schema and this pin
+             must move in lockstep with the vendored DDL: V29 holds 7.2.2's v000..v015, V74 holds
+             8.7.1's v016. SKIP_CREATE only checks the jobrunr_* tables *exist*, never that they
+             *match* — a bump that skips the re-vendor drifts silently (it already did once; see
+             stories/jobrunr_schema_drift.md). Bumping means: diff the new jar's
+             org/jobrunr/storage/sql/common|postgres/migrations/ against the pinned one, add a new
+             V-migration vendoring each genuinely-new file verbatim (do NOT re-run
+             DatabaseSqlMigrationFileProvider — it emits the whole set, already applied), and let
+             JobRunrSchemaIT confirm getJobStats() still reads. -->
         <jobrunr.version>8.7.1</jobrunr.version>
         <!-- AWS SDK v2 — S3 presigner for product-listing image uploads (MinIO/S3). -->
         <awssdk.version>2.49.3</awssdk.version>
