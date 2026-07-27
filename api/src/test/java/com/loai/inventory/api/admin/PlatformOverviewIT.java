@@ -160,7 +160,7 @@ class PlatformOverviewIT {
     dsl.execute("TRUNCATE jobrunr_jobs, jobrunr_recurring_jobs");
   }
 
-  // ── The point of the slice ────────────────────────────────────────────────
+  // The point of the slice
 
   /**
    * The headline: one pending refund in each of two orgs is <em>two</em> pending refunds on the
@@ -258,14 +258,23 @@ class PlatformOverviewIT {
   }
 
   /**
-   * The tenant census, including the suspended split the org list's {@code ?status=} filter uses.
+   * The tenant census, including the three-way split the org list's {@code ?status=} filter uses.
+   * The pending org is inactive with no {@code suspended_at} — exactly what a self-serve
+   * registration leaves behind, and it must land under {@code pending}, never {@code suspended}.
    */
   @Test
   void overview_countsTenantsByStatus() {
     createOrg("acme");
     createOrg("beta");
     UUID suspended = createOrg("gamma");
-    dsl.update(ORG).set(ORG.ACTIVE, false).where(ORG.ID.eq(suspended)).execute();
+    dsl.update(ORG)
+        .set(ORG.ACTIVE, false)
+        .set(ORG.SUSPENDED_AT, OffsetDateTime.now(ZoneOffset.UTC))
+        .set(ORG.SUSPENDED_REASON, "fraud")
+        .where(ORG.ID.eq(suspended))
+        .execute();
+    UUID pending = createOrg("epsilon");
+    dsl.update(ORG).set(ORG.ACTIVE, false).where(ORG.ID.eq(pending)).execute();
     UUID old = createOrg("delta");
     dsl.update(ORG)
         .set(ORG.CREATED_AT, OffsetDateTime.now(ZoneOffset.UTC).minusDays(30))
@@ -274,13 +283,20 @@ class PlatformOverviewIT {
 
     JsonNode tenants = get(platform(SystemRole.ADMIN), 200).path("tenants");
 
-    assertEquals(4, tenants.path("total").asLong());
+    assertEquals(5, tenants.path("total").asLong());
     assertEquals(3, tenants.path("active").asLong());
     assertEquals(1, tenants.path("suspended").asLong());
-    assertEquals(3, tenants.path("provisioned_last_7d").asLong());
+    assertEquals(1, tenants.path("pending").asLong());
+    assertEquals(4, tenants.path("provisioned_last_7d").asLong());
+    // The three statuses partition the table — no org is uncounted or double-counted.
+    assertEquals(
+        tenants.path("total").asLong(),
+        tenants.path("active").asLong()
+            + tenants.path("suspended").asLong()
+            + tenants.path("pending").asLong());
   }
 
-  // ── Job health ────────────────────────────────────────────────────────────
+  // Job health
 
   /**
    * With the background flag off there are no jobs at all — an explicit, calm "background jobs are
@@ -356,7 +372,7 @@ class PlatformOverviewIT {
     assertTrue(byId.containsKey(SWEEPER));
   }
 
-  // ── Shape, freshness, build ───────────────────────────────────────────────
+  // Shape, freshness, build
 
   /**
    * A healthy read carries every section, one {@code as_of}, and no {@code degraded} key at all.
@@ -399,7 +415,7 @@ class PlatformOverviewIT {
     assertEquals("9f3c1ab", build.path("commit").asText());
   }
 
-  // ── Authz + handler contract ──────────────────────────────────────────────
+  // Authz + handler contract
 
   /** The whole resource is a read, so SUPPORT sees it — and sees exactly what ADMIN sees. */
   @Test
@@ -459,7 +475,7 @@ class PlatformOverviewIT {
     assertNull(body.get("degraded"));
   }
 
-  // ── plumbing ──────────────────────────────────────────────────────────────
+  // plumbing
 
   private OverviewAdminHandler handler(boolean jobsEnabled) {
     return new OverviewAdminHandler(
@@ -523,7 +539,7 @@ class PlatformOverviewIT {
             .where(NOTIFICATION.ORG_ID.eq(orgId).and(NOTIFICATION_DELIVERY.STATUS.eq("FAILED"))));
   }
 
-  // ── seed helpers ──────────────────────────────────────────────────────────
+  // seed helpers
 
   private static OffsetDateTime now() {
     return OffsetDateTime.now(ZoneOffset.UTC);
@@ -686,7 +702,7 @@ class PlatformOverviewIT {
         .execute();
   }
 
-  // ── servlet doubles ───────────────────────────────────────────────────────
+  // servlet doubles
 
   private SecurityContext platform(SystemRole role) {
     return new SecurityContext(

@@ -10,6 +10,7 @@ import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION
 import static com.loai.inventory.repository.generated.Tables.REFUND;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 
+import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.PlatformQueueCounts;
 import com.loai.inventory.domain.model.PlatformTenantCounts;
 import com.loai.inventory.domain.model.RecurringJobStats;
@@ -65,31 +66,35 @@ public final class PlatformStatsRepositoryImpl implements PlatformStatsRepositor
 
   @Override
   public PlatformTenantCounts tenantCounts() {
-    // One scan of `org`, four figures — FILTER beats four round trips on a table this small.
+    // One scan of `org`, five figures — FILTER beats five round trips on a table this small.
     //
-    // `suspended` is `active=false`, which is exactly what the platform org list's
-    // `?status=suspended` filter reduces to (OrgRepositoryImpl.count) — so the tile and the list it
-    // links to can never disagree, which is the rule that outranks the rest here.
+    // Every status FILTER is OrgStatusConditions.matching(…), which is the same predicate the org
+    // list's `?status=` filter runs (OrgRepositoryImpl.findAll/count), built from OrgStatus's own
+    // constants. So the tile and the list it drills into cannot disagree — the rule that outranks
+    // the rest here — and `active + suspended + pending == total` holds by construction, because
+    // the three statuses partition the table.
     //
-    // KNOWN IMPRECISION, both sides share it: `active=false` also covers an org born inactive at
-    // self-serve registration and not yet email-verified (story 88). The schema *can* tell the two
-    // apart — `activateRegistrationPendingOrgs` keys on `suspended_at IS NULL` precisely so "they
-    // can't be confused" — so a tenant pending verification currently reads as "suspended" on both
-    // surfaces. Fixing it here alone would break tile/list parity, so it belongs in a slice that
-    // changes both together (a third `pending` status on the list filter and a fourth tenant
-    // figure). Raised in the PR body rather than silently diverged from.
+    // `suspended` used to be plain `active=false`, which silently included every tenant born
+    // inactive at self-serve registration and not yet email-verified (story 88). A person who has
+    // not clicked an email must never trip an operational alarm; that is now `pending`. See
+    // stories/platform_tenant_states.md.
     Field<Integer> total = DSL.count().as("total");
-    Field<Integer> active = DSL.count().filterWhere(ORG.ACTIVE.isTrue()).as("active");
-    Field<Integer> suspended = DSL.count().filterWhere(ORG.ACTIVE.isFalse()).as("suspended");
+    Field<Integer> active =
+        DSL.count().filterWhere(OrgStatusConditions.matching(OrgStatus.ACTIVE)).as("active");
+    Field<Integer> suspended =
+        DSL.count().filterWhere(OrgStatusConditions.matching(OrgStatus.SUSPENDED)).as("suspended");
+    Field<Integer> pending =
+        DSL.count().filterWhere(OrgStatusConditions.matching(OrgStatus.PENDING)).as("pending");
     Field<Integer> recent = DSL.count().filterWhere(ORG.CREATED_AT.ge(SEVEN_DAYS_AGO)).as("recent");
-    Record row = dsl.select(total, active, suspended, recent).from(ORG).fetchOne();
+    Record row = dsl.select(total, active, suspended, pending, recent).from(ORG).fetchOne();
     if (row == null) {
-      return new PlatformTenantCounts(0, 0, 0, 0);
+      return new PlatformTenantCounts(0, 0, 0, 0, 0);
     }
     return new PlatformTenantCounts(
         row.get(total).longValue(),
         row.get(active).longValue(),
         row.get(suspended).longValue(),
+        row.get(pending).longValue(),
         row.get(recent).longValue());
   }
 

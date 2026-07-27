@@ -1,6 +1,7 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.OrgStatus;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -12,15 +13,19 @@ public interface OrgRepository {
 
   List<Org> findAll(int offset, int limit);
 
-  /** Paged list, optionally filtered by active status. {@code active == null} returns all. */
-  List<Org> findAll(int offset, int limit, Boolean active);
+  /**
+   * Paged list, optionally narrowed to one {@link OrgStatus} ({@code null} returns all). The
+   * predicate is built from the enum's own constants — there is deliberately no {@code Boolean
+   * active} overload, because that boolean cannot tell a pending tenant from a suspended one.
+   */
+  List<Org> findAll(int offset, int limit, OrgStatus status);
 
   List<Org> findAllByIds(List<UUID> ids);
 
   long count();
 
-  /** Total count, optionally filtered by active status. {@code active == null} counts all. */
-  long count(Boolean active);
+  /** Total count, optionally narrowed to one {@link OrgStatus} ({@code null} counts all). */
+  long count(OrgStatus status);
 
   Org insert(Org org);
 

@@ -16,6 +16,7 @@ import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.platform.PlatformOrgService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,7 +33,8 @@ import org.slf4j.LoggerFactory;
  * (ADMIN or SUPPORT) - no org role needed. Org lifecycle mutations (slice 5) are added here later.
  *
  * <ul>
- *   <li>{@code GET /api/admin/orgs?page&size&status=active|suspended} - paged list + member counts
+ *   <li>{@code GET /api/admin/orgs?page&size&status=active|pending|suspended} - paged list + member
+ *       counts
  *   <li>{@code GET /api/admin/orgs/{orgId}} - org + operational rollup
  *   <li>{@code POST /api/admin/orgs/{orgId}/suspend} · {@code .../reactivate} - ADMIN only
  * </ul>
@@ -76,9 +78,9 @@ public class OrgAdminHandler implements AdminResourceHandler {
     if (path.orgId() == null) {
       int page = intParam(req, "page", 0);
       int size = intParam(req, "size", PlatformOrgService.DEFAULT_PAGE_SIZE);
-      Boolean active = parseStatus(req.getParameter("status"));
+      OrgStatus status = parseStatus(req.getParameter("status"));
 
-      PlatformOrgService.OrgPage result = platformOrgService.list(page, size, active);
+      PlatformOrgService.OrgPage result = platformOrgService.list(page, size, status);
       List<AdminOrgSummaryResponse> data =
           result.items().stream().map(AdminOrgSummaryResponse::from).toList();
       writeJson(resp, 200, new PageResponse<>(data, result.total(), result.page(), result.size()));
@@ -178,16 +180,17 @@ public class OrgAdminHandler implements AdminResourceHandler {
     }
   }
 
-  /** {@code status} query param → active filter: {@code active}=true, {@code suspended}=false. */
-  private Boolean parseStatus(String status) {
-    if (status == null || status.isBlank()) {
-      return null;
+  /**
+   * {@code status} query param → the {@link OrgStatus} narrow ({@code null} = all). The three
+   * statuses partition the table, so an unknown value names all three rather than silently
+   * defaulting.
+   */
+  private OrgStatus parseStatus(String status) {
+    try {
+      return OrgStatus.fromWire(status);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("status must be 'active', 'pending' or 'suspended'");
     }
-    return switch (status.toLowerCase()) {
-      case "active" -> Boolean.TRUE;
-      case "suspended" -> Boolean.FALSE;
-      default -> throw new ValidationException("status must be 'active' or 'suspended'");
-    };
   }
 
   /**

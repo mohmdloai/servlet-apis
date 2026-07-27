@@ -12,6 +12,7 @@ import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgHealth;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.PlatformAuditEvent;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
@@ -89,17 +90,21 @@ public class PlatformOrgService {
   public record ProvisionResult(Org org, AppUser owner, boolean ownerMinted) {}
 
   /**
-   * Paged org list. {@code active} filters by status ({@code null} = all). {@code page} is 0-based;
-   * {@code size} is clamped to {@code [1, MAX_PAGE_SIZE]}.
+   * Paged org list, optionally narrowed to one {@link OrgStatus} ({@code null} = all). {@code page}
+   * is 0-based; {@code size} is clamped to {@code [1, MAX_PAGE_SIZE]}.
+   *
+   * <p>The filter is a status, not a boolean: {@code active=false} conflated an admin-suspended
+   * tenant with one that has merely not clicked its verification email yet, and the overview's
+   * tenant tiles run the same predicate, so the two surfaces move together.
    */
-  public OrgPage list(int page, int size, Boolean active) {
+  public OrgPage list(int page, int size, OrgStatus status) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
     int offset = safeOffset(p, s);
 
     OrgRepository orgRepo = orgRepoFactory.create(dsl);
-    List<Org> orgs = orgRepo.findAll(offset, s, active);
-    long total = orgRepo.count(active);
+    List<Org> orgs = orgRepo.findAll(offset, s, status);
+    long total = orgRepo.count(status);
 
     Map<UUID, Long> memberCounts =
         orgHealthRepo.memberCounts(orgs.stream().map(Org::getId).toList());
