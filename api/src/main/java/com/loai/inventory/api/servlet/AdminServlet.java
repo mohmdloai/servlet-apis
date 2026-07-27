@@ -9,6 +9,7 @@ import com.loai.inventory.api.servlet.handler.AuditAdminHandler;
 import com.loai.inventory.api.servlet.handler.OrgAdminHandler;
 import com.loai.inventory.api.servlet.handler.OverviewAdminHandler;
 import com.loai.inventory.api.servlet.handler.QueuesAdminHandler;
+import com.loai.inventory.api.servlet.handler.SearchAdminHandler;
 import com.loai.inventory.api.servlet.handler.UserAdminHandler;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -36,6 +37,8 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code /overview} → {@link OverviewAdminHandler} (the operator's home rollup)
  *   <li>{@code /queues/{kind}} → {@link QueuesAdminHandler} (the cross-org drill-down behind the
  *       overview's backlog tiles)
+ *   <li>{@code /search?q=} → {@link SearchAdminHandler} (cross-org lookup by an identifier a
+ *       customer quoted)
  * </ul>
  *
  * <p>{@code /api/admin/impersonate/*} is mapped to the more-specific {@code
@@ -70,7 +73,9 @@ public class AdminServlet extends HttpServlet {
             "overview",
             new OverviewAdminHandler(config.platformOverviewService, mapper),
             "queues",
-            new QueuesAdminHandler(config.platformQueueService, mapper));
+            new QueuesAdminHandler(config.platformQueueService, mapper),
+            "search",
+            new SearchAdminHandler(config.platformSearchService, mapper));
   }
 
   @Override
