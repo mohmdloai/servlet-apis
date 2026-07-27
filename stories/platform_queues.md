@@ -1,10 +1,9 @@
 # Cross-org queues — the drill-down behind the overview tiles
 
-> Slice 2 of the platform-console epic. Branch `127_feat/platform-queues`, cut from
-> `126_fix/tenant-states` — slice 1.5 lands first and this depends on its `OrgStatus`. Frontend
-> pair: `frontst` branch `74_feat/platform-queues` (story 75) — land this backend first.
-> **Migration: likely, and in scope** (see §Indexes). Slice 1 needed none because a count tolerates
-> a sequential scan; a paged, ordered read across every tenant does not.
+> Slice 2 of the platform-console epic. **SHIPPED** — branch `127_feat/platform-queues` (`63112cf`),
+> cut from `126_fix/tenant-states`, merged as PR #127. Frontend pair: `frontst` branch
+> `74_feat/platform-queues` (story 75), merged as PR #74.
+> **Migration: V73**, four indexes, all measured (see §Indexes).
 > Not in this slice: the **JobRunr `v016` drift** slice 1 raised — still open, still its own slice.
 > (The other finding slice 1 raised, the `suspended`-vs-`pending` conflation, was closed by slice
 > 1.5; this branch depends on the `OrgStatus` that fix introduced.)
@@ -102,6 +101,10 @@ have no orders — so this is about genuine suspensions.)
 | kind | fields beyond `org` | source |
 |---|---|---|
 | `failed-emails` | `id, notification_type, to_address, attempts, last_error, failed_at, created_at` | `notification_delivery` ⋈ `notification` (org, type) ⋈ `notification_delivery_email` (to_address) |
+
+**Correction found in build:** `failed_at` is **nullable**, so it cannot be the ordering key the row
+shape above implies — a queue whose sort column can be null is not a queue. `failed-emails` orders
+on `created_at` (and V73 indexes that), with `failed_at` carried as a displayed fact only.
 | `pending-refunds` | `id, amount, method, sales_order_number?, credit_note_number?, created_at` | `refund` |
 | `open-disputes` | `id, amount, sales_order_number?, received_at` | `payment` |
 | `orphan-transactions` | `id, amount, provider, provider_ref, occurred_at` | `payment_transaction` |
@@ -139,6 +142,33 @@ existing write path meaningfully.
 `perfdb`, then add a V73 carrying only the indexes the plans actually ask for, each with a comment
 naming the query it serves. Record before/after plans in the PR body. Do not add five indexes
 because five felt symmetrical.
+
+**Measure the `?org_id=` variant too — this story failed to ask for it, and it was the worst plan in
+the slice.** Five unfiltered queues is not the whole read surface: the tenant filter is a sixth
+shape, and on `failed-emails` it measured **245.6 ms**, worse than any unfiltered queue, because
+`notification_delivery` carries no `org_id` and the planner probed `notification` once per failed
+delivery. It needed a fourth index (`notification_org_idx (org_id, id)`, non-partial — the filter is
+on the org, not on a notification status) to reach 3 ms. Generalise the lesson rather than the fix:
+**every parameter that changes the plan is its own measurement.**
+
+### What V73 actually shipped
+
+| queue | before | after | verdict |
+|---|---|---|---|
+| `pending-refunds` | 246.9 ms | 0.70 ms | `refund_pending_global_idx` |
+| `open-disputes` | 39.9 ms | 0.22 ms | `payment_disputed_global_idx` |
+| `failed-emails` | 40.0 ms | 0.25 ms | `notification_delivery_failed_global_idx` |
+| `failed-emails ?org_id=` | 245.6 ms | 3.06 ms | `notification_org_idx` |
+| `orphan-transactions` | 12.1 ms | 12.2 ms | **skipped** |
+| `expired-pending-orders` | 0.11 ms | 0.10 ms | **skipped** — V29 already serves it |
+
+**The orphan skip is the measurement earning its keep.** A candidate
+`(occurred_at, id) WHERE reconciliation_status = 'ORPHAN'` was built on `perfdb` and *the planner
+declined to use it*: it mis-estimates the `NOT EXISTS` anti-join (28 rows estimated, 4000 actual)
+and prefers the existing `idx_txn_orphan` bitmap scan plus a top-N sort. Forcing the ordered scan
+reaches 1.5 ms — but an index the cost model will not choose is write cost for no read benefit.
+Twelve milliseconds is a fine console read. This is exactly the index that reasoning-from-first-
+principles would have added and only a plan could refuse.
 
 `perfdb` is the right bed for this — it seeds **200 orgs**, which is what a cross-org query needs to
 behave like production. Its launch command also sets `ORDER_SWEEPER_BACKGROUND_ENABLED=false`, so it
@@ -202,12 +232,15 @@ single-org fixtures cannot fail the way this slice can:
 
 ## Definition of done
 
-- [ ] `mvn -o test` green; full `*IT` battery green (`DOCKER_HOST` at the colima socket).
-- [ ] `mvn spotless:apply` clean.
-- [ ] `EXPLAIN ANALYZE` before/after for all five queues on `perfdb` in the PR body, with the
-      verdict on each index added or skipped, and a note of any DDL applied to `perfdb` by hand.
-- [ ] `perfdb` and the dev `inventorydb` both still intact and queryable at the end of the slice —
-      stated as an observation, not an assumption.
-- [ ] `queueCounts()` demonstrably shares its predicates with the row queries — one definition, two
-      callers. A reviewer can see it without running the tests.
-- [ ] `CLAUDE.md` §Platform admin gains the `GET /api/admin/queues/{kind}` entry (gitignored here).
+- [x] `mvn -o test` green; full `*IT` battery green (`DOCKER_HOST` at the colima socket) — 340 unit
+      (common 27, service 107, api 206) and 859 IT, 0 failures. `PlatformQueuesIT` = 24 tests.
+- [x] `mvn spotless:apply` clean.
+- [x] `EXPLAIN ANALYZE` before/after on `perfdb` with the verdict on each index added or skipped, and
+      the out-of-band DDL noted — all of it also written into V73's header comment, which is the
+      better home for it than a PR body nobody re-reads.
+- [x] `perfdb` and the dev `inventorydb` both still intact and queryable — observed. Codegen was
+      never run, so V73 never reached the shared dev DB and the "applied but missing" trap never
+      armed.
+- [x] `queueCounts()` demonstrably shares its predicates with the row queries — `PlatformQueue
+      Predicates`, one definition, two callers.
+- [x] `CLAUDE.md` §Platform admin gains the `GET /api/admin/queues/{kind}` entry (gitignored here).
