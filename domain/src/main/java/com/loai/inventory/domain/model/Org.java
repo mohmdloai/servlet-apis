@@ -14,6 +14,14 @@ public class Org {
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
+  // Suspension stamp (V43). Written by setSuspension since the platform console's lifecycle slice
+  // shipped, but never read back until stories/platform_tenant_states.md — so the reason an ADMIN
+  // typed was write-only, and `active=false` could not be told apart from an org born inactive at
+  // self-serve registration. Both are null unless an ADMIN suspended the org; reactivate clears
+  // them. The nullness of suspendedAt is what OrgStatus partitions on.
+  private OffsetDateTime suspendedAt;
+  private String suspendedReason;
+
   // Billing profile (V51) — the seller identity a printable invoice/receipt header needs. All
   // nullable; an org with none set still renders a valid document. Set via setters (the 8-arg
   // constructor is deliberately unchanged to keep its callers compiling).
@@ -134,6 +142,24 @@ public class Org {
 
   public void setUpdatedAt(OffsetDateTime updatedAt) {
     this.updatedAt = updatedAt;
+  }
+
+  /** When a platform ADMIN suspended this org; {@code null} unless {@link OrgStatus#SUSPENDED}. */
+  public OffsetDateTime getSuspendedAt() {
+    return suspendedAt;
+  }
+
+  public void setSuspendedAt(OffsetDateTime suspendedAt) {
+    this.suspendedAt = suspendedAt;
+  }
+
+  /** The note the suspending ADMIN typed; {@code null} unless {@link OrgStatus#SUSPENDED}. */
+  public String getSuspendedReason() {
+    return suspendedReason;
+  }
+
+  public void setSuspendedReason(String suspendedReason) {
+    this.suspendedReason = suspendedReason;
   }
 
   public String getLegalName() {

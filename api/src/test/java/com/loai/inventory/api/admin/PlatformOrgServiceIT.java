@@ -2,6 +2,8 @@ package com.loai.inventory.api.admin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -11,6 +13,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
@@ -132,6 +135,12 @@ class PlatformOrgServiceIT {
     return id;
   }
 
+  /** Suspend through the service, so the row carries the real {@code suspended_at} stamp. */
+  private UUID suspend(UUID orgId, String reason) {
+    service.suspend(admin(), env(), orgId, reason);
+    return orgId;
+  }
+
   private UUID user(String email) {
     UUID id = UUID.randomUUID();
     dsl.execute(
@@ -227,15 +236,22 @@ class PlatformOrgServiceIT {
     assertEquals(1, last.items().size());
   }
 
+  /**
+   * The filter narrows to one {@link OrgStatus}, and the three partition the table. An inactive org
+   * with no {@code suspended_at} is a registration awaiting verification — it must not answer to
+   * {@code ?status=suspended}, which is the bug this filter's shape exists to prevent.
+   */
   @Test
   void list_filtersByStatus() {
     org("live-1", true);
     org("live-2", true);
-    org("dead", false);
+    org("unverified", false); // born inactive at registration — pending, not suspended
+    suspend(org("banned", true), "fraud");
 
-    assertEquals(2, service.list(0, 20, Boolean.TRUE).total());
-    assertEquals(1, service.list(0, 20, Boolean.FALSE).total());
-    assertEquals(3, service.list(0, 20, null).total());
+    assertEquals(2, service.list(0, 20, OrgStatus.ACTIVE).total());
+    assertEquals(1, service.list(0, 20, OrgStatus.PENDING).total());
+    assertEquals(1, service.list(0, 20, OrgStatus.SUSPENDED).total());
+    assertEquals(4, service.list(0, 20, null).total());
   }
 
   @Test
@@ -309,6 +325,11 @@ class PlatformOrgServiceIT {
     var updated = service.suspend(admin(), env(), orgId, "fraud investigation");
 
     assertFalse(updated.isActive());
+    // The model reads the stamp back now, so the status is derivable and the reason is not
+    // write-only: both were on the row and mapped by nobody until this slice.
+    assertEquals(OrgStatus.SUSPENDED, OrgStatus.of(updated));
+    assertEquals("fraud investigation", updated.getSuspendedReason());
+    assertNotNull(updated.getSuspendedAt());
     assertFalse(
         dsl.select(DSL.field("active"))
             .from("org")
@@ -331,6 +352,9 @@ class PlatformOrgServiceIT {
     var updated = service.reactivate(admin(), env(), orgId);
 
     assertTrue(updated.isActive());
+    assertEquals(OrgStatus.ACTIVE, OrgStatus.of(updated));
+    assertNull(updated.getSuspendedAt());
+    assertNull(updated.getSuspendedReason());
     assertTrue(
         dsl.select(DSL.field("active"))
             .from("org")
@@ -461,7 +485,7 @@ class PlatformOrgServiceIT {
         ValidationException.class, () -> service.updateOrg(admin(), env(), orgId, "Acme", null, 5));
   }
 
-  // ───────── C2: SEO metadata parity on the admin plane (PATCH /api/admin/orgs) ─────────
+  // C2: SEO metadata parity on the admin plane (PATCH /api/admin/orgs)
 
   @Test
   void updateOrg_setsSeoMetadata_merges_clears_audits() {

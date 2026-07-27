@@ -41,6 +41,7 @@ public record AdminOverviewResponse(
       long total,
       long active,
       long suspended,
+      long pending,
       @JsonProperty("provisioned_last_7d") long provisionedLast7d) {}
 
   public record Queues(
@@ -79,7 +80,7 @@ public record AdminOverviewResponse(
   private static Tenants tenants(PlatformTenantCounts t) {
     return t == null
         ? null
-        : new Tenants(t.total(), t.active(), t.suspended(), t.provisionedLast7d());
+        : new Tenants(t.total(), t.active(), t.suspended(), t.pending(), t.provisionedLast7d());
   }
 
   private static Queues queues(PlatformQueueCounts q) {

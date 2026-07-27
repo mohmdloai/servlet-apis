@@ -59,14 +59,14 @@ class PlatformOverviewServiceTest {
   }
 
   private void healthyRepo() {
-    when(repo.tenantCounts()).thenReturn(new PlatformTenantCounts(42, 39, 3, 4));
+    when(repo.tenantCounts()).thenReturn(new PlatformTenantCounts(42, 37, 3, 2, 4));
     when(repo.queueCounts()).thenReturn(new PlatformQueueCounts(3, 7, 2, 1, 0));
     when(repo.backgroundJobServerCount()).thenReturn(1L);
     when(repo.recurringJobStats(any()))
         .thenReturn(List.of(new RecurringJobStats(SWEEPER, NOW.minusSeconds(20), null, 0, null)));
   }
 
-  // ── The honesty contract ──────────────────────────────────────────────────
+  // The honesty contract
 
   @Test
   void everythingResolves_noDegradedSection() {
@@ -152,7 +152,7 @@ class PlatformOverviewServiceTest {
     assertEquals(NOW, a.asOf());
   }
 
-  // ── Build identity ────────────────────────────────────────────────────────
+  // Build identity
 
   @Test
   void anUnsetBuildCommit_isNull_notAPlaceholder() {
@@ -167,7 +167,7 @@ class PlatformOverviewServiceTest {
     assertEquals(STARTED, svc.overview().build().startedAt());
   }
 
-  // ── Jobs disabled ─────────────────────────────────────────────────────────
+  // Jobs disabled
 
   @Test
   void jobsDisabled_isACalmState_notThreeDeadJobs() {
@@ -181,10 +181,10 @@ class PlatformOverviewServiceTest {
     assertTrue(o.degraded().isEmpty());
   }
 
-  // ── Job-state classification ──────────────────────────────────────────────
+  // Job-state classification
 
   private JobState classify(RecurringJobStats stats, Duration period) {
-    when(repo.tenantCounts()).thenReturn(new PlatformTenantCounts(0, 0, 0, 0));
+    when(repo.tenantCounts()).thenReturn(new PlatformTenantCounts(0, 0, 0, 0, 0));
     when(repo.queueCounts()).thenReturn(new PlatformQueueCounts(0, 0, 0, 0, 0));
     when(repo.backgroundJobServerCount()).thenReturn(1L);
     when(repo.recurringJobStats(any())).thenReturn(List.of(stats));
@@ -279,7 +279,7 @@ class PlatformOverviewServiceTest {
     Instant success = NOW.minusSeconds(20);
     Instant failure = NOW.minusSeconds(400);
     Instant next = NOW.plusSeconds(10);
-    when(repo.tenantCounts()).thenReturn(new PlatformTenantCounts(0, 0, 0, 0));
+    when(repo.tenantCounts()).thenReturn(new PlatformTenantCounts(0, 0, 0, 0, 0));
     when(repo.queueCounts()).thenReturn(new PlatformQueueCounts(0, 0, 0, 0, 0));
     when(repo.backgroundJobServerCount()).thenReturn(2L);
     when(repo.recurringJobStats(any()))

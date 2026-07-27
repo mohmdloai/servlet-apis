@@ -5,13 +5,13 @@ import static com.loai.inventory.repository.generated.Tables.USER_ORG_ROLE;
 
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.repository.OrgRepository;
 import com.loai.inventory.repository.generated.tables.records.OrgRecord;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import org.jooq.Condition;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
 import org.slf4j.Logger;
@@ -46,10 +46,9 @@ public final class OrgRepositoryImpl implements OrgRepository {
   }
 
   @Override
-  public List<Org> findAll(int offset, int limit, Boolean active) {
-    Condition condition = active == null ? DSL.noCondition() : ORG.ACTIVE.eq(active);
+  public List<Org> findAll(int offset, int limit, OrgStatus status) {
     return dsl.selectFrom(ORG)
-        .where(condition)
+        .where(OrgStatusConditions.matching(status))
         .orderBy(ORG.CREATED_AT.desc())
         .offset(offset)
         .limit(limit)
@@ -69,9 +68,8 @@ public final class OrgRepositoryImpl implements OrgRepository {
   }
 
   @Override
-  public long count(Boolean active) {
-    Condition condition = active == null ? DSL.noCondition() : ORG.ACTIVE.eq(active);
-    return dsl.fetchCount(ORG, condition);
+  public long count(OrgStatus status) {
+    return dsl.fetchCount(ORG, OrgStatusConditions.matching(status));
   }
 
   @Override
@@ -197,6 +195,10 @@ public final class OrgRepositoryImpl implements OrgRepository {
             r.getOrderTtlMinutes(),
             r.getCreatedAt(),
             r.getUpdatedAt());
+    // V43's columns, read back for the first time: the nullness of suspended_at is what tells a
+    // pending tenant from a suspended one, and the reason an ADMIN typed was write-only until now.
+    org.setSuspendedAt(r.getSuspendedAt());
+    org.setSuspendedReason(r.getSuspendedReason());
     org.setLegalName(r.getLegalName());
     org.setTaxRegistrationNumber(r.getTaxRegistrationNumber());
     org.setAddressLine1(r.getAddressLine1());
