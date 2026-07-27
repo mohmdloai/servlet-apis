@@ -35,6 +35,7 @@ import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.PlatformAuditRepositoryFactory;
+import com.loai.inventory.domain.repository.PlatformQueueRepositoryFactory;
 import com.loai.inventory.domain.repository.PlatformStatsRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
@@ -74,6 +75,7 @@ import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
+import com.loai.inventory.repository.PlatformQueueRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformStatsRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryFactoryImpl;
@@ -142,6 +144,7 @@ import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
 import com.loai.inventory.service.platform.PlatformOverviewService;
+import com.loai.inventory.service.platform.PlatformQueueService;
 import com.loai.inventory.service.platform.UserAdminService;
 import com.zaxxer.hikari.HikariDataSource;
 import java.time.Duration;
@@ -237,6 +240,7 @@ public class AppConfig {
   public final ReportRepository reportRepository;
   public final PlatformAuditRepositoryFactory platformAuditRepositoryFactory;
   public final PlatformStatsRepositoryFactory platformStatsRepositoryFactory;
+  public final PlatformQueueRepositoryFactory platformQueueRepositoryFactory;
   public final SalesOrderRepositoryFactory salesOrderRepositoryFactory;
   public final InventoryReservationRepositoryFactory inventoryReservationRepositoryFactory;
   public final PaymentTransactionRepositoryFactory paymentTransactionRepositoryFactory;
@@ -264,6 +268,7 @@ public class AppConfig {
   public final OrgStatusService orgStatusService;
   public final PlatformOrgService platformOrgService;
   public final PlatformOverviewService platformOverviewService;
+  public final PlatformQueueService platformQueueService;
   public final UserAdminService userAdminService;
   public final ProductService productService;
   public final CategoryService categoryService;
@@ -372,6 +377,7 @@ public class AppConfig {
     this.reportRepository = new ReportRepositoryImpl(dsl);
     this.platformAuditRepositoryFactory = new PlatformAuditRepositoryFactoryImpl();
     this.platformStatsRepositoryFactory = new PlatformStatsRepositoryFactoryImpl();
+    this.platformQueueRepositoryFactory = new PlatformQueueRepositoryFactoryImpl();
     this.salesOrderRepositoryFactory = new SalesOrderRepositoryFactoryImpl();
     this.inventoryReservationRepositoryFactory = new InventoryReservationRepositoryFactoryImpl();
     this.paymentTransactionRepositoryFactory = new PaymentTransactionRepositoryFactoryImpl();
@@ -757,6 +763,9 @@ public class AppConfig {
                 .toList(),
             System.getenv("BUILD_COMMIT"),
             startedAt);
+    // The rows behind the overview's five backlog tiles (slice 2). A separate repository from
+    // platformStatsRepositoryFactory on purpose — see PlatformQueueRepository's Javadoc.
+    this.platformQueueService = new PlatformQueueService(dsl, platformQueueRepositoryFactory);
 
     log.info("Application context ready.");
   }

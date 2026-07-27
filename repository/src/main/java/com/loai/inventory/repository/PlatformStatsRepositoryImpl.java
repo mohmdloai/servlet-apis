@@ -3,22 +3,14 @@ package com.loai.inventory.repository;
 import static com.loai.inventory.repository.generated.Tables.JOBRUNR_BACKGROUNDJOBSERVERS;
 import static com.loai.inventory.repository.generated.Tables.JOBRUNR_JOBS;
 import static com.loai.inventory.repository.generated.Tables.JOBRUNR_RECURRING_JOBS;
-import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY;
 import static com.loai.inventory.repository.generated.Tables.ORG;
-import static com.loai.inventory.repository.generated.Tables.PAYMENT;
-import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
-import static com.loai.inventory.repository.generated.Tables.REFUND;
-import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 
 import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.PlatformQueueCounts;
+import com.loai.inventory.domain.model.PlatformQueueKind;
 import com.loai.inventory.domain.model.PlatformTenantCounts;
 import com.loai.inventory.domain.model.RecurringJobStats;
 import com.loai.inventory.domain.repository.PlatformStatsRepository;
-import com.loai.inventory.repository.generated.enums.OrderStatus;
-import com.loai.inventory.repository.generated.enums.PaymentReconciliationStatus;
-import com.loai.inventory.repository.generated.enums.PaymentStatus;
-import com.loai.inventory.repository.generated.enums.RefundStatus;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -28,7 +20,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import org.jooq.Condition;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Record;
@@ -37,8 +28,11 @@ import org.jooq.impl.DSL;
 
 /**
  * The cross-org rollups behind {@code GET /api/admin/overview}. See {@link PlatformStatsRepository}
- * for why this is the one class in the codebase whose reads deliberately omit {@code org_id} — and
- * for the three rules (platform-gated, counts-only, read-only) that keep that safe.
+ * for the three rules (platform-gated, counts-only, read-only) that keep an un-scoped read safe.
+ *
+ * <p>Its sibling {@link PlatformQueueRepositoryImpl} serves the <em>rows</em> behind these counts,
+ * under its own three rules — a separate type precisely so this one's counts-only guarantee
+ * survives intact. Neither writes a queue predicate: both consume {@link PlatformQueuePredicates}.
  *
  * <p>Two JobRunr facts are load-bearing here and would bite silently if lost:
  *
@@ -100,39 +94,19 @@ public final class PlatformStatsRepositoryImpl implements PlatformStatsRepositor
 
   @Override
   public PlatformQueueCounts queueCounts() {
-    // Five tables, five counts. Each predicate is the org-scoped list's predicate verbatim, minus
-    // that list's org filter — nothing else about it changes, so tile and drill-down cannot drift.
+    // Not one predicate is written here. Each of the five is defined once in
+    // PlatformQueuePredicates and consumed by exactly two callers: this census, and the paged rows
+    // in PlatformQueueRepositoryImpl behind GET /api/admin/queues/{kind}.
     //
-    // `failed_emails` is `status='FAILED'` with no channel narrowing, per the story. Only the email
-    // leg has a failure path today (`NotificationService.dispatchPendingEmail`); the in-app leg
-    // goes PENDING→SENT and never reaches FAILED, so the two predicates coincide. If an in-app
-    // failure path is ever added, this one needs `AND channel='email'` to keep matching its name.
-    long failedEmails = count(NOTIFICATION_DELIVERY, NOTIFICATION_DELIVERY.STATUS.eq("FAILED"));
-    long pendingRefunds = count(REFUND, REFUND.STATUS.eq(RefundStatus.PENDING));
-    long openDisputes = count(PAYMENT, PAYMENT.STATUS.eq(PaymentStatus.DISPUTED));
-    long orphanTransactions =
-        count(
-            PAYMENT_TRANSACTION,
-            PAYMENT_TRANSACTION
-                .RECONCILIATION_STATUS
-                .eq(PaymentReconciliationStatus.ORPHAN)
-                // The org queue's has_payment=false verbatim: the 1:1 payment row is the
-                // disposition marker, so a resolved or refunded orphan has already left the queue.
-                .and(
-                    DSL.notExists(
-                        DSL.selectOne()
-                            .from(PAYMENT)
-                            .where(PAYMENT.PAYMENT_TRANSACTION_ID.eq(PAYMENT_TRANSACTION.ID)))));
-    long expiredPendingOrders =
-        count(
-            SALES_ORDER,
-            SALES_ORDER
-                .STATUS
-                .eq(OrderStatus.PENDING_PAYMENT)
-                // Served by idx_so_pending_global (V29) — the sweeper's own candidate predicate.
-                .and(SALES_ORDER.EXPIRES_AT.lt(DSL.currentOffsetDateTime())));
+    // That is deliberate and it is the whole guarantee: the tile count and the drill-down's `total`
+    // are the same number because they are the same query, not because a test says so. A test
+    // asserting they agree would pass right up until someone edited one of them.
     return new PlatformQueueCounts(
-        failedEmails, pendingRefunds, openDisputes, orphanTransactions, expiredPendingOrders);
+        count(PlatformQueueKind.FAILED_EMAILS),
+        count(PlatformQueueKind.PENDING_REFUNDS),
+        count(PlatformQueueKind.OPEN_DISPUTES),
+        count(PlatformQueueKind.ORPHAN_TRANSACTIONS),
+        count(PlatformQueueKind.EXPIRED_PENDING_ORDERS));
   }
 
   @Override
@@ -230,8 +204,9 @@ public final class PlatformStatsRepositoryImpl implements PlatformStatsRepositor
     return dsl.fetchCount(JOBRUNR_BACKGROUNDJOBSERVERS);
   }
 
-  private long count(Table<?> table, Condition condition) {
-    return dsl.fetchCount(table, condition);
+  /** One queue's size, straight off the shared definition. See {@link PlatformQueuePredicates}. */
+  private long count(PlatformQueueKind kind) {
+    return dsl.fetchCount(PlatformQueuePredicates.from(kind), PlatformQueuePredicates.where(kind));
   }
 
   /**
