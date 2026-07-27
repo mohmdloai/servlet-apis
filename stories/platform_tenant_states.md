@@ -65,8 +65,10 @@ label from the boolean (`orgStatusOf(active)`), which is a second copy of a rule
 can be wrong. Deriving state from a boolean the server also derives from is the shape of this bug;
 delete the derivation rather than teach it a third case.
 
-`AdminOrgDetailResponse` additionally carries `suspendedAt` and `suspendedReason` (both null unless
-`SUSPENDED`), so the detail page can say *why* and *since when*.
+`AdminOrgDetailResponse` additionally carries `status` plus `suspendedAt` and `suspendedReason`
+(the latter two null unless `SUSPENDED`), so the detail page can say *why* and *since when*.
+`status` belongs there as a **top-level sibling**, not left to the embedded org: without it the
+detail page would have to derive from `org.active`, which is the exact derivation this slice bans.
 
 **Admin DTOs only — not the shared `OrgResponse`.** The tenant-facing `GET /api/orgs/{orgId}` has no
 business carrying the platform's internal suspension note, and members of a suspended org are 403'd
