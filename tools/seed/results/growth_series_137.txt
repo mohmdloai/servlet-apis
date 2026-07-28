@@ -1,0 +1,69 @@
+Growth series read (slice 8, GET /api/admin/growth) — measured on perfdb, 2026-07-28
+=====================================================================================
+perfdb: 200 orgs / 1,000,000 sales_order corpus; org_milestone hand-migrated to V77 on
+2026-07-26 (see tools/seed/README.md §"perfdb schema state"). All reads below are read-only;
+perfdb was not modified.
+
+Standing lesson applied first — count before believing any plan:
+
+  SELECT count(*) FROM org_milestone;   -->  1003 rows
+
+reached_at TIME SPREAD — checked before reading any series off this table
+--------------------------------------------------------------------------
+   milestone   | rows |            min             |            max             | wks | mos
+  -------------+------+----------------------------+----------------------------+-----+-----
+  ACTIVATED    |    3 | 2026-07-26 17:17:55+00     | 2026-07-26 17:17:55+00     |  1  |  1
+  CATALOGUED   |  200 | 2026-07-26 17:03:46+00     | 2026-07-26 17:03:46+00     |  1  |  1
+  FIRST_ORDER  |  200 | 2025-02-01 17:04:39+00     | 2025-02-02 19:49:51+00     |  1  |  1
+  FIRST_PAYMENT|  200 | 2025-02-01 17:34:39+00     | 2025-02-02 20:19:51+00     |  1  |  1
+  PUBLISHED    |  200 | 2025-01-01 00:18:00+00     | 2025-01-03 15:49:00+00     |  1  |  1
+  REGISTERED   |  200 | 2026-07-26 17:03:30+00     | 2026-07-26 17:03:30+00     |  1  |  1
+
+VERDICT: the seeder (and the V77 hand-backfill) stamped each milestone in a single burst —
+every milestone spans at most ~3 days and lands in exactly ONE week bucket and ONE month
+bucket. A series over perfdb is one bucket tall per stage and proves nothing about bucket
+ordering, sparsity, or window edges. Exactly the case the story anticipated: the ITs
+(PlatformGrowthIT) build their own scratch fixtures with events spread across buckets by
+direct org_milestone inserts, and never depend on perfdb. perfdb here answers only the plan
+and latency question, which it does answer — the table's size class, not its time spread, is
+what decides the plan.
+
+EXPLAIN (ANALYZE, BUFFERS) — warm-twice per bucket × bounded/unbounded window, path=all
+----------------------------------------------------------------------------------------
+Query shape (the repository's own, jOOQ-generated equivalent):
+
+  SELECT om.milestone, date_trunc($bucket, om.reached_at, 'UTC') AS period, count(*)
+  FROM org JOIN org_milestone om ON om.org_id = org.id
+  [WHERE om.reached_at >= now() - interval '90 days']
+  GROUP BY om.milestone, period ORDER BY om.milestone, period;
+
+Plan, identical in all four shapes: Seq Scan(org_milestone) + Seq Scan(org) → Hash Join →
+HashAggregate → quicksort. No index considered, none exists to consider beyond the PK —
+V77's header records the planner refusing every candidate on this table; not re-litigated.
+
+  shape                     run1 exec   run2 exec   (planning 1.1–3.7 ms both runs)
+  week  × all   (1003 rows)  1.39 ms     2.23 ms
+  week  × 90d   ( 403 rows)  0.75 ms     0.68 ms
+  month × all   (1003 rows)  0.98 ms     0.87 ms
+  month × 90d   ( 403 rows)  0.70 ms     0.71 ms
+
+Range: 0.68–2.23 ms warm across all shapes — comfortably inside the story's ~10 ms bar; the
+expected "trivial Seq Scan + HashAggregate, single-digit ms" is confirmed by measurement, not
+assumed. (The 403-row window shapes exist because ~400 of the 1003 rows are the 2026-07-26
+burst — see spread table.)
+
+path=self_serve shape (the cohortCondition anti-join on platform_audit)
+------------------------------------------------------------------------
+Counted first (the slice-4 lesson: perfdb's platform plane is unseeded):
+
+  SELECT count(*) FROM platform_audit;   -->  0 rows
+
+  week × 90d × self_serve: Nested Loop Anti Join over the empty table, 1.03 ms warm.
+
+CAVEAT, stated so this number is not quoted as a result: an anti-join probing 0 rows proves
+nothing about the predicate's cost at real audit volume. Slice 7 measured the identical
+cohortCondition on a 50,100-row scratch platform_audit at 2.3–2.7 ms warm
+(org_milestone_backfill_135.txt); the growth read adds only the date_trunc aggregate on top,
+so that measurement remains the honest reference for the path-split cost.
+
+No index was added; no DDL of any kind was run. Both inventorydb and perfdb intact.
