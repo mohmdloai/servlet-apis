@@ -93,7 +93,11 @@ class UnicodeNormalizationIT {
             new ProductRepositoryImpl(dsl),
             new com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl(),
             dsl);
-    customerService = new CustomerService(dsl, new CustomerRepositoryFactoryImpl());
+    customerService =
+        new CustomerService(
+            dsl,
+            new CustomerRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl());
   }
 
   @AfterAll

@@ -5,8 +5,10 @@ import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Customer;
+import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
+import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -20,10 +22,47 @@ public class CustomerService {
 
   private final DSLContext rootDsl;
   private final CustomerRepositoryFactory repoFactory;
+  private final SalesOrderRepositoryFactory salesOrderRepoFactory;
 
-  public CustomerService(DSLContext rootDsl, CustomerRepositoryFactory repoFactory) {
+  public CustomerService(
+      DSLContext rootDsl,
+      CustomerRepositoryFactory repoFactory,
+      SalesOrderRepositoryFactory salesOrderRepoFactory) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
+    this.salesOrderRepoFactory = salesOrderRepoFactory;
+  }
+
+  /**
+   * One page of a customer's orders, plus the total — the pager's two halves from one predicate.
+   */
+  public record CustomerOrders(List<SalesOrder> orders, long total) {}
+
+  /**
+   * A customer's order history, newest-first.
+   *
+   * <p>Deliberately a <b>subresource</b> rather than {@code ?customer_id=} on {@code
+   * /sales-orders}, and the reason is that route's existing shape rather than taste: a bare {@code
+   * GET /api/orgs/{orgId}/sales-orders} is a reserved 400 and {@code ?order_number=} returns <em>a
+   * single object, not a list</em>. Adding a third mode returning a {@code PageResponse} would give
+   * one URL three incompatible response shapes keyed on which parameter you passed.
+   *
+   * <p>An unknown customer is a <b>404</b> — a path segment names a thing — while a customer with
+   * no orders is an <b>empty page</b>. That is the same distinction slice 4 drew between an unknown
+   * {@code {orgId}} on the timeline (404) and an unmatched {@code ?org_id=} on the queues (empty).
+   *
+   * <p>Reuses {@code SalesOrderRepository.findByCustomerId}, which already existed for the portal's
+   * "my orders" read with exactly this ordering — a second query would be a second definition of
+   * "this customer's orders" and the two would eventually disagree.
+   */
+  public CustomerOrders getOrders(UUID orgId, UUID customerId, int page, int size) {
+    if (page < 0) throw new ValidationException("page must be >= 0");
+    if (size < 1 || size > 100) throw new ValidationException("size must be 1-100");
+    getById(orgId, customerId); // 404s an unknown customer before reporting an empty history
+    var repo = salesOrderRepoFactory.create(rootDsl);
+    return new CustomerOrders(
+        repo.findByCustomerId(orgId, customerId, page * size, size),
+        repo.countByCustomerId(orgId, customerId));
   }
 
   public Customer getById(UUID orgId, UUID id) {
@@ -32,15 +71,30 @@ public class CustomerService {
   }
 
   public List<Customer> getAll(UUID orgId, int page, int size) {
+    return getAll(orgId, null, page, size);
+  }
+
+  /**
+   * The customer directory, optionally narrowed by {@code q} (name or email).
+   *
+   * <p>Whitespace-only {@code q} is treated as absent rather than as a search for spaces, and there
+   * is deliberately <b>no minimum length</b> — see {@code CustomerRepositoryImpl}'s {@code
+   * searchCondition} for the measurement that decided it.
+   */
+  public List<Customer> getAll(UUID orgId, String q, int page, int size) {
     if (page < 0) throw new ValidationException("page must be >= 0");
     if (size < 1 || size > 100) throw new ValidationException("size must be 1-100");
     CustomerRepository repo = repoFactory.create(rootDsl);
-    return repo.findAll(orgId, page * size, size);
+    return repo.findAll(orgId, q, page * size, size);
   }
 
   public long count(UUID orgId) {
+    return count(orgId, null);
+  }
+
+  public long count(UUID orgId, String q) {
     CustomerRepository repo = repoFactory.create(rootDsl);
-    return repo.count(orgId);
+    return repo.count(orgId, q);
   }
 
   public Customer create(UUID orgId, String email) {

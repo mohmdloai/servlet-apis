@@ -3,6 +3,7 @@ package com.loai.inventory.api.servlet.handler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.CreateCustomerRequest;
+import com.loai.inventory.api.dto.CustomerOrderResponse;
 import com.loai.inventory.api.dto.CustomerResponse;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.UpdateCustomerRequest;
@@ -41,7 +42,24 @@ public class CustomerHandler implements OrgResourceHandler {
       String remainingPath)
       throws IOException {
     try {
-      UUID customerId = parseId(remainingPath);
+      // `/{id}/orders` is the one subresource; anything else after the id is an unknown resource.
+      String rest = remainingPath == null ? "" : remainingPath;
+      if (rest.startsWith("/")) rest = rest.substring(1);
+      String[] segments = rest.isEmpty() ? new String[0] : rest.split("/", -1);
+      if (segments.length > 2) {
+        writeError(resp, 404, "Unknown customer endpoint");
+        return;
+      }
+      if (segments.length == 2) {
+        if (!"orders".equals(segments[1])) {
+          writeError(resp, 404, "Unknown customer endpoint");
+          return;
+        }
+        doGetOrders(method, req, resp, orgId, parseUuid(segments[0]));
+        return;
+      }
+
+      UUID customerId = segments.length == 1 ? parseUuid(segments[0]) : null;
 
       switch (method) {
         case "GET" -> doGet(req, resp, orgId, customerId);
@@ -65,8 +83,12 @@ public class CustomerHandler implements OrgResourceHandler {
     if (customerId == null) {
       int page = intParam(req, "page", 0);
       int size = intParam(req, "size", 10);
-      List<Customer> customers = customerService.getAll(orgId, page, size);
-      long total = customerService.count(orgId);
+      // Whitespace-only is absent, not a search for spaces. There is deliberately no minimum
+      // length — see CustomerRepositoryImpl.searchCondition for the measurement behind that.
+      String q = req.getParameter("q");
+      String term = (q == null || q.isBlank()) ? null : q.trim();
+      List<Customer> customers = customerService.getAll(orgId, term, page, size);
+      long total = customerService.count(orgId, term);
       List<CustomerResponse> data = customers.stream().map(CustomerResponse::from).toList();
       writeJson(resp, 200, new PageResponse<>(data, total, page, size));
     } else {
@@ -108,6 +130,37 @@ public class CustomerHandler implements OrgResourceHandler {
     }
     customerService.delete(orgId, customerId);
     resp.setStatus(204);
+  }
+
+  /**
+   * {@code GET /customers/{id}/orders} — the customer's history, newest-first (VIEWER).
+   *
+   * <p>Read-only: this route answers what a customer bought, it does not place anything. Any other
+   * verb is a 405 rather than a 404, because the resource exists.
+   */
+  private void doGetOrders(
+      String method, HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID customerId)
+      throws IOException {
+    if (!"GET".equals(method)) {
+      writeError(resp, 405, "Method not allowed");
+      return;
+    }
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    int page = intParam(req, "page", 0);
+    int size = intParam(req, "size", 10);
+    CustomerService.CustomerOrders result =
+        customerService.getOrders(orgId, customerId, page, size);
+    List<CustomerOrderResponse> data =
+        result.orders().stream().map(CustomerOrderResponse::from).toList();
+    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+  }
+
+  private UUID parseUuid(String raw) {
+    try {
+      return UUID.fromString(raw);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid customer id: " + raw);
+    }
   }
 
   private UUID parseId(String remainingPath) {

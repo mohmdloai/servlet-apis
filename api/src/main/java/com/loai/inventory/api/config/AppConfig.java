@@ -572,7 +572,8 @@ public class AppConfig {
         new StorefrontPageService(dsl, storefrontPageRepositoryFactory, orgRepositoryFactory);
     // storefrontService is constructed after salesOrderService below — its anonymous checkout
     // (public_checkout.md) delegates to SalesOrderService.placeStorefrontOrder.
-    this.customerService = new CustomerService(dsl, customerRepositoryFactory);
+    this.customerService =
+        new CustomerService(dsl, customerRepositoryFactory, salesOrderRepositoryFactory);
     this.inventoryService =
         new InventoryService(
             dsl,
