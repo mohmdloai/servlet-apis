@@ -25,7 +25,21 @@ public interface CustomerRepository {
 
   List<Customer> findAll(UUID orgId, int offset, int limit);
 
+  /**
+   * One page of the org's customer directory, optionally narrowed by {@code q} (matched against
+   * name and email, OR'd). Blank/null {@code q} is the unfiltered list.
+   *
+   * <p><b>Ordering is {@code created_at DESC} always, including under {@code q}.</b> Every other
+   * paged read in this codebase switches ordering on a filter (the queue-vs-ledger convention), so
+   * this deviation will look like an oversight — it is not. This is a directory, not a worklist,
+   * and a list that re-sorts itself while the operator types is disorienting for no gain.
+   */
+  List<Customer> findAll(UUID orgId, String q, int offset, int limit);
+
   long count(UUID orgId);
+
+  /** The matching count for {@link #findAll(UUID, String, int, int)} — the same predicate. */
+  long count(UUID orgId, String q);
 
   Customer insert(Customer customer);
 
