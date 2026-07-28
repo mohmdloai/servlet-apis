@@ -152,6 +152,7 @@ import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformFunnelService;
+import com.loai.inventory.service.platform.PlatformGrowthService;
 import com.loai.inventory.service.platform.PlatformOrgService;
 import com.loai.inventory.service.platform.PlatformOrgTimelineService;
 import com.loai.inventory.service.platform.PlatformOverviewService;
@@ -289,6 +290,7 @@ public class AppConfig {
   public final PlatformSearchService platformSearchService;
   public final OrgMilestoneService orgMilestoneService;
   public final PlatformFunnelService platformFunnelService;
+  public final PlatformGrowthService platformGrowthService;
   public final UserAdminService userAdminService;
   public final ProductService productService;
   public final CategoryService categoryService;
@@ -817,6 +819,10 @@ public class AppConfig {
     // PlatformFunnelRepository's Javadoc for why it is a new sibling rather than a method on one of
     // the three above.
     this.platformFunnelService = new PlatformFunnelService(dsl, platformFunnelRepositoryFactory);
+    // The growth series (slice 8) — deliberately the SAME repository as the funnel, not a fifth
+    // sibling: same table, same counts-only contract, same gate, and the same cohortCondition
+    // definition for the self-serve/provisioned split. See PlatformFunnelRepository's Javadoc.
+    this.platformGrowthService = new PlatformGrowthService(dsl, platformFunnelRepositoryFactory);
 
     log.info("Application context ready.");
   }

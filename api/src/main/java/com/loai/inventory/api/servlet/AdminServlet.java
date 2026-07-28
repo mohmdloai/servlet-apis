@@ -7,6 +7,7 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.servlet.handler.AdminResourceHandler;
 import com.loai.inventory.api.servlet.handler.AuditAdminHandler;
 import com.loai.inventory.api.servlet.handler.FunnelAdminHandler;
+import com.loai.inventory.api.servlet.handler.GrowthAdminHandler;
 import com.loai.inventory.api.servlet.handler.OrgAdminHandler;
 import com.loai.inventory.api.servlet.handler.OverviewAdminHandler;
 import com.loai.inventory.api.servlet.handler.QueuesAdminHandler;
@@ -79,7 +80,9 @@ public class AdminServlet extends HttpServlet {
             "search",
             new SearchAdminHandler(config.platformSearchService, mapper),
             "funnel",
-            new FunnelAdminHandler(config.platformFunnelService, mapper));
+            new FunnelAdminHandler(config.platformFunnelService, mapper),
+            "growth",
+            new GrowthAdminHandler(config.platformGrowthService, mapper));
   }
 
   @Override
