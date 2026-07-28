@@ -29,6 +29,7 @@ import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
@@ -52,6 +53,7 @@ import com.loai.inventory.service.ReservationService;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.StorefrontService.CheckoutResult;
 import com.loai.inventory.service.StorefrontService.StorefrontOutOfStockException;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -163,7 +165,8 @@ class PortalCheckoutIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
             com.loai.inventory.api.support.TestWiring.notificationService(dsl),
-            magicLink);
+            magicLink,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     SalesOrderService salesOrders =
         new SalesOrderService(
             dsl,
@@ -178,7 +181,8 @@ class PortalCheckoutIT {
             magicLink,
             com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
             new com.loai.inventory.service.CouponService(
-                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()));
+                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     portal =
         new CustomerPortalService(
             dsl,

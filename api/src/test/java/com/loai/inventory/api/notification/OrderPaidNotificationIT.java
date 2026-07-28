@@ -25,6 +25,7 @@ import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
@@ -54,6 +55,7 @@ import com.loai.inventory.service.SalesOrderService.PaymentInput;
 import com.loai.inventory.service.email.EmailException;
 import com.loai.inventory.service.email.EmailMessage;
 import com.loai.inventory.service.email.EmailSender;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -148,7 +150,8 @@ class OrderPaidNotificationIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
             notificationService,
-            magicLink);
+            magicLink,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     RefundService refundService =
         new RefundService(
             dsl,
@@ -206,7 +209,8 @@ class OrderPaidNotificationIT {
             magicLink,
             com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
             new com.loai.inventory.service.CouponService(
-                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()));
+                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
   }
 
   @AfterAll

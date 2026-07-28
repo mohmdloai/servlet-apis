@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.loai.inventory.api.support.TestWiring;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
@@ -29,6 +30,7 @@ import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.PaymentTransactionService.VerifyCommand;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
 import com.loai.inventory.service.RefundService;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -107,7 +109,8 @@ class PaymentVerifyIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
             com.loai.inventory.api.support.TestWiring.notificationService(dsl),
-            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     RefundService refundService =
         new RefundService(
             dsl,

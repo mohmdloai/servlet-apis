@@ -18,11 +18,13 @@ import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.CredentialTokenService;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
@@ -113,7 +115,8 @@ class PlatformOrgServiceIT {
             audit,
             orgStatus,
             credentialTokenService,
-            authMailer);
+            authMailer,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     userRepo = new com.loai.inventory.repository.UserRepositoryImpl(dsl);
   }
 
