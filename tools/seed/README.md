@@ -60,6 +60,51 @@ docker exec inventory_db sh -c \
 # OWNER of three stores + platform ADMIN (the run.sh output names the granted slugs).
 ```
 
+### perfdb schema state: hand-migrated to V77 (2026-07-28)
+
+**perfdb's schema and Flyway history are both at V77.** It got there by hand in psql — Flyway is
+still never pointed at it, and the history-copy recipe above is for a *fresh* reseed only (on an
+already-populated perfdb it PK-collides with the existing rows; see the gotcha below). What was
+applied, and how:
+
+- **V73 + V75 indexes** were already physically present — created by hand during slices 2 and 3's
+  measurements and kept. That is exactly why booting the app against perfdb used to crash:
+  startup Flyway saw history at V72, tried V73, and hit `relation "refund_pending_global_idx"
+  already exists` (42P07). The failed migration rolled back cleanly; no repair was ever needed.
+- **V74** (JobRunr v016 view), **V76** (`platform_audit.org_id` + two indexes; the three backfills
+  are no-ops here — `platform_audit` is empty) and **V77** (`org_milestone` + backfill, ~4 s) were
+  applied 2026-07-28 by running the migration files verbatim through
+  `psql --single-transaction -f`, with `PGOPTIONS="-c search_path=inventorydb"`.
+- **History rows 73–77** were then INSERTed, copied verbatim from the dev `inventorydb`'s
+  `flyway_schema_history` (`pg_dump --column-inserts`, filtered to those versions) so the
+  checksums match the files in the jar and startup validation passes.
+
+**The standing procedure when a new migration lands on dev** (V78 and beyond), before benching:
+
+```bash
+# 1. apply the DDL by hand, never via Flyway:
+docker cp repository/src/main/resources/db/migration/V78__*.sql inventory_db:/tmp/
+docker exec -e PGOPTIONS="-c search_path=inventorydb" inventory_db \
+  psql -U postgres -d perfdb -v ON_ERROR_STOP=1 --single-transaction -f /tmp/V78__*.sql
+# 2. copy that version's history row from the dev DB (checksum must match the jar):
+docker exec inventory_db sh -c \
+  "pg_dump -U postgres --data-only --column-inserts -t inventorydb.flyway_schema_history inventorydb" \
+  | grep "VALUES (78, '78'" \
+  | docker exec -i inventory_db psql -U postgres -d perfdb -v ON_ERROR_STOP=1
+```
+
+Gotcha on the fresh-reseed recipe above: it assumes an empty history table. On a live perfdb the
+piped `pg_dump --data-only` collides with the existing rows on the `installed_rank` PK — copy only
+the missing versions' rows (step 2's shape) instead.
+
+**What the platform-plane data honestly shows on perfdb** — the seeder populates commerce only, so:
+`platform_audit` is empty (no `ORG_CREATE` rows → the funnel's `path=provisioned` cohort is empty
+and `path=self_serve` is all 200 orgs), and `GET /api/admin/funnel` reports **ACTIVATED = 3** — the
+only orgs whose OWNER has a verified email are the bench user's three stores. That is the truth of
+the seeded data, not a bug in the funnel; REGISTERED/CATALOGUED/PUBLISHED/FIRST_ORDER/FIRST_PAYMENT
+all read 200. Verified end-to-end 2026-07-28: the app boots against perfdb with no migration
+attempt and the funnel serves under the bench login.
+
 **Login** (works for the org dashboards *and* the platform console):
 - email `bench@bench.test` · password `benchpass-123`
 - OWNER of `store-102`, `store-103`, `store-104`; ADMIN sees all 200 orgs under `/admin`
