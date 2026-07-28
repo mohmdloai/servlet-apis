@@ -1,0 +1,190 @@
+# Story org_customer_reads.md (branch 133_feat/org-customer-reads) — the ?q= floor.
+# Captured 2026-07-28T02:50:59Z against perfdb, READ-ONLY (Flyway is never pointed here).
+# NO MIGRATION in this slice, so there is no migration header to carry the table — this file is it.
+
+===== 0. count(*) BEFORE believing any plan (perfdb's platform tables were empty in slice 4)
+SET
+ customers | orgs 
+-----------+------
+    200000 |  200
+(1 row)
+
+# FINDING: customers are UNIFORM across tenants — 1000 in every one of the 200 orgs.
+# The story said to 'pick the largest single org, not a random one'. There is no largest org
+# on perfdb; every org bounds the scan to exactly 1000 rows, so that instruction has no
+# referent here and the numbers below are the same whichever org is chosen.
+
+SET
+ customers_in_that_org 
+-----------------------
+                  1000
+(1 row)
+
+
+# The count(*) shape is measured, not the LIMIT one: the envelope promises a true total, so a
+# LIMIT cannot early-exit and would finish in a millisecond on a lucky early match.
+
+===== 1a. COMBINED (the real query), q='a' — 1 character
+SET
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=2438.82..2438.83 rows=1 width=8) (actual time=0.220..0.221 rows=1 loops=1)
+   Buffers: shared hit=26
+   ->  Bitmap Heap Scan on customer  (cost=15.97..2437.00 rows=727 width=0) (actual time=0.037..0.180 rows=735 loops=1)
+         Recheck Cond: (org_id = '06a241af-1d0a-47f7-b5e4-a4713fe68c9c'::uuid)
+         Filter: ((name_search ~~ '%a%'::text) OR ((email)::text ~~ '%a%'::text))
+         Rows Removed by Filter: 265
+         Heap Blocks: exact=24
+         Buffers: shared hit=26
+         ->  Bitmap Index Scan on customer_org_idx  (cost=0.00..15.79 rows=999 width=0) (actual time=0.027..0.027 rows=1000 loops=1)
+               Index Cond: (org_id = '06a241af-1d0a-47f7-b5e4-a4713fe68c9c'::uuid)
+               Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=188
+ Planning Time: 1.036 ms
+ Execution Time: 0.252 ms
+(15 rows)
+
+
+===== 1b. COMBINED, q='ahm' — 3 characters
+SET
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=2437.06..2437.07 rows=1 width=8) (actual time=0.208..0.208 rows=1 loops=1)
+   Buffers: shared hit=26
+   ->  Bitmap Heap Scan on customer  (cost=15.81..2436.84 rows=89 width=0) (actual time=0.038..0.202 rows=90 loops=1)
+         Recheck Cond: (org_id = '06a241af-1d0a-47f7-b5e4-a4713fe68c9c'::uuid)
+         Filter: ((name_search ~~ '%ahm%'::text) OR ((email)::text ~~ '%ahm%'::text))
+         Rows Removed by Filter: 910
+         Heap Blocks: exact=24
+         Buffers: shared hit=26
+         ->  Bitmap Index Scan on customer_org_idx  (cost=0.00..15.79 rows=999 width=0) (actual time=0.024..0.024 rows=1000 loops=1)
+               Index Cond: (org_id = '06a241af-1d0a-47f7-b5e4-a4713fe68c9c'::uuid)
+               Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=188
+ Planning Time: 0.920 ms
+ Execution Time: 0.233 ms
+(15 rows)
+
+
+===== 2a. NAME leg only, q='a'
+SET
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=2436.32..2436.33 rows=1 width=8) (actual time=0.223..0.223 rows=1 loops=1)
+   Buffers: shared hit=26
+   ->  Bitmap Heap Scan on customer  (cost=15.97..2434.50 rows=727 width=0) (actual time=0.042..0.185 rows=735 loops=1)
+         Recheck Cond: (org_id = '06a241af-1d0a-47f7-b5e4-a4713fe68c9c'::uuid)
+         Filter: (name_search ~~ '%a%'::text)
+         Rows Removed by Filter: 265
+         Heap Blocks: exact=24
+         Buffers: shared hit=26
+         ->  Bitmap Index Scan on customer_org_idx  (cost=0.00..15.79 rows=999 width=0) (actual time=0.029..0.029 rows=1000 loops=1)
+               Index Cond: (org_id = '06a241af-1d0a-47f7-b5e4-a4713fe68c9c'::uuid)
+               Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=197
+ Planning Time: 1.475 ms
+ Execution Time: 0.264 ms
+(15 rows)
+
+
+===== 2b. EMAIL leg only, q='a'
+SET
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=80.40..80.41 rows=1 width=8) (actual time=0.118..0.119 rows=1 loops=1)
+   Buffers: shared hit=17
+   ->  Index Only Scan using customer_org_email_unique on customer  (cost=0.42..80.40 rows=1 width=0) (actual time=0.117..0.117 rows=0 loops=1)
+         Index Cond: (org_id = '06a241af-1d0a-47f7-b5e4-a4713fe68c9c'::uuid)
+         Filter: ((email)::text ~~ '%a%'::text)
+         Rows Removed by Filter: 1000
+         Heap Fetches: 0
+         Buffers: shared hit=17
+ Planning:
+   Buffers: shared hit=148
+ Planning Time: 0.654 ms
+ Execution Time: 0.149 ms
+(12 rows)
+
+
+===== 3. Can the trigram GIN index EVER be chosen for this shape? (forced: bitmapscan off)
+SET
+SET
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=3633.99..3634.00 rows=1 width=8) (actual time=0.576..0.576 rows=1 loops=1)
+   Buffers: shared hit=26
+   ->  Index Scan using customer_org_idx on customer  (cost=0.29..3632.17 rows=727 width=0) (actual time=0.074..0.532 rows=735 loops=1)
+         Index Cond: (org_id = '06a241af-1d0a-47f7-b5e4-a4713fe68c9c'::uuid)
+         Filter: (name_search ~~ '%a%'::text)
+         Rows Removed by Filter: 265
+         Buffers: shared hit=26
+ Planning:
+   Buffers: shared hit=197
+ Planning Time: 3.375 ms
+ Execution Time: 0.642 ms
+(11 rows)
+
+# Still the org index, never customer_name_search_trgm_idx. Slice 3's 1706 ms pathology (GIN
+# chosen, then rechecked over the whole table) is structurally unreachable here: the org
+# filter IS the access path, so a character floor would defend nothing it does not bound.
+
+===== 4. The same predicate UNBOUNDED (no org filter) — the ceiling, and the slope
+SET
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=7931.92..7931.93 rows=1 width=8) (actual time=929.319..929.321 rows=1 loops=1)
+   Buffers: shared hit=184 read=4384
+   ->  Seq Scan on customer  (cost=0.00..7568.00 rows=145569 width=0) (actual time=3.873..921.297 rows=145262 loops=1)
+         Filter: ((name_search ~~ '%a%'::text) OR ((email)::text ~~ '%a%'::text))
+         Rows Removed by Filter: 54738
+         Buffers: shared hit=184 read=4384
+ Planning:
+   Buffers: shared hit=176
+ Planning Time: 2.810 ms
+ Execution Time: 929.380 ms
+(10 rows)
+
+
+===== 5. Cache state, measured rather than assumed (the epic's standing lesson)
+# A "before" number is a cache state, not a fact. Consecutive touches, same statement:
+#
+#   unbounded, 1 char : 929 ms (fully cold, after other probes evicted it)
+#                        94 ms (first touch)
+#                        41.4 / 42.6 / 41.0 / 42.1 ms (warm, stable)
+#   org-scoped, 1 char:  0.28 / 0.23 / 0.31 ms  — stable from the first touch, because the
+#                        whole working set is 26 pages and never leaves shared_buffers
+#
+# What reproduces exactly is the PLAN, which is the part worth writing down.
+
+====================================================================================
+SUMMARY
+
+  shape                    rows scanned   plan                                  cold -> warm
+  ---------------------------------------------------------------------------------------
+  org-scoped, 1 char       1 000          Bitmap Index Scan customer_org_idx    0.23 - 0.65 ms
+                                          -> filter  (26 buffers, all           (no cold/warm
+                                          shared hit)                            distinction)
+  org-scoped, 2/3/4 char   1 000          same                                  0.13 - 1.30 ms
+  unbounded, 1 char        200 000        Seq Scan                              929 -> 41 ms
+  unbounded, 3 char        200 000        Seq Scan                              ~42 ms warm
+
+DECISION: no minimum q length.
+
+The endpoint only ever runs the org-scoped shape, and that is 0.23-0.65 ms at 1 character
+with no cache sensitivity at all. The unbounded row is here ONLY to give the slope: cost is
+linear in the TENANT's own size, so a 20 000-customer tenant projects to ~4 ms warm and
+~90 ms on a cold cache. The cold end is the honest one to design against, and even that
+does not justify a character floor.
+
+Not copied from slice 3's 2, and not from its lesson's 3 — measured. Slice 3's 1706 ms
+pathology (pg_trgm's GIN index chosen for a <3-char LIKE, then rechecked over the whole
+table) is structurally unreachable here: see section 3 — with enable_bitmapscan forced off
+the planner STILL picks the org index, never customer_name_search_trgm_idx. The org filter
+is the access path, so a character count would defend nothing it does not already bound.
+
+NO INDEX ADDED and none declined: V62's customer_name_search_trgm_idx and V75's
+customer (email) were already present and neither is used by this shape. The planner was
+never asked for a new one, so there is no refusal to record.
