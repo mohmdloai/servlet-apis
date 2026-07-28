@@ -18,12 +18,14 @@ import com.loai.inventory.domain.model.Category;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.service.CategoryService;
 import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductListingService.ImageView;
 import com.loai.inventory.service.ProductListingService.ListingView;
 import com.loai.inventory.service.ProductListingService.PresignResult;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -86,7 +88,8 @@ class ProductListingIT {
             new ProductListingRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
             new com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl(),
-            ObjectStorageFactory.build());
+            ObjectStorageFactory.build(),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     categoryService =
         new CategoryService(
             dsl,

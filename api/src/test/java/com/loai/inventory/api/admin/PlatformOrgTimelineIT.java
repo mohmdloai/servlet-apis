@@ -21,6 +21,7 @@ import com.loai.inventory.domain.model.PlatformAuditEvent;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgTimelineRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
@@ -29,6 +30,7 @@ import com.loai.inventory.repository.generated.tables.records.AppUserRecord;
 import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.CredentialTokenService;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
@@ -160,7 +162,8 @@ class PlatformOrgTimelineIT {
             audit,
             orgStatus,
             credentialTokenService,
-            new AuthMailer(msg -> {}));
+            new AuthMailer(msg -> {}),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
 
     // Only revokeOrgRole reaches AuthService (to propagate a de-privilege logout); a mock keeps
     // this IT off the session machinery, which is covered elsewhere.

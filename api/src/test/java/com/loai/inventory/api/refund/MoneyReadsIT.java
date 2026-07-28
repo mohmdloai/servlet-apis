@@ -23,6 +23,7 @@ import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.RefundStatus;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
@@ -48,6 +49,7 @@ import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.RefundService.CreateCommand;
 import com.loai.inventory.service.RefundService.RefundPage;
 import com.loai.inventory.service.RefundService.RefundView;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -137,7 +139,8 @@ class MoneyReadsIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
             com.loai.inventory.api.support.TestWiring.notificationService(dsl),
-            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     txnService =
         new PaymentTransactionService(
             dsl,

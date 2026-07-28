@@ -12,6 +12,7 @@ import com.loai.inventory.domain.model.CategoryTranslation;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl;
@@ -21,6 +22,7 @@ import com.loai.inventory.service.CategoryService.TranslatedNameInput;
 import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductListingService.TranslatedContentInput;
 import com.loai.inventory.service.StorefrontService;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -93,7 +95,8 @@ class CategoryTranslationIT {
             new ProductListingRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
             new com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl(),
-            storage);
+            storage,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     storefront =
         new StorefrontService(
             dsl,

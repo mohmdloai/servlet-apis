@@ -15,6 +15,7 @@ import com.loai.inventory.domain.model.OrgMember;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.PlatformAuditEvent;
+import com.loai.inventory.domain.model.PlatformFunnelStage;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.domain.repository.OrgRepository;
@@ -54,6 +55,7 @@ public class PlatformOrgService {
   private final OrgStatusService orgStatus;
   private final CredentialTokenService credentialTokenService;
   private final AuthMailer authMailer;
+  private final OrgMilestoneService milestoneService;
 
   public PlatformOrgService(
       DSLContext dsl,
@@ -63,7 +65,8 @@ public class PlatformOrgService {
       PlatformAuditService audit,
       OrgStatusService orgStatus,
       CredentialTokenService credentialTokenService,
-      AuthMailer authMailer) {
+      AuthMailer authMailer,
+      OrgMilestoneService milestoneService) {
     this.dsl = dsl;
     this.orgRepoFactory = orgRepoFactory;
     this.userRepoFactory = userRepoFactory;
@@ -72,6 +75,7 @@ public class PlatformOrgService {
     this.orgStatus = orgStatus;
     this.credentialTokenService = credentialTokenService;
     this.authMailer = authMailer;
+    this.milestoneService = milestoneService;
   }
 
   /** One org plus its distinct member count, for the list view. */
@@ -203,6 +207,11 @@ public class PlatformOrgService {
               org.setActive(true);
               Org saved = orgRepo.insert(org);
               userRepo.insertOrgRole(owner.getId(), saved.getId(), OrgRole.OWNER);
+              // REGISTERED + ACTIVATED, same instant — a provisioned org is born active
+              // (org.setActive(true) just above), so it never passes through a separate
+              // verification step the way self-serve registration does.
+              milestoneService.reach(tx, saved.getId(), PlatformFunnelStage.REGISTERED, now);
+              milestoneService.reach(tx, saved.getId(), PlatformFunnelStage.ACTIVATED, now);
 
               if (minted) {
                 // The org this owner was minted FOR. Its target is the user, but it is an event in

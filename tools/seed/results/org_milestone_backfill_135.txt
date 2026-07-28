@@ -1,0 +1,91 @@
+V77 org_milestone — backfill cost, counted residual, and funnel-read EXPLAIN
+Branch 135_feat/platform-tenant-funnel, story stories/platform_tenant_funnel.md.
+Postgres 17, shared_buffers 128 MB (docker-compose default), single Postgres cluster on one volume.
+
+================================================================================
+1. BACKFILL COST — perfdb (200 orgs / 145,615 product_listing / 1,000,000 sales_order /
+   840,117 payment; the 183 MB-class tables slice 3 measured against 128 MB shared_buffers).
+
+   Method: perfdb is never migrated (CLAUDE.md, tools/seed/README.md). Ran the whole V77 backfill
+   inside `BEGIN; ... ROLLBACK;` — CREATE TABLE org_milestone, all six INSERT..SELECT statements,
+   timed individually with \timing, EXPLAIN of the funnel read before/after a candidate index, then
+   ROLLBACK. perfdb is unchanged; nothing here was committed.
+
+   REGISTERED        11.6 ms   (200 rows written, SELECT id, created_at FROM org)
+   CATALOGUED       898.6 ms   (200 rows, MIN(created_at) GROUP BY org_id over 145,615)
+   PUBLISHED         22.3 ms   (200 rows, MIN(published_at) — served by product_listing_published_idx)
+   FIRST_ORDER    3 014.0 ms   (200 rows, MIN(COALESCE(placed_at,created_at)) GROUP BY org_id over
+                                1,000,000 — the dominant cost; no index covers this aggregate, full
+                                scan of sales_order)
+   FIRST_PAYMENT  1 007.9 ms   (200 rows, MIN(received_at) GROUP BY org_id over 840,117)
+   ------------------------------------------------------------------------------
+   Total (five statements, excl. ACTIVATED): ~4.95 s, single cold pass against an empty
+   org_milestone at the start of the transaction.
+
+   ACTIVATED could NOT be measured on perfdb — see §2.
+
+2. ACTIVATED — perfdb structurally cannot host this measurement.
+   platform_audit.org_id is a V76 column; perfdb is pinned at V72 (pre-V75/V76), so the column the
+   ACTIVATED backfill joins on does not exist there at all — a stronger version of the "platform_audit
+   is empty" finding V76 already made (this time the schema itself is behind, not just the data).
+
+   Built a scratch database instead (CREATE DATABASE funnel_scratch_v77; ... DROP DATABASE — never
+   perfdb or inventorydb), sized to match V76's own scratch: 200 orgs, 100 "provisioned" (one
+   ORG_CREATE platform_audit row each) and 100 "self-serve" (owner's app_user.email_verified_at set,
+   no ORG_CREATE row), plus 50,000 unrelated platform_audit rows (SESSION_REVOKE/PASSWORD_RESET/etc,
+   scattered org_id) so the table is not a single-page toy. ix_platform_audit_org (org_id,
+   created_at DESC) present, matching V76.
+
+   ACTIVATED (provisioned leg)   4.2 ms  (100 rows, EXISTS platform_audit WHERE org_id=? AND
+                                          action='ORG_CREATE')
+   ACTIVATED (self-serve leg)    6.8 ms  (100 rows, JOIN LATERAL MIN(email_verified_at) over OWNER
+                                          role rows, NOT EXISTS the same probe)
+
+3. COUNTED RESIDUAL — the slice-4 discipline: orgs with a product_listing or a sales_order but no
+   recoverable PUBLISHED stamp after the backfill ran, measured on perfdb (still inside the same
+   rolled-back transaction):
+
+   0 of 200 orgs.
+
+   perfdb's seed corpus never unpublishes a listing once created, so every org with a catalogue still
+   carries at least one currently-published row — this is a property of the seed generator, not proof
+   the gap is empty anywhere else. A merchant that unpublishes everything is exactly finding 1's case
+   (ProductListingService:415), and the true count on the dev/prod database is only known once this
+   migration actually runs there. Zero on this dataset does not change the design: PUBLISHED stays
+   lossy by construction, and no timestamp is synthesised for whatever a real database's residual
+   turns out to be — those rows stay unstamped, permanently, by design.
+
+   (On the dev inventorydb — 3 orgs, 0 product_listing/sales_order/payment rows — the residual is
+   trivially 0 for the same reason: there is nothing to be lossy about yet.)
+
+4. FUNNEL READ — EXPLAIN (ANALYZE, BUFFERS), perfdb, warm-twice per shape, before and after the
+   candidate ix_org_milestone_stage_time (milestone, reached_at) named in the story's schema.
+
+   Before the index (Seq Scan org_milestone, cost 16.00, ~1000 rows at real scale):
+     cohort=all,  path=all   : cost 53.79..60.29   exec 0.85-1.06 ms (2 runs)
+     cohort=30d,  path=all   : cost 55.29..61.79   exec 1.19 ms
+
+   After CREATE INDEX ix_org_milestone_stage_time (48 kB index on a 72 kB heap):
+     cohort=all,  path=all   : cost 80.01..89.51   exec 0.80-0.85 ms (2 runs, 1st touch + warm)
+     cohort=30d,  path=all   : cost 81.51..91.01   exec 0.81 ms
+
+   The planner chose Seq Scan + Hash Join in every case, before AND after the index existed — its own
+   cost estimate for the index path (80-91) was higher than the Seq Scan path (54-62), and it was
+   right: org_milestone is capped at 6 rows per org by construction (one row per stage, ever), so even
+   at perfdb's 1,000,000-order scale it holds ~1000 rows. No org count this product plausibly reaches
+   makes a table shaped that way worth an index over a full scan.
+
+   DECISION: index dropped from V77. The PRIMARY KEY (org_id, milestone) already covers the only join
+   this table serves (org_milestone.org_id = org.id). Per V73's rule ("only a plan can refuse an
+   index") — skipping it is the result, not an oversight.
+
+   path=self_serve / path=provisioned cohort reads (scratch DB, 50,100 platform_audit rows, same
+   dataset as §2): 2.3-2.7 ms warm, Seq Scan on platform_audit — an all-orgs "does any ORG_CREATE row
+   exist for this org" check has no equality predicate on a single org_id, so ix_platform_audit_org
+   (built for V76's per-tenant timeline, which filters org_id = one value) does not apply to this
+   access pattern. Not a regression; a different query shape than the one that index serves.
+
+================================================================================
+Both perfdb and the dev inventorydb are intact. perfdb was never migrated (all measurement here ran
+inside rolled-back transactions or a dropped scratch database); the dev inventorydb has V77 applied
+cleanly with jOOQ regenerated.

@@ -10,6 +10,7 @@ import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
 import com.loai.inventory.domain.model.PaymentTransaction;
+import com.loai.inventory.domain.model.PlatformFunnelStage;
 import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.repository.PaymentRepository;
@@ -20,6 +21,7 @@ import com.loai.inventory.domain.repository.RefundRepository;
 import com.loai.inventory.domain.repository.RefundRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -72,6 +74,7 @@ public final class PaymentService {
   private final RefundRepositoryFactory refundRepoFactory;
   private final NotificationService notificationService;
   private final MagicLinkService magicLinkService;
+  private final OrgMilestoneService milestoneService;
 
   public PaymentService(
       DSLContext rootDsl,
@@ -80,7 +83,8 @@ public final class PaymentService {
       PaymentTransactionRepositoryFactory txnRepoFactory,
       RefundRepositoryFactory refundRepoFactory,
       NotificationService notificationService,
-      MagicLinkService magicLinkService) {
+      MagicLinkService magicLinkService,
+      OrgMilestoneService milestoneService) {
     this.rootDsl = rootDsl;
     this.paymentRepoFactory = paymentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
@@ -88,6 +92,7 @@ public final class PaymentService {
     this.refundRepoFactory = refundRepoFactory;
     this.notificationService = notificationService;
     this.magicLinkService = magicLinkService;
+    this.milestoneService = milestoneService;
   }
 
   /** Target order for a transaction; at most one of the two fields is populated. */
@@ -255,6 +260,9 @@ public final class PaymentService {
             txn.getCurrency(),
             now);
     paymentRepoFactory.create(txDsl).insert(payment);
+    // FIRST_PAYMENT — any reconciliation outcome (MATCHED, OVERPAID, UNDERPAID) is money that
+    // arrived; the backfill's MIN(payment.received_at) makes no distinction either.
+    milestoneService.reach(txDsl, orgId, PlatformFunnelStage.FIRST_PAYMENT, now);
     return payment;
   }
 
@@ -343,6 +351,9 @@ public final class PaymentService {
             order.getCurrency(),
             now);
     paymentRepoFactory.create(txDsl).insert(payment);
+    // FIRST_PAYMENT — same rule as the online path (createPrepayment): the Payment row existing is
+    // the signal, not the order's resulting status.
+    milestoneService.reach(txDsl, orgId, PlatformFunnelStage.FIRST_PAYMENT, now);
 
     log.info(
         "Recorded in-store payment {} ({}) for order {} amount={}",

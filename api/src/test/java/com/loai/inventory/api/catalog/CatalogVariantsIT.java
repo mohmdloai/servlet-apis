@@ -26,6 +26,7 @@ import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryFactoryImpl;
@@ -42,6 +43,7 @@ import com.loai.inventory.service.ProductVariantService.VariantInput;
 import com.loai.inventory.service.ProductVariantService.VariantRow;
 import com.loai.inventory.service.ProductVariantService.VariantSetView;
 import com.loai.inventory.service.StorefrontService;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -128,7 +130,8 @@ class CatalogVariantsIT {
             new ProductListingRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
             new ProductVariantRepositoryFactoryImpl(),
-            storage);
+            storage,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     products =
         new ProductService(
             new ProductRepositoryImpl(dsl), new ProductVariantRepositoryFactoryImpl(), dsl);

@@ -14,6 +14,7 @@ import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
 import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.model.PlatformFunnelStage;
 import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
@@ -24,6 +25,7 @@ import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.service.email.EmailAddresses;
 import com.loai.inventory.service.email.EmailGate;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -71,6 +73,7 @@ public class SalesOrderService {
   private final MagicLinkService magicLinkService;
   private final EmailGate emailGate;
   private final CouponService couponService;
+  private final OrgMilestoneService milestoneService;
 
   public SalesOrderService(
       DSLContext rootDsl,
@@ -84,7 +87,8 @@ public class SalesOrderService {
       NotificationService notificationService,
       MagicLinkService magicLinkService,
       EmailGate emailGate,
-      CouponService couponService) {
+      CouponService couponService,
+      OrgMilestoneService milestoneService) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.orgRepoFactory = orgRepoFactory;
@@ -97,6 +101,7 @@ public class SalesOrderService {
     this.magicLinkService = magicLinkService;
     this.emailGate = emailGate;
     this.couponService = couponService;
+    this.milestoneService = milestoneService;
   }
 
   /** Input contact info; {@code name} required, others optional. */
@@ -355,6 +360,9 @@ public class SalesOrderService {
     OffsetDateTime expiresAt = now.plus(Duration.ofMinutes(org.getOrderTtlMinutes()));
     order.markPendingPayment(now, expiresAt);
     repo.insert(order, orderLines);
+    // FIRST_ORDER — the order row exists now, in this txn (online + storefront placement share
+    // this method). A rolled-back placement (e.g. the shortage check below) leaves no stamp.
+    milestoneService.reach(txDsl, orgId, PlatformFunnelStage.FIRST_ORDER, now);
 
     // Throws InsufficientStockException → rolls back the whole placement.
     reservationService.reserveForOrder(txDsl, orgId, order, orderLines, actor);
@@ -485,6 +493,9 @@ public class SalesOrderService {
           SalesOrder order = built.order();
           List<SalesOrderLine> orderLines = built.lines();
           repo.insert(order, orderLines);
+          // FIRST_ORDER — same helper, same rule as online/storefront placement: the row exists
+          // now, in this txn, so a rolled-back sale (bad tender, out of stock) leaves no stamp.
+          milestoneService.reach(txDsl, orgId, PlatformFunnelStage.FIRST_ORDER, now);
 
           // Tender rules: overpaid is accepted (the customer hands a round amount, the excess is
           // returned as counter change — payment.md §Overpaid (in-store)); underpaid is rejected —

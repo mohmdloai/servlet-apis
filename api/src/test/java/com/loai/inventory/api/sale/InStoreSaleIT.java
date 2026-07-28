@@ -25,6 +25,7 @@ import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
@@ -42,6 +43,7 @@ import com.loai.inventory.service.SalesOrderService.CustomerInput;
 import com.loai.inventory.service.SalesOrderService.InStoreSale;
 import com.loai.inventory.service.SalesOrderService.OrderLineInput;
 import com.loai.inventory.service.SalesOrderService.PaymentInput;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -146,7 +148,8 @@ class InStoreSaleIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
             com.loai.inventory.api.support.TestWiring.notificationService(dsl),
-            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     com.loai.inventory.service.MagicLinkService magicLink =
         new com.loai.inventory.service.MagicLinkService(
             dsl,
@@ -176,7 +179,8 @@ class InStoreSaleIT {
             magicLink,
             com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
             new com.loai.inventory.service.CouponService(
-                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()));
+                dsl, new com.loai.inventory.repository.CouponRepositoryFactoryImpl()),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
   }
 
   @AfterAll

@@ -11,6 +11,7 @@ import com.loai.inventory.domain.model.AppUser;
 import com.loai.inventory.domain.model.AppUserTokenPurpose;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.PlatformFunnelStage;
 import com.loai.inventory.domain.repository.OrgRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
@@ -19,6 +20,7 @@ import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.auth.AuthService.LoginResult;
 import com.loai.inventory.service.email.EmailAddresses;
 import com.loai.inventory.service.email.EmailGate;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
@@ -55,6 +57,7 @@ public class AccountService {
   private final AuthService authService;
   private final EmailGate emailGate;
   private final OrgStatusService orgStatusService;
+  private final OrgMilestoneService milestoneService;
 
   public AccountService(
       DSLContext rootDsl,
@@ -64,7 +67,8 @@ public class AccountService {
       AuthMailer mailer,
       AuthService authService,
       EmailGate emailGate,
-      OrgStatusService orgStatusService) {
+      OrgStatusService orgStatusService,
+      OrgMilestoneService milestoneService) {
     this.rootDsl = rootDsl;
     this.userRepoFactory = userRepoFactory;
     this.orgRepoFactory = orgRepoFactory;
@@ -73,6 +77,7 @@ public class AccountService {
     this.authService = authService;
     this.emailGate = emailGate;
     this.orgStatusService = orgStatusService;
+    this.milestoneService = milestoneService;
   }
 
   /**
@@ -134,6 +139,9 @@ public class AccountService {
                 org.setActive(false);
                 Org saved = orgRepo.insert(org);
                 userRepo.insertOrgRole(user.getId(), saved.getId(), OrgRole.OWNER);
+                // REGISTERED — the org row exists now, in this txn; a rolled-back registration
+                // leaves no stamp, matching the org itself.
+                milestoneService.reach(tx, saved.getId(), PlatformFunnelStage.REGISTERED, now);
               }
               // Minted inside the txn — a rolled-back registration leaves no orphan token.
               String rawToken =
@@ -179,6 +187,11 @@ public class AccountService {
               // same click — but never an admin-suspended one (suspended_at guard in the repo).
               List<UUID> activatedOrgIds =
                   orgRepoFactory.create(tx).activateRegistrationPendingOrgs(userId);
+              // ACTIVATED — self-serve: the owner's verification click is the activation event.
+              // Same txn as the org flip, so a rolled-back verification leaves no stamp either.
+              for (UUID activatedOrgId : activatedOrgIds) {
+                milestoneService.reach(tx, activatedOrgId, PlatformFunnelStage.ACTIVATED, now);
+              }
               return new Verified(found, activatedOrgIds);
             });
     // Post-commit: drop the load-through org-status mirror entries so enforcement and the public

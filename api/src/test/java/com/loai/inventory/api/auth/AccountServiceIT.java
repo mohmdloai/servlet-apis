@@ -16,6 +16,7 @@ import com.loai.inventory.domain.model.AppUser;
 import com.loai.inventory.domain.model.AppUserTokenPurpose;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
@@ -26,6 +27,7 @@ import com.loai.inventory.service.auth.CredentialTokenService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.loai.inventory.service.email.EmailMessage;
 import com.loai.inventory.service.email.EmailSender;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.time.Duration;
@@ -126,7 +128,8 @@ class AccountServiceIT {
             authService,
             com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
             new com.loai.inventory.service.platform.OrgStatusService(
-                jedisPool, dsl, new OrgRepositoryFactoryImpl()));
+                jedisPool, dsl, new OrgRepositoryFactoryImpl()),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
   }
 
   @AfterAll

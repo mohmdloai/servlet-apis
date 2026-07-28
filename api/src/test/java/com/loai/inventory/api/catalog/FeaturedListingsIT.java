@@ -23,12 +23,14 @@ import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.repository.ProductListingRepository;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductListingService.ListingView;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.StorefrontService.ListingPage;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import jakarta.servlet.ServletOutputStream;
@@ -108,7 +110,8 @@ class FeaturedListingsIT {
             new ProductListingRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
             new com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl(),
-            storage);
+            storage,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     storefront =
         new StorefrontService(
             dsl,

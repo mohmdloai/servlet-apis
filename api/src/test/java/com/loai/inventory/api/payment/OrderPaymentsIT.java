@@ -22,6 +22,7 @@ import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
@@ -41,6 +42,7 @@ import com.loai.inventory.service.PaymentTransactionService.VerifyCommand;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
 import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReservationService;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -117,7 +119,8 @@ class OrderPaymentsIT {
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
             com.loai.inventory.api.support.TestWiring.notificationService(dsl),
-            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     refundService =
         new RefundService(
             dsl,

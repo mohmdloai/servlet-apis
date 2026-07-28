@@ -30,12 +30,14 @@ import com.loai.inventory.domain.repository.NotificationPreferenceRepositoryFact
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.NumberSequenceReconciliationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
+import com.loai.inventory.domain.repository.OrgMilestoneRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgTimelineRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.PlatformAuditRepositoryFactory;
+import com.loai.inventory.domain.repository.PlatformFunnelRepositoryFactory;
 import com.loai.inventory.domain.repository.PlatformQueueRepositoryFactory;
 import com.loai.inventory.domain.repository.PlatformSearchRepositoryFactory;
 import com.loai.inventory.domain.repository.PlatformStatsRepositoryFactory;
@@ -72,12 +74,14 @@ import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
 import com.loai.inventory.repository.NumberSequenceReconciliationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgTimelineRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
+import com.loai.inventory.repository.PlatformFunnelRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformQueueRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformSearchRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformStatsRepositoryFactoryImpl;
@@ -144,8 +148,10 @@ import com.loai.inventory.service.email.DnsJavaMxResolver;
 import com.loai.inventory.service.email.EmailGate;
 import com.loai.inventory.service.email.EmailSender;
 import com.loai.inventory.service.email.EmailSenderFactory;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
+import com.loai.inventory.service.platform.PlatformFunnelService;
 import com.loai.inventory.service.platform.PlatformOrgService;
 import com.loai.inventory.service.platform.PlatformOrgTimelineService;
 import com.loai.inventory.service.platform.PlatformOverviewService;
@@ -249,6 +255,8 @@ public class AppConfig {
   public final PlatformStatsRepositoryFactory platformStatsRepositoryFactory;
   public final PlatformQueueRepositoryFactory platformQueueRepositoryFactory;
   public final PlatformSearchRepositoryFactory platformSearchRepositoryFactory;
+  public final OrgMilestoneRepositoryFactory orgMilestoneRepositoryFactory;
+  public final PlatformFunnelRepositoryFactory platformFunnelRepositoryFactory;
   public final SalesOrderRepositoryFactory salesOrderRepositoryFactory;
   public final InventoryReservationRepositoryFactory inventoryReservationRepositoryFactory;
   public final PaymentTransactionRepositoryFactory paymentTransactionRepositoryFactory;
@@ -279,6 +287,8 @@ public class AppConfig {
   public final PlatformOverviewService platformOverviewService;
   public final PlatformQueueService platformQueueService;
   public final PlatformSearchService platformSearchService;
+  public final OrgMilestoneService orgMilestoneService;
+  public final PlatformFunnelService platformFunnelService;
   public final UserAdminService userAdminService;
   public final ProductService productService;
   public final CategoryService categoryService;
@@ -390,6 +400,8 @@ public class AppConfig {
     this.platformStatsRepositoryFactory = new PlatformStatsRepositoryFactoryImpl();
     this.platformQueueRepositoryFactory = new PlatformQueueRepositoryFactoryImpl();
     this.platformSearchRepositoryFactory = new PlatformSearchRepositoryFactoryImpl();
+    this.orgMilestoneRepositoryFactory = new OrgMilestoneRepositoryFactoryImpl();
+    this.platformFunnelRepositoryFactory = new PlatformFunnelRepositoryFactoryImpl();
     this.salesOrderRepositoryFactory = new SalesOrderRepositoryFactoryImpl();
     this.inventoryReservationRepositoryFactory = new InventoryReservationRepositoryFactoryImpl();
     this.paymentTransactionRepositoryFactory = new PaymentTransactionRepositoryFactoryImpl();
@@ -402,6 +414,10 @@ public class AppConfig {
     this.refundAllocationRepositoryFactory = new RefundAllocationRepositoryFactoryImpl();
     this.numberSequenceReconciliationRepositoryFactory =
         new NumberSequenceReconciliationRepositoryFactoryImpl();
+    // Ahead of accountService/platformOrgService/productListingService/salesOrderService below —
+    // all five milestone-writing services take this as a required collaborator (slice 7,
+    // stories/platform_tenant_funnel.md — never best-effort, so it is not optional).
+    this.orgMilestoneService = new OrgMilestoneService(orgMilestoneRepositoryFactory);
 
     long impersonationTtl =
         parseLong(System.getenv("IMPERSONATION_TTL_MILLIS"), DEFAULT_IMPERSONATION_TTL_MILLIS);
@@ -461,7 +477,8 @@ public class AppConfig {
             authMailer,
             authService,
             emailGate,
-            orgStatusService);
+            orgStatusService,
+            orgMilestoneService);
     this.orgService =
         new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory, objectStorage);
     this.orgHealthService = new OrgHealthService(orgHealthRepository);
@@ -477,7 +494,8 @@ public class AppConfig {
             platformAuditService,
             orgStatusService,
             credentialTokenService,
-            authMailer);
+            authMailer,
+            orgMilestoneService);
     this.platformOrgTimelineService =
         new PlatformOrgTimelineService(dsl, orgTimelineRepositoryFactory, orgRepositoryFactory);
     this.userAdminService =
@@ -541,7 +559,8 @@ public class AppConfig {
             productListingRepositoryFactory,
             orgRepositoryFactory,
             productVariantRepositoryFactory,
-            objectStorage);
+            objectStorage,
+            orgMilestoneService);
     // After productListingService — the curation read reuses its enrichment (thumbnails, status
     // badges) so a collection row renders exactly like a featured one.
     // Before salesOrderService — the placement resolves a coupon inside its own transaction.
@@ -601,7 +620,8 @@ public class AppConfig {
             paymentTransactionRepositoryFactory,
             refundRepositoryFactory,
             notificationService,
-            magicLinkService);
+            magicLinkService,
+            orgMilestoneService);
     this.paymentDisputeService =
         new PaymentDisputeService(
             dsl,
@@ -673,7 +693,8 @@ public class AppConfig {
             notificationService,
             magicLinkService,
             emailGate,
-            couponService);
+            couponService,
+            orgMilestoneService);
     this.storefrontService =
         new StorefrontService(
             dsl,
@@ -791,6 +812,11 @@ public class AppConfig {
     // repository's per-kind row whitelist is what makes it reviewable, and search results are a
     // different whitelist — see PlatformSearchRepository's Javadoc.
     this.platformSearchService = new PlatformSearchService(dsl, platformSearchRepositoryFactory);
+    // The tenant lifecycle funnel (slice 7) — a fourth sibling of platformStatsRepositoryFactory,
+    // platformQueueRepositoryFactory and platformSearchRepositoryFactory; see
+    // PlatformFunnelRepository's Javadoc for why it is a new sibling rather than a method on one of
+    // the three above.
+    this.platformFunnelService = new PlatformFunnelService(dsl, platformFunnelRepositoryFactory);
 
     log.info("Application context ready.");
   }

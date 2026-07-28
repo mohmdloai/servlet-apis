@@ -22,6 +22,7 @@ import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
 import com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryFactoryImpl;
@@ -40,6 +41,7 @@ import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.StorefrontService.FacetGroup;
 import com.loai.inventory.service.StorefrontService.FacetValue;
 import com.loai.inventory.service.StorefrontService.ListingPage;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
@@ -137,7 +139,8 @@ class AttributeFacetsIT {
             new ProductListingRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
             new ProductVariantRepositoryFactoryImpl(),
-            storage);
+            storage,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     categories =
         new CategoryService(
             dsl, new CategoryRepositoryFactoryImpl(), new OrgRepositoryFactoryImpl());

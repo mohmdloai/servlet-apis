@@ -8,6 +8,7 @@ import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.PlatformFunnelStage;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
 import com.loai.inventory.domain.model.ProductListingTranslation;
@@ -16,6 +17,7 @@ import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepository;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductVariantRepositoryFactory;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -49,18 +51,21 @@ public class ProductListingService {
   private final OrgRepositoryFactory orgRepoFactory;
   private final ProductVariantRepositoryFactory variantRepoFactory;
   private final ObjectStorage storage;
+  private final OrgMilestoneService milestoneService;
 
   public ProductListingService(
       DSLContext rootDsl,
       ProductListingRepositoryFactory repoFactory,
       OrgRepositoryFactory orgRepoFactory,
       ProductVariantRepositoryFactory variantRepoFactory,
-      ObjectStorage storage) {
+      ObjectStorage storage,
+      OrgMilestoneService milestoneService) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.orgRepoFactory = orgRepoFactory;
     this.variantRepoFactory = variantRepoFactory;
     this.storage = storage;
+    this.milestoneService = milestoneService;
   }
 
   /** A presigned image with a display-ready URL (object keys are never exposed to clients). */
@@ -314,6 +319,9 @@ public class ProductListingService {
 
           ProductListing saved = repo.insert(listing);
           repo.replaceTranslations(saved.getId(), translations);
+          // CATALOGUED — first listing ever created for the org, at any status.
+          milestoneService.reach(
+              txDsl, orgId, PlatformFunnelStage.CATALOGUED, OffsetDateTime.now());
           // The insert RETURNING no longer carries a title/marketing_copy column (dropped at L6);
           // surface the default-locale copy on the returned object for the response scalar.
           saved.setTitle(defaultRow.title());
@@ -388,17 +396,36 @@ public class ProductListingService {
 
   // --- lifecycle ---
 
+  /**
+   * DRAFT → PUBLISHED. Also stamps {@link PlatformFunnelStage#PUBLISHED} — inline rather than
+   * through {@link #transition} (shared with {@link #unpublish}/{@link #archive}, neither of which
+   * should stamp anything) so the milestone write sits directly beside the one status change that
+   * earns it, in the same transaction.
+   */
   public ProductListing publish(UUID orgId, UUID id) {
-    return transition(
-        orgId,
-        id,
-        listing -> {
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          ProductListingRepository repo = repoFactory.create(txDsl);
+          ProductListing listing =
+              repo.findById(orgId, id)
+                  .orElseThrow(() -> new NotFoundException("ProductListing", id));
           if (listing.getStatus() != ListingStatus.DRAFT) {
             throw new ConflictException(
                 "Only a DRAFT listing can be published (was " + listing.getStatus() + ")");
           }
+          OffsetDateTime now = OffsetDateTime.now();
           listing.setStatus(ListingStatus.PUBLISHED);
-          listing.setPublishedAt(OffsetDateTime.now());
+          listing.setPublishedAt(now);
+          ProductListing updated = repo.updateStatus(listing);
+          updated.setTitle(listing.getTitle());
+          updated.setMarketingCopy(listing.getMarketingCopy());
+          // PUBLISHED — first publish only, by the (org_id, milestone) PRIMARY KEY: a later
+          // unpublish→republish cycle calls this again and the second stamp is a no-op, which is
+          // the whole point (finding 1, stories/platform_tenant_funnel.md).
+          milestoneService.reach(txDsl, orgId, PlatformFunnelStage.PUBLISHED, now);
+          log.info("Listing id={} orgId={} → {}", id, orgId, updated.getStatus());
+          return updated;
         });
   }
 

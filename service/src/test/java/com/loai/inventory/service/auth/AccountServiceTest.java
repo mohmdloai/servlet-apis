@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 class AccountServiceTest {
 
   private static AccountService serviceWith(EmailGate gate) {
-    return new AccountService(null, null, null, null, null, null, gate, null);
+    return new AccountService(null, null, null, null, null, null, gate, null, null);
   }
 
   @Test

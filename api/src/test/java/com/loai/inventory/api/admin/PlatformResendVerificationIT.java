@@ -25,6 +25,7 @@ import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgTimelineRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
@@ -38,6 +39,7 @@ import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.loai.inventory.service.email.EmailException;
 import com.loai.inventory.service.email.EmailMessage;
 import com.loai.inventory.service.email.EmailSender;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
@@ -212,7 +214,8 @@ class PlatformResendVerificationIT {
             authMailer,
             authService,
             com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
-            orgStatus);
+            orgStatus,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
 
     userAdminService =
         new UserAdminService(
@@ -233,7 +236,8 @@ class PlatformResendVerificationIT {
             audit,
             orgStatus,
             credentialTokenService,
-            authMailer);
+            authMailer,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
 
     userHandler = new UserAdminHandler(userAdminService, authService, audit, mapper);
     orgHandler =

@@ -20,6 +20,7 @@ import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
+import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformStatsRepositoryFactoryImpl;
@@ -30,6 +31,7 @@ import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.AuthService;
 import com.loai.inventory.service.auth.CredentialTokenService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
+import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.PlatformOrgService;
@@ -147,7 +149,8 @@ class PlatformTenantStatesIT {
             new PlatformAuditService(dsl, new PlatformAuditRepositoryFactoryImpl()),
             orgStatus,
             credentialTokenService,
-            new AuthMailer(msg -> {}));
+            new AuthMailer(msg -> {}),
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
 
     AuthService authService =
         new AuthService(
@@ -165,7 +168,8 @@ class PlatformTenantStatesIT {
             new AuthMailer(msg -> {}),
             authService,
             com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),
-            orgStatus);
+            orgStatus,
+            new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
 
     orgHandler =
         new OrgAdminHandler(
