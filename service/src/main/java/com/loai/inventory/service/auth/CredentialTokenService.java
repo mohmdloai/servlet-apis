@@ -106,6 +106,16 @@ public class CredentialTokenService {
     tokenRepoFactory.create(rootDsl).invalidateActive(userId, purpose, now);
   }
 
+  /**
+   * When a token of {@code purpose} minted at {@code now} stops redeeming — the same arithmetic
+   * {@link #mint} stamps on the row, exposed so a caller that must report the expiry to a client
+   * reads it from here instead of re-deriving it from the TTL config. Two statements of one rule is
+   * how a response starts naming an expiry the row does not have.
+   */
+  public OffsetDateTime expiresAt(AppUserTokenPurpose purpose, OffsetDateTime now) {
+    return now.plus(ttlFor(purpose));
+  }
+
   private Duration ttlFor(AppUserTokenPurpose purpose) {
     return switch (purpose) {
       case INVITE -> inviteTtl;

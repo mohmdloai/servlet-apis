@@ -253,6 +253,7 @@ public final class UserRepositoryImpl implements UserRepository {
             APP_USER.DISPLAY_NAME,
             APP_USER.ACTIVE,
             APP_USER.CREATED_AT,
+            APP_USER.EMAIL_VERIFIED_AT,
             USER_ORG_ROLE.ROLE)
         .from(USER_ORG_ROLE)
         .join(APP_USER)
@@ -270,7 +271,8 @@ public final class UserRepositoryImpl implements UserRepository {
                                 r.get(APP_USER.EMAIL),
                                 r.get(APP_USER.DISPLAY_NAME),
                                 r.get(APP_USER.ACTIVE),
-                                r.get(APP_USER.CREATED_AT)))
+                                r.get(APP_USER.CREATED_AT),
+                                r.get(APP_USER.EMAIL_VERIFIED_AT)))
                     .roles
                     .add(OrgRole.valueOf(r.get(USER_ORG_ROLE.ROLE).getLiteral())));
     return byUser.entrySet().stream()
@@ -282,7 +284,8 @@ public final class UserRepositoryImpl implements UserRepository {
                     e.getValue().displayName,
                     e.getValue().roles,
                     e.getValue().active,
-                    e.getValue().createdAt))
+                    e.getValue().createdAt,
+                    e.getValue().emailVerifiedAt))
         .toList();
   }
 
@@ -291,14 +294,20 @@ public final class UserRepositoryImpl implements UserRepository {
     final String displayName;
     final boolean active;
     final OffsetDateTime createdAt;
+    final OffsetDateTime emailVerifiedAt;
     final Set<OrgRole> roles = new LinkedHashSet<>();
 
     OrgMemberAccumulator(
-        String email, String displayName, boolean active, OffsetDateTime createdAt) {
+        String email,
+        String displayName,
+        boolean active,
+        OffsetDateTime createdAt,
+        OffsetDateTime emailVerifiedAt) {
       this.email = email;
       this.displayName = displayName;
       this.active = active;
       this.createdAt = createdAt;
+      this.emailVerifiedAt = emailVerifiedAt;
     }
   }
 

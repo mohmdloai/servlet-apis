@@ -6,6 +6,10 @@ package com.loai.inventory.service.email;
  * need not declare it.
  */
 public class EmailException extends RuntimeException {
+  public EmailException(String message) {
+    super(message);
+  }
+
   public EmailException(String message, Throwable cause) {
     super(message, cause);
   }

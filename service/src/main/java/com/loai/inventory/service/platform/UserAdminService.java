@@ -2,13 +2,17 @@ package com.loai.inventory.service.platform;
 
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.common.exception.UpstreamFailureException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.security.PasswordHasher;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.AppUser;
+import com.loai.inventory.domain.model.AppUserTokenPurpose;
 import com.loai.inventory.domain.model.Environment;
+import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.PlatformAuditEvent;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
@@ -17,7 +21,11 @@ import com.loai.inventory.domain.repository.OrgRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
+import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.AuthService;
+import com.loai.inventory.service.auth.CredentialTokenService;
+import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -56,18 +64,24 @@ public class UserAdminService {
   private final OrgRepositoryFactory orgRepoFactory;
   private final AuthService authService;
   private final PlatformAuditService audit;
+  private final CredentialTokenService credentialTokenService;
+  private final AuthMailer authMailer;
 
   public UserAdminService(
       DSLContext dsl,
       UserRepositoryFactory userRepoFactory,
       OrgRepositoryFactory orgRepoFactory,
       AuthService authService,
-      PlatformAuditService audit) {
+      PlatformAuditService audit,
+      CredentialTokenService credentialTokenService,
+      AuthMailer authMailer) {
     this.dsl = dsl;
     this.userRepoFactory = userRepoFactory;
     this.orgRepoFactory = orgRepoFactory;
     this.authService = authService;
     this.audit = audit;
+    this.credentialTokenService = credentialTokenService;
+    this.authMailer = authMailer;
   }
 
   public record UserPage(List<AppUser> users, long total, int page, int size) {}
@@ -254,10 +268,48 @@ public class UserAdminService {
     }
   }
 
+  /**
+   * Grant {@code role} in {@code orgId} — refused with a <b>409</b> when that org is {@link
+   * OrgStatus#PENDING}.
+   *
+   * <p><b>The refusal exists because this endpoint can permanently brick a tenant, while trying to
+   * help it.</b> {@code OrgRepository.activateRegistrationPendingOrgs} — the UPDATE that {@code
+   * AccountService.verifyEmail} runs, and the <em>only</em> thing that takes a self-serve org live
+   * — carries {@code AND NOT EXISTS (any user_org_role row for this org with user_id <> ownerId)}.
+   * Add a second <em>person</em> to a PENDING org and that UPDATE matches zero rows forever: the
+   * owner clicks their link, {@code email_verified_at} is stamped, and the tenant stays PENDING
+   * with no path out. Reactivate is refused on a pending org (correctly — it clears a suspension
+   * that was never applied), and {@code unverified-account-purge} never touches a multi-member org,
+   * so the bricked tenant is permanent by two independent rules. This endpoint is the only
+   * reachable way in, because the org-plane roster write requires OWNER and this org's owner is
+   * login-blocked until they verify — so the plausible path is an ADMIN adding a colleague <em>to
+   * help a stuck signup</em>.
+   *
+   * <p><b>The guard is deliberately wider than the brick.</b> The {@code NOT EXISTS} excludes rows
+   * whose {@code user_id} is the owner's, so granting a second role to the <em>same</em> owner does
+   * not actually brick anything. Refusing it anyway costs nothing and is independently right: a
+   * member of a PENDING org cannot use it regardless, because {@code requireOrgAccess} 403s them.
+   * Narrowing this to "only when the grantee is someone else" would buy an edge case nobody wants
+   * and make the rule harder to state than the invariant it protects.
+   *
+   * <p>SUSPENDED orgs still accept grants — staffing a suspended tenant ahead of reactivation is
+   * legitimate and nothing about it is unrecoverable. The check reads {@link OrgStatus}, never a
+   * re-derived boolean; that boolean <em>was</em> the ambiguity slice 1.5 removed.
+   *
+   * <p>Deliberately <b>not</b> fixed by loosening the activation predicate: its {@code NOT EXISTS}
+   * is what stops an unrelated inactive org from going live just because its owner happened to
+   * verify, and replacing it needs a "born at this user's registration" column that does not exist.
+   * Close the door; do not widen the room.
+   */
   public void grantOrgRole(
       SecurityContext actor, Environment env, UUID userId, UUID orgId, OrgRole role) {
     ensureUserExists(userId);
-    ensureOrgExists(orgId);
+    Org org = ensureOrgExists(orgId);
+    if (OrgStatus.of(org) == OrgStatus.PENDING) {
+      throw new ConflictException(
+          "This tenant is waiting on its owner's email verification. Adding a second member now"
+              + " would permanently prevent it from activating.");
+    }
     dsl.transaction(
         cfg -> {
           DSLContext tx = DSL.using(cfg);
@@ -315,6 +367,104 @@ public class UserAdminService {
     }
   }
 
+  /** What a successful resend reports back: the address it went to, and when the link dies. */
+  public record ResendResult(String email, OffsetDateTime expiresAt) {}
+
+  /**
+   * Re-send a user's email-verification link on the platform's behalf — the console's answer to
+   * "they signed up and cannot log in".
+   *
+   * <p>A PENDING org means exactly one thing: its owner never clicked the link. {@code
+   * AccountService.verifyEmail} stamps {@code email_verified_at} and then calls {@code
+   * activateRegistrationPendingOrgs}, so <em>verifying the email is literally what activates the
+   * tenant</em> — which makes this the action that gets a stuck signup unstuck.
+   *
+   * <p><b>Every outcome names its cause, unlike the anonymous {@code POST
+   * /api/auth/resend-verification}.</b> That endpoint answers a uniform {@code 200} and swallows
+   * every failure because it is unauthenticated and a distinguishable response is an
+   * account-enumeration oracle. Here the caller is an authenticated ADMIN who was just shown the
+   * address by the page they clicked from, so there is nothing left to protect and a great deal to
+   * report: unknown user 404, already-verified 409, disabled 409 (a disabled account must not be
+   * handed a link that logs it in), an {@code orgId} the user does not own 400, and — the one that
+   * matters most — a failed hand-off to the mail provider as {@link UpstreamFailureException}
+   * (502), never as a success. An operator told "sent" for mail that never left spends the next
+   * hour on the wrong hypothesis; that is the failure this whole slice exists to prevent, so the
+   * send goes through {@link AuthMailer#sendVerifyEmailOrThrow} rather than the swallowing variant.
+   *
+   * <p><b>{@code orgId} is validated, not trusted.</b> Present means the operator acted from a
+   * tenant's page and the rescue belongs on that tenant's timeline (the per-tenant question V76's
+   * column was added for: <em>who got this tenant unstuck, and when</em>) — but only after checking
+   * the user actually holds OWNER there. Absent means the operator acted from {@code
+   * /admin/users/{id}} and named no tenant, so the audit row gets an explicit {@code null}: a
+   * resend targets a person, and a person is not a tenant event. An audit column you can point
+   * anywhere is worse than a null one.
+   *
+   * <p><b>No rate-limit bucket, deliberately.</b> {@code requireAdmin} plus an audit row per call
+   * is the control. A per-IP bucket sized for anonymous abuse (the anonymous path shares {@code
+   * AUTH_FORGOT_LIMIT}) would throttle a support desk clearing a backlog of stuck signups while
+   * protecting nothing an ADMIN could not already do. Stated here so the omission reads as a
+   * decision rather than an oversight, and so nobody adds one by reflex.
+   *
+   * <p>The audit row is written <b>whether or not delivery succeeds</b>, carrying {@code delivered}
+   * — because the consequential state change is the mint, which supersedes every prior live link
+   * (only the latest redeems). Dropping the row on a failed send would leave the ledger silent
+   * about a still-valid link having just been killed; writing it without {@code delivered} would
+   * let a tenant timeline imply a delivery that never happened. Both are the console lying.
+   */
+  public ResendResult resendVerification(
+      SecurityContext actor, Environment env, UUID userId, UUID orgId, OffsetDateTime now) {
+    UserRepository userRepo = userRepoFactory.create(dsl);
+    AppUser user =
+        userRepo.findById(userId).orElseThrow(() -> new NotFoundException("User", userId));
+    if (user.getEmailVerifiedAt() != null) {
+      throw new ConflictException("This account is already verified");
+    }
+    if (!user.isActive()) {
+      throw new ConflictException("This account is disabled");
+    }
+    if (orgId != null) {
+      ensureOrgExists(orgId);
+      if (!userRepo.findRolesInOrg(userId, orgId).contains(OrgRole.OWNER)) {
+        throw new ValidationException("This user does not own that org");
+      }
+    }
+
+    credentialTokenService.invalidateActive(userId, AppUserTokenPurpose.EMAIL_VERIFY, now);
+    String rawToken =
+        credentialTokenService.mintAutonomous(userId, AppUserTokenPurpose.EMAIL_VERIFY, now);
+    OffsetDateTime expiresAt =
+        credentialTokenService.expiresAt(AppUserTokenPurpose.EMAIL_VERIFY, now);
+
+    boolean delivered = true;
+    RuntimeException sendFailure = null;
+    try {
+      authMailer.sendVerifyEmailOrThrow(
+          user.getEmail(), credentialTokenService.verifyUrl(rawToken));
+    } catch (RuntimeException e) {
+      delivered = false;
+      sendFailure = e;
+    }
+
+    Map<String, Object> detail = new LinkedHashMap<>();
+    detail.put("email", user.getEmail());
+    if (orgId != null) {
+      detail.put("org_id", orgId.toString());
+    }
+    detail.put("delivered", delivered);
+    audit.record(
+        actor, env, orgId, "EMAIL_VERIFY_RESEND", PlatformAuditEvent.Target.USER, userId, detail);
+
+    if (!delivered) {
+      log.warn("Verification link minted but not delivered for user id={}", userId, sendFailure);
+      throw new UpstreamFailureException(
+          "The verification link was created but could not be emailed. Nothing was sent — try"
+              + " again.",
+          sendFailure);
+    }
+    log.info("Verification link resent for user id={} org={}", userId, orgId);
+    return new ResendResult(user.getEmail(), expiresAt);
+  }
+
   /** Force-set a user's password. Also revokes all their sessions. */
   public void resetPassword(
       SecurityContext actor, Environment env, UUID userId, String rawPassword) {
@@ -351,11 +501,9 @@ public class UserAdminService {
     }
   }
 
-  private void ensureOrgExists(UUID orgId) {
+  private Org ensureOrgExists(UUID orgId) {
     OrgRepository orgRepo = orgRepoFactory.create(dsl);
-    if (orgRepo.findById(orgId).isEmpty()) {
-      throw new NotFoundException("Org", orgId);
-    }
+    return orgRepo.findById(orgId).orElseThrow(() -> new NotFoundException("Org", orgId));
   }
 
   /**

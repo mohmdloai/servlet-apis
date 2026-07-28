@@ -482,7 +482,13 @@ public class AppConfig {
         new PlatformOrgTimelineService(dsl, orgTimelineRepositoryFactory, orgRepositoryFactory);
     this.userAdminService =
         new UserAdminService(
-            dsl, userRepositoryFactory, orgRepositoryFactory, authService, platformAuditService);
+            dsl,
+            userRepositoryFactory,
+            orgRepositoryFactory,
+            authService,
+            platformAuditService,
+            credentialTokenService,
+            authMailer);
     this.productService =
         new ProductService(productRepository, productVariantRepositoryFactory, dsl);
     this.categoryService =

@@ -21,7 +21,9 @@ import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
+import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.AuthService;
+import com.loai.inventory.service.auth.CredentialTokenService;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.loai.inventory.service.platform.PlatformAuditService;
 import com.loai.inventory.service.platform.UserAdminService;
@@ -100,13 +102,23 @@ class UserAdminServiceIT {
             300_000L);
     PlatformAuditService audit =
         new PlatformAuditService(dsl, new PlatformAuditRepositoryFactoryImpl());
+    CredentialTokenService credentialTokenService =
+        new CredentialTokenService(
+            dsl,
+            new com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl(),
+            "http://localhost:8080",
+            java.time.Duration.ofMinutes(120),
+            java.time.Duration.ofDays(7),
+            java.time.Duration.ofHours(48));
     service =
         new UserAdminService(
             dsl,
             new UserRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
             authService,
-            audit);
+            audit,
+            credentialTokenService,
+            new AuthMailer(msg -> {}));
     userRepo = new UserRepositoryImpl(dsl);
   }
 
