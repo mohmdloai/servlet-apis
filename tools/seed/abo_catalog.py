@@ -75,6 +75,19 @@ AR_TYPES = {
 }
 AR_ADJ = ["أنيق", "عصري", "فاخر", "مريح", "كلاسيكي", "رياضي", "يدوي", "أصلي"]
 
+
+def humanize(product_type):
+    """ABO's SCREAMING_SNAKE product_type → a display name ("SHOE_RACK" → "Shoe Rack")."""
+    return " ".join(w.capitalize() for w in (product_type or "misc").split("_")) or "Misc"
+
+
+def ar_category_name(product_type):
+    """The Arabic category name: the word bank when it knows the type, else the English display
+    name. Deliberately NOT a generic "منتج" fallback — that would name most of an org's categories
+    identically, which is worse than an untranslated one (and an untranslated category is a real
+    merchant state the resolver already handles)."""
+    return AR_TYPES.get(product_type) or humanize(product_type)
+
 AR_FIRST = ["أحمد", "محمد", "فاطمة", "سارة", "خالد", "منى", "يوسف", "هدى", "عمر", "ليلى"]
 EN_FIRST = ["Adam", "Nour", "Omar", "Sara", "Karim", "Dina", "Hassan", "Mariam", "Tarek", "Laila"]
 LAST = ["حسن", "علي", "Ibrahim", "Mostafa", "السيد", "Fahmy", "عبدالله", "Saad", "يوسف", "Ramzy"]
@@ -85,7 +98,7 @@ def main():
     files = {
         name: open(os.path.join(OUT_DIR, name + ".tsv"), "w", encoding="utf-8")
         for name in [
-            "org", "app_user", "user_org_role", "category", "product",
+            "org", "app_user", "user_org_role", "category", "category_translation", "product",
             "product_listing", "product_listing_translation", "product_listing_category",
             "product_listing_image", "inventory", "customer",
         ]
@@ -144,6 +157,12 @@ def main():
                     cat_ids[key] = cat_id
                     # category: id, org_id, parent_category_id, slug
                     w("category", cat_id, org_id, None, slugify(ptype, "misc"))
+                    # The NAME lives in category_translation (V63's paired-language pattern), not
+                    # on `category` — which has no name column at all. Omitting these rows left
+                    # every category nameless, so the admin's category picker rendered a column of
+                    # unlabelled checkboxes. One row per language, like the listing translations.
+                    w("category_translation", uid(), cat_id, "en", humanize(ptype))
+                    w("category_translation", uid(), cat_id, "ar", ar_category_name(ptype))
 
                 product_id = uid()
                 price = round(rng.uniform(20, 8000), 2)

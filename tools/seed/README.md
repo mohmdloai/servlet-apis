@@ -149,9 +149,38 @@ BACKEND_API_URL=http://localhost:8081 PORT=3200 node apps/storefront/.next/stand
 # storefront → http://localhost:3200/en/store-102  (org slug required; store-0 … store-199)
 ```
 
-Note: listing images render as empty placeholders — the harness seeds image *rows* with
-real ABO object keys but deliberately never uploads bytes to MinIO (bytes don't touch
-query plans).
+Note: `run.sh` seeds image *rows* with real ABO object keys and never uploads bytes to
+MinIO — bytes don't touch query plans, so the benchmark path must not pay for them. Every
+listing image therefore renders as the app's broken-image affordance. If you are driving
+perfdb as a **demo storefront** rather than a benchmark, fill one org (below).
+
+### Image bytes for one org
+
+One org is enough — the point is a store that renders, not 657,998 objects. `image_tiles.py`
+writes one placeholder per image row, carrying the product's **own name**, so the picture can
+never contradict the title beside it. They are SVG (no image library needed, ~700 B each) served
+under the existing `.jpg` keys, so the sync **must** override Content-Type — a browser renders by
+Content-Type, not by extension.
+
+```bash
+ORG=store-102        # 728 listings / 3272 images ≈ 13 MB, ~10 s to sync
+docker exec inventory_db psql -U postgres -d perfdb -tAF$'\t' -c "
+  select pli.object_key, pli.sort_order, coalesce(t.title,'Item')
+    from inventorydb.product_listing_image pli
+    join inventorydb.org o on o.id = pli.org_id
+    left join inventorydb.product_listing_translation t
+           on t.listing_id = pli.listing_id and t.language='en'
+   where o.slug='$ORG'" > /tmp/keys.tsv
+
+python3 tools/seed/image_tiles.py /tmp/keys.tsv /tmp/tiles
+AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_DEFAULT_REGION=us-east-1 \
+  aws --endpoint-url http://localhost:9100 s3 sync /tmp/tiles/ s3://catalog-images/ \
+      --content-type image/svg+xml --only-show-errors
+```
+
+They are placeholders and look like it — real photography is a separate question (dataset licence
+first). What they buy is a catalog that renders: card grids, galleries, and any screenshot of
+layout at realistic density.
 
 ## Migration mismatches: NEVER delete the volume
 
