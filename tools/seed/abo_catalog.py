@@ -183,8 +183,14 @@ def main():
                 imgs = list(dict.fromkeys(i for i in imgs if i))
                 for sort, img in enumerate(imgs[:6]):
                     # product_listing_image: id, org_id, listing_id, object_key, alt_text, sort_order
+                    # The key must match ObjectStorage.keyPrefix() — "{org}/listings/{listing}/" ,
+                    # PLURAL. ProductListingService.attachImage rejects anything else as a
+                    # cross-tenant key, so a "listing/" key is unusable the moment perfdb is driven
+                    # through the real admin UI rather than read-only benchmarks. The uuid- prefix
+                    # production puts on the leaf is a collision guard for merchant filenames; ABO
+                    # image ids are already unique, so it is omitted deliberately.
                     w("product_listing_image", uid(), org_id, listing_id,
-                      f"{org_id}/listing/{listing_id}/{img}.jpg", name[:80], sort)
+                      f"{org_id}/listings/{listing_id}/{img}.jpg", name[:80], sort)
                     n_images += 1
 
                 if rng.random() < 0.85:  # tracked
