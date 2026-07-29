@@ -178,9 +178,38 @@ AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_DEFAULT_REGION
       --content-type image/svg+xml --only-show-errors
 ```
 
-They are placeholders and look like it — real photography is a separate question (dataset licence
-first). What they buy is a catalog that renders: card grids, galleries, and any screenshot of
-layout at realistic density.
+They are placeholders and look like it. For a tenant that looks like an actual shop — real
+photos, real barcodes — seed the Open Food Facts org instead (below).
+
+## The demo org: Open Food Facts (`mart-cairo`)
+
+`off_catalog.py` is a **sibling** of `abo_catalog.py`, not a replacement. ABO gives 200 orgs of
+bulk for query plans; this gives **one** org that behaves like an Egyptian mini-market, and it is
+**additive** — `off_load.sh` adds a tenant beside the 200 and touches nothing else, so it is safe
+against a populated perfdb (unlike `run.sh`, which drops the database).
+
+Why it exists: **`abo_catalog.py` writes NULL for every barcode**, so `GET /products?barcode=`,
+scan-to-stock and the in-store sale have no seeded data at all. OFF is keyed on EAN-13/UPC.
+
+```bash
+# 1. cache the country slice (OFF search is ~10 req/min — this is slow and polite; the cache means
+#    you do it once). See off_fetch.py in the story branch, or use any OFF export.
+# 2. category display names (optional but worth it)
+curl -A "ststore-seed/1.0" https://world.openfoodfacts.org/data/taxonomies/categories.json \
+  -o /tmp/off_categories.json
+
+OWNER=$(docker exec inventory_db psql -U postgres -d perfdb -tAc \
+  "select id from inventorydb.app_user where email='bench@bench.test'")
+python3 tools/seed/off_catalog.py /tmp/off_egypt.jsonl /tmp/offout \
+        --owner "$OWNER" --taxonomy /tmp/off_categories.json
+./tools/seed/off_load.sh   /tmp/offout mart-cairo     # additive, idempotent
+./tools/seed/off_images.sh /tmp/offout /tmp/off-images  # real photos → MinIO
+```
+
+Storefront: `http://localhost:3200/ar/mart-cairo` · admin: the bench user is its OWNER.
+
+**Licence:** OFF data is ODbL, its photos CC-BY-SA. Fine for a local dev seed; **not** a licence to
+put those photos in marketing material without attribution — verify the terms before publishing.
 
 ## Migration mismatches: NEVER delete the volume
 
