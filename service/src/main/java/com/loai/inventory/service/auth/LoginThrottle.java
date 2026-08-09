@@ -50,6 +50,11 @@ public class LoginThrottle {
       }
 
       @Override
+      public long retryAfterSeconds(String email) {
+        return LOCKOUT_SECONDS;
+      }
+
+      @Override
       public void recordFailure(String email) {}
 
       @Override
@@ -65,6 +70,29 @@ public class LoginThrottle {
     try (Jedis jedis = jedisPool.getResource()) {
       String v = jedis.get(key(email));
       return v != null && parse(v) >= MAX_FAILURES;
+    }
+  }
+
+  /**
+   * How many seconds until this account's lockout lifts — the live TTL of the failure counter, not
+   * the flat {@value #LOCKOUT_SECONDS}.
+   *
+   * <p>The two differ, and the live number is the honest one: the TTL is written on the *first*
+   * failure of a streak (that is what makes the key un-strandable), so an account that reaches the
+   * limit slowly is already partway through its window by the time it locks. Answering a flat
+   * fifteen minutes there tells a locked-out person to wait longer than they must.
+   *
+   * <p>Falls back to the full window if the key has no TTL or has just expired between the caller's
+   * {@link #isLocked} check and this read — over-stating a window that is already open is a
+   * harmless race, and it is the only outcome that cannot advise a client to hammer.
+   */
+  public long retryAfterSeconds(String email) {
+    if (email == null) {
+      return LOCKOUT_SECONDS;
+    }
+    try (Jedis jedis = jedisPool.getResource()) {
+      long ttl = jedis.ttl(key(email));
+      return ttl > 0 ? ttl : LOCKOUT_SECONDS;
     }
   }
 

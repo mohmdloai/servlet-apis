@@ -211,22 +211,31 @@ public class CustomerAuthService {
                 () -> {
                   // Proven reuse (the token was rotated away, so two holders exist) burns the whole
                   // family and its outstanding access tokens; an ordinary unknown token just 401s.
-                  // Same rule as the staff plane — see AuthService#refresh.
-                  sessionStore
-                      .findRotatedFamily(hash)
-                      .ifPresent(
-                          ref -> {
-                            log.warn(
-                                "Customer refresh-token reuse detected — revoking family {} of"
-                                    + " customer {} in org {}",
-                                ref.familyId(),
-                                ref.customerId(),
-                                ref.orgId());
-                            sessionStore.revokeFamily(
-                                ref.familyId(), ref.orgId(), ref.customerId());
-                            sessionStore.denyFamilyAccess(
-                                ref.familyId(), customerJwtUtil.getAccessTtlMillis() / 1000);
-                          });
+                  // A re-presentation within seconds of the rotation is neither — it is the portal
+                  // bounce route racing the page's own refresh over one cookie jar, and burning
+                  // the family there logs the shopper out everywhere for nothing. Same rule as the
+                  // staff plane — see AuthService#refresh.
+                  if (sessionStore.rotatedWithinGrace(hash)) {
+                    log.debug(
+                        "Customer refresh token re-presented inside the rotation grace window —"
+                            + " 401 only");
+                  } else {
+                    sessionStore
+                        .findRotatedFamily(hash)
+                        .ifPresent(
+                            ref -> {
+                              log.warn(
+                                  "Customer refresh-token reuse detected — revoking family {} of"
+                                      + " customer {} in org {}",
+                                  ref.familyId(),
+                                  ref.customerId(),
+                                  ref.orgId());
+                              sessionStore.revokeFamily(
+                                  ref.familyId(), ref.orgId(), ref.customerId());
+                              sessionStore.denyFamilyAccess(
+                                  ref.familyId(), customerJwtUtil.getAccessTtlMillis() / 1000);
+                            });
+                  }
                   return new AuthenticationException("Invalid refresh token");
                 });
     // Rotate: retire the presented token behind a tombstone, so its next presentation is

@@ -106,6 +106,9 @@ public class CustomerSessionStore {
    * customer-plane copy of {@link RefreshTokenStore#rotateAway}, and for the same reason: a plain
    * {@code DEL} makes a stolen-then-rotated token indistinguishable from garbage on its next
    * presentation, so reuse can be logged but not acted on.
+   *
+   * <p>And, like the staff plane, a {@code crt:rotated-recent:{hash}} key with the grace TTL — see
+   * {@link #rotatedWithinGrace}.
    */
   public void rotateAway(String tokenHash, TokenData data) {
     try (Jedis jedis = jedisPool.getResource()) {
@@ -114,6 +117,20 @@ public class CustomerSessionStore {
           "crt:rotated:" + tokenHash,
           tokenTtlSeconds,
           data.orgId() + ":" + data.customerId() + ":" + data.familyId());
+      jedis.setex("crt:rotated-recent:" + tokenHash, RefreshTokenStore.ROTATION_GRACE_SECONDS, "1");
+    }
+  }
+
+  /**
+   * Was this token rotated away within the grace window — the customer-plane copy of {@link
+   * RefreshTokenStore#rotatedWithinGrace}, sharing its constant so the two planes cannot drift to
+   * different windows. The storefront has the same shape of race the admin app does: the portal
+   * bounce route refreshes server-side while a page's own client may be refreshing from the same
+   * cookie jar, and burning the family on the loser would sign the shopper out everywhere.
+   */
+  public boolean rotatedWithinGrace(String tokenHash) {
+    try (Jedis jedis = jedisPool.getResource()) {
+      return jedis.exists("crt:rotated-recent:" + tokenHash);
     }
   }
 

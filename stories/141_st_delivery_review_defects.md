@@ -64,6 +64,51 @@ revoked. The existing per-device denylist and fail-closed `token_version` are un
 `refreshRotates_andReuseOfOldTokenIsRejected` **encoded the defect** (it asserted the rotated-current
 token still worked *after* a reuse) and was split into the two tests above.
 
+### D2a · …but a concurrent refresh is not reuse — a 10-second grace window
+
+**The regression D2 introduced.** Burning the family on any presentation of a rotated-away token is
+right for theft and wrong for concurrency, and the clients are concurrent by construction. One
+cookie jar is worked by **two independent refreshers**:
+
+- the browser client's single-flight guard (`frontst/packages/shared/src/api/client.ts`), which is
+  per-JS-context — so two admin tabs are two guards, not one;
+- a **server-side** bounce refresh (`apps/admin/app/api/auth/bounce/route.ts`, driven by
+  `middleware.ts` on any navigation whose access token is expired or inside its 30 s skew; the
+  storefront has the portal twin).
+
+Two tabs, or one tab where a bounce redirect overlaps an in-page 401, present the same token twice.
+Only one can win. Before D2 the loser simply got a 401; after it, the loser's presentation burned
+the family — **killing the winner's brand-new token and signing the user out on every device**, over
+a race nobody did anything wrong in. A `navigator.locks` fix in the browser cannot close this,
+because the bounce refresh runs in the Next server process and shares no lock manager with any tab.
+
+**Now:** `rotateAway` writes a second key beside the tombstone — `rt:rotated-recent:{hash}` (staff)
+/ `crt:rotated-recent:{hash}` (customer), TTL **10 seconds**, value `"1"`. On a presented-but-
+inactive token the order is: `rotated-recent` present ⇒ **401, revoke nothing**; else tombstone
+present ⇒ revoke the family + denylist its access tokens + 401; else ⇒ plain 401. Ten seconds is
+wide enough for a redirect plus a round trip and narrow enough that a replay minutes later still
+meets the full response.
+
+Three decisions worth keeping:
+
+- **A second self-expiring key, not a timestamp inside the tombstone value.** No value format to
+  migrate, no clock arithmetic on either plane, and Redis does the cleanup.
+- **The window is per hash, never per family.** It is a statement about *one* rotation, so a second
+  stolen token presented later is judged on its own key and still burns.
+- **The two planes share one constant** (`RefreshTokenStore.ROTATION_GRACE_SECONDS`, read by
+  `CustomerSessionStore`), so they cannot drift to different windows.
+
+**The cost, stated:** a thief who replays inside 10 seconds of the legitimate rotation escapes the
+burn and gets only a 401 — exactly the pre-D2 outcome, for a 10-second sliver. That is the price of
+not logging honest users out, and it is the right trade: the benign race is routine and the
+10-second replay is not the shape real token theft takes.
+
+**Proof:** `AuthDeviceRevocationIT.concurrentRefresh_401sTheLoserButLeavesTheWinnersTokenAlive` and
+`PortalAuthIT.concurrentRefresh_401sTheLoserButLeavesTheWinnersSessionAlive` — rotate, immediately
+re-present the old token, assert 401 **and** that the new token still refreshes and the device was
+never denylisted. The two D2 burn tests keep asserting the burn, made deterministic by `DEL`-ing the
+`*-recent:` key straight through Jedis to elapse the window — no ten-second `Thread.sleep`.
+
 ### D7 · The two signing secrets must differ
 
 **Was:** `JWT_SECRET` and `CUSTOMER_JWT_SECRET` were validated for presence and length,
@@ -198,6 +243,34 @@ Three separate weaknesses:
 refused once locked), a success wiping the budget, an unknown address throttling identically to a
 known one, and every failure key carrying a TTL.
 
+### D9a · The lockout 429 now says how long — `Retry-After`
+
+The 429 above carried no `Retry-After`, so a client could say "too many attempts" and nothing more.
+Fifteen minutes and fifteen seconds render identically, and every caller has to invent a guess.
+
+`TooManyAttemptsException` now carries the number and `AuthServlet` writes the header. **The value
+is the failure counter's live TTL, not the flat `LOCKOUT_SECONDS`** — the TTL is written on the
+*first* failure of a streak (that is what makes the key un-strandable, item 3 above), so an account
+that reaches ten failures slowly is already partway through its window at the moment it locks;
+quoting the full fifteen minutes there tells someone to wait longer than they actually must. It
+falls back to the full window when the key has no TTL or expired between the `isLocked` check and
+the read — over-stating a window that is already open is a harmless race, and the only outcome that
+cannot advise hammering — and `getRetryAfterSeconds()` floors at 1, because `Retry-After: 0` invites
+a hot loop.
+
+**The envelope does not move.** `AuthServlet`'s three `catch (AppException)` arms now go through one
+`writeAppError`, which sets the header and then writes the same `ApiError.of(status, message)` body
+as before. A status that carries extra protocol information adds a header; it does not grow a field.
+
+**Proof:** `LoginThrottleIT.lockoutCarriesRetryAfterSeconds` (positive, and inside the window rather
+than an invented constant) and `retryAfterFallsBackWithoutACounter`.
+
+**Not pinned, deliberately:** the servlet's header write itself. `AuthServlet.init()` pulls its
+collaborators from a live `AppConfig`, whose only constructor boots Postgres + Flyway + Redis, so
+there is no cheap way to drive the servlet in a test — and the mapping under test would be a
+three-line `instanceof` in one shared writer. The wire contract is covered from the client side in
+`frontst` story 96, whose mock answers the real 429 + `Retry-After` shape.
+
 ### D10 · CLAUDE.md matches the shipped sales-order route
 
 The doc said a bare `GET /api/orgs/{orgId}/sales-orders` returns **400**, "reserved for the future
@@ -225,14 +298,15 @@ on `POST /api/public/{orgSlug}/checkout`.
 |---|---|---|
 | `POST /refunds` (direct) | 403 when *this* amount > threshold | 403 when the payment's **live refund total** > threshold |
 | `POST /credit-notes` | 403 when *this* note > threshold | 403 when the invoice's **cumulative credited total** > threshold |
-| `POST /auth/refresh` (both planes) | reuse ⇒ 401, family survives | reuse ⇒ 401 **and the family is revoked** |
-| `POST /auth/login` | 400/401/403 | adds **429** after 10 failed attempts on one address |
+| `POST /auth/refresh` (both planes) | reuse ⇒ 401, family survives | **proven** reuse ⇒ 401 **and the family is revoked**; a re-presentation within 10 s of the rotation ⇒ 401, nothing revoked |
+| `POST /auth/login` | 400/401/403 | adds **429** after 10 failed attempts on one address, carrying **`Retry-After`** (seconds remaining) |
 | Concurrent duplicate checkout | 500 | 200 replay of the winner's order |
 | Reissue on a delivered order | order stays FULFILLED | order rolls up to CLOSED when the replacement is PAID |
 
-Frontend note: `POST /api/auth/login` can now answer **429**. Nothing breaks if it is treated as a
-generic error — the body carries the message — but a dedicated "too many attempts, try again in a few
-minutes" state is the right rendering.
+Frontend note: `POST /api/auth/login` can now answer **429** with `Retry-After`. Built in `frontst`
+story 96 (`96_fix/login-lockout-and-refresh-race`): the admin error normaliser had **no 429 branch
+at all**, so the lockout was rendering "Something went wrong" — that branch, the copy behind it, and
+the header lift all land there.
 
 ## Not in scope
 
@@ -240,6 +314,39 @@ minutes" state is the right rendering.
 - **D11's breadth** (a repository-level IT layer for `domain`/`common`/`repository`) — the plan scopes
   it as trailing and incremental. The part D11 calls "the specific regressions that would ship
   silently today" is done: every defect above lands with its test.
+- **A machine-readable D1 threshold body** — considered and **deliberately skipped**; the reasoning
+  is worth keeping because it will come up again.
+
+  The 403 D1 raises says *why* in its message string (running total, threshold), but the frontend
+  renders no raw backend message by policy, so the UI cannot explain the escalation. The shared
+  client already declares the fields for it —
+  `{ kind: 'approval_required', requiredRole?, thresholdEgp?, requestedEgp? }` — reading
+  `required_role` / `threshold_amount` / `requested_amount` off the body.
+
+  **Finding, and it is worse than "the numbers are missing": that whole branch is unreachable
+  today.** `ApiError` has no `error_code` field and no approval fields, and nothing in `api` or
+  `service` ever writes `required_role`. The normaliser's guard is
+  `status === 403 && (code === 'APPROVAL_REQUIRED' || env.required_role)`, so it never fires — every
+  above-threshold 403 currently renders as `errors.forbidden` ("You don't have permission to do
+  that."), which for an escalation is not merely vague but *wrong*: the manager does have
+  permission, it just needs a second signature.
+
+  **Why it was still skipped.** Adding the fields to `ApiError` is cheap and precedented (the
+  `ofShortages` pattern; Jackson omits nulls, so no existing client sees a change). The cost is
+  structural: this codebase has **no central error writer**. Each handler owns a private
+  `writeError(resp, AppException)`, and the approval 403 can surface from five of them —
+  `RefundHandler`, `CreditNoteHandler`, `SalesOrderHandler` (cancel), `FulfillmentHandler`
+  (failed-fulfillment refund) and `PaymentTransactionHandler` (orphan refund) — because
+  `RefundService.createDirectPendingInTx` is reached from four call paths and
+  `OrderCancellationService` gates on its own aggregate. Five hand-written branches across the money
+  routes, where missing one leaves the same 403 machine-readable on some and not others — a worse
+  state than uniformly not, and a poor trade for display copy on a branch nobody is reading yet.
+
+  **What to do instead, when it is picked up:** give `AppException` subclasses a way to contribute
+  fields to `ApiError` **once**, at a single writer, rather than teaching five handlers about a
+  sixth exception type. That is a small refactor with its own justification, and it makes this
+  change three lines instead of fifteen. Until then the honest interim is the frontend's: the 403
+  renders as `forbidden`, and story 96 leaves `approval_required` untouched rather than pretending.
 
 ## No migration
 

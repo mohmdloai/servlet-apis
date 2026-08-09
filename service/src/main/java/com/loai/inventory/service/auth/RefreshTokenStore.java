@@ -23,6 +23,12 @@ public class RefreshTokenStore {
   private static final long TOKEN_TTL_SECONDS = 7 * 24 * 3600; // 7 days
   private static final long FAMILY_TTL_SECONDS = 8 * 24 * 3600; // 8 days (outlives tokens)
 
+  /**
+   * How long after a rotation the old token's re-presentation is read as a benign concurrent
+   * refresh rather than as proven reuse. See {@link #rotatedWithinGrace}.
+   */
+  static final long ROTATION_GRACE_SECONDS = 10;
+
   private final JedisPool jedisPool;
   private final ObjectMapper objectMapper;
 
@@ -94,12 +100,44 @@ public class RefreshTokenStore {
    * token stayed valid. The tombstone (hash → family, never the raw token) is what turns a 401 into
    * "burn the whole family". It expires with the token TTL — after that the token would have been
    * dead anyway.
+   *
+   * <p>A second, much shorter key rides along: {@code rt:rotated-recent:{hash}}, TTL {@value
+   * #ROTATION_GRACE_SECONDS}s, which marks this rotation as having <em>just</em> happened. See
+   * {@link #rotatedWithinGrace} for what that buys.
    */
   public void rotateAway(String tokenHash, TokenData data) {
     try (Jedis jedis = jedisPool.getResource()) {
       jedis.del("rt:" + tokenHash);
       jedis.setex(
           "rt:rotated:" + tokenHash, TOKEN_TTL_SECONDS, data.userId() + ":" + data.familyId());
+      jedis.setex("rt:rotated-recent:" + tokenHash, ROTATION_GRACE_SECONDS, "1");
+    }
+  }
+
+  /**
+   * Was this token rotated away within the last {@value #ROTATION_GRACE_SECONDS} seconds — i.e. is
+   * its re-presentation a <b>benign concurrent refresh</b> rather than proof of reuse?
+   *
+   * <p>One cookie jar can be worked by more than one refresher: two admin tabs are two independent
+   * single-flight guards, and the admin/portal middleware runs a <em>server-side</em> bounce
+   * refresh that can overlap an in-page 401 from the same jar. Both present the same token; only
+   * one can win. Without this window the loser's presentation looks exactly like theft, so the
+   * family burns — and the burn kills the <em>winner's</em> brand-new token too, logging the user
+   * out on every device over a race nobody did anything wrong in.
+   *
+   * <p>So: inside the window the loser gets its 401 and nothing is revoked; outside it, the same
+   * presentation is a replay no round trip explains and the family dies as before. Ten seconds is
+   * wide enough for a redirect plus a request, and narrow enough that a stolen token replayed
+   * minutes or days later still meets the full response. The window is per <b>hash</b> — it is a
+   * statement about one rotation, never about the family, so a second stolen token presented later
+   * is judged on its own key.
+   *
+   * <p>A separate self-expiring key rather than a timestamp inside the tombstone value: no value
+   * format to migrate, no clock arithmetic, and Redis does the cleanup.
+   */
+  public boolean rotatedWithinGrace(String tokenHash) {
+    try (Jedis jedis = jedisPool.getResource()) {
+      return jedis.exists("rt:rotated-recent:" + tokenHash);
     }
   }
 

@@ -133,6 +133,43 @@ class LoginThrottleIT {
     }
   }
 
+  /**
+   * The 429 has to say <em>how long</em>, or a client can only offer "too many attempts" and leave
+   * the person guessing between seconds and a quarter of an hour. {@code AuthServlet} turns this
+   * number into the {@code Retry-After} header; the number itself is the counter's live TTL, so it
+   * counts down rather than restating a flat fifteen minutes that was already partly spent.
+   */
+  @Test
+  @DisplayName("the lockout carries a live remaining-seconds count, not a flat guess")
+  void lockoutCarriesRetryAfterSeconds() {
+    String email = unique();
+    AuthService auth = serviceFor(email);
+
+    for (int i = 0; i < 10; i++) {
+      assertThrows(
+          AuthenticationException.class, () -> auth.login(email, "wrong", "ua", "10.0.0.1"));
+    }
+
+    TooManyAttemptsException locked =
+        assertThrows(
+            TooManyAttemptsException.class, () -> auth.login(email, PASSWORD, "ua", "10.0.0.1"));
+
+    long seconds = locked.getRetryAfterSeconds();
+    assertTrue(seconds > 0, "Retry-After: 0 would invite a hot retry loop");
+    // The lockout window is 15 minutes; a live TTL can only be at or under it, never beyond.
+    assertTrue(
+        seconds <= 15 * 60, "a countdown inside the window, not an invented number: " + seconds);
+  }
+
+  /** An account with no failures on record has no live window — the flat length is the fallback. */
+  @Test
+  @DisplayName("retryAfterSeconds falls back to the full window when there is no counter")
+  void retryAfterFallsBackWithoutACounter() {
+    assertTrue(
+        throttle.retryAfterSeconds(unique()) > 0,
+        "never 0 or negative — a missing key must not advise an immediate retry");
+  }
+
   @Test
   @DisplayName("the disabled throttle is inert")
   void disabledThrottleNeverLocks() {

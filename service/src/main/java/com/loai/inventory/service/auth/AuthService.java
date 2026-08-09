@@ -94,7 +94,8 @@ public class AuthService {
     if (loginThrottle.isLocked(normalizedEmail)) {
       log.warn("Login refused — account locked after repeated failures");
       throw new TooManyAttemptsException(
-          "Too many failed sign-in attempts. Try again in a few minutes.");
+          "Too many failed sign-in attempts. Try again in a few minutes.",
+          loginThrottle.retryAfterSeconds(normalizedEmail));
     }
 
     Optional<AppUser> found = userRepo.findByEmail(normalizedEmail);
@@ -235,17 +236,28 @@ public class AuthService {
       // the current one. Burn the family (every device-token in it) and kill its outstanding access
       // tokens, then 401. Without this the classic theft ordering wins: the thief refreshes first,
       // the victim's stale token 401s, and the thief's fresh token is never touched.
-      refreshTokenStore
-          .findRotatedFamily(tokenHash)
-          .ifPresent(
-              ref -> {
-                log.warn(
-                    "Refresh-token reuse detected — revoking family {} of user {}",
-                    ref.familyId(),
-                    ref.userId());
-                refreshTokenStore.revokeFamily(ref.familyId(), ref.userId());
-                refreshTokenStore.denyFamilyAccess(ref.familyId(), accessTtlSeconds());
-              });
+      //
+      // Unless the rotation was seconds ago, in which case this is a concurrent refresh, not
+      // theft: one cookie jar has several refreshers (two tabs, or a server-side bounce redirect
+      // overlapping an in-page 401), so the same token really can be presented twice. The loser
+      // still 401s — it has no fresh token to return — but revoking here would kill the winner's
+      // brand-new token and sign the user out everywhere over a benign race. See
+      // RefreshTokenStore#rotatedWithinGrace for the window and its trade-off.
+      if (refreshTokenStore.rotatedWithinGrace(tokenHash)) {
+        log.debug("Refresh token re-presented inside the rotation grace window — 401 only");
+      } else {
+        refreshTokenStore
+            .findRotatedFamily(tokenHash)
+            .ifPresent(
+                ref -> {
+                  log.warn(
+                      "Refresh-token reuse detected — revoking family {} of user {}",
+                      ref.familyId(),
+                      ref.userId());
+                  refreshTokenStore.revokeFamily(ref.familyId(), ref.userId());
+                  refreshTokenStore.denyFamilyAccess(ref.familyId(), accessTtlSeconds());
+                });
+      }
       throw new AuthenticationException("Invalid refresh token");
     }
 

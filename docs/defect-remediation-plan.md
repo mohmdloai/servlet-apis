@@ -89,6 +89,24 @@ threshold tests still pass.
 > family **and** denylists its access tokens. Tests:
 > `AuthDeviceRevocationIT.reuseOfRotatedToken_revokesTheWholeFamily`,
 > `PortalAuthIT.reuseOfRotatedToken_burnsTheWholeFamily`, plus the unknown-token no-op on both.
+>
+> **AMENDED** (story 141, same branch): the fix as first written could not tell theft from a
+> **concurrent refresh**, and the clients have two independent refreshers over one cookie jar — the
+> browser's per-context single-flight (two admin tabs = two of them) and a *server-side* bounce
+> refresh the middleware runs on any navigation with an expired access token. Either pair can
+> present the same token twice, and burning the family on the loser kills the **winner's** fresh
+> token — signing the user out on every device over a race nobody could avoid. Rotation now also
+> writes `rt:rotated-recent:{hash}` / `crt:rotated-recent:{hash}` with a **10-second TTL**: inside
+> that window a re-presentation is a benign race (401, revoke nothing); outside it, the response is
+> the full family burn exactly as above. The window is per **hash**, never per family, so a second
+> stolen token is judged on its own key. A separate self-expiring key rather than a timestamp in the
+> tombstone value: no value format to migrate, no clock arithmetic, and Redis does the cleanup.
+> Deliberate cost: a thief who replays within 10 seconds of the legitimate rotation escapes the
+> burn and gets a 401 — the same outcome as before D2, and the price of not logging honest users
+> out. Tests: `concurrentRefresh_401sTheLoserButLeavesTheWinnersTokenAlive` (staff) /
+> `concurrentRefresh_401sTheLoserButLeavesTheWinnersSessionAlive` (portal); the two burn cases above
+> now `DEL` the `*-recent:` key through Jedis to elapse the window deterministically rather than
+> sleeping for ten seconds.
 
 **Symptom.** On detected reuse of a rotated-away refresh token, the code logs "possible reuse" and
 returns 401 — but does **not** revoke the family. In classic rotation theft (the attacker presents the
@@ -300,6 +318,23 @@ re-parsing the env var. If the filter must stay env-driven, at minimum trim each
 > the lockout is not itself an oracle; and `SET key 0 NX EX 60` before `INCR` in `RateLimitFilter`, so
 > no crash can strand a TTL-less key. Tests: `LoginThrottleIT`, `RateLimitFilterTest.verifyTtlThenCount`.
 > **Frontend note:** `POST /api/auth/login` can now answer 429.
+>
+> **EXTENDED** (story 141, same branch): that 429 now carries **`Retry-After`**. It said "try again
+> in a few minutes" and gave a client no way to be more specific, so every caller had to invent a
+> guess. The value is the failure counter's **live TTL**, not the flat 15 minutes: the TTL is
+> written on the *first* failure of a streak (that is what makes the key un-strandable, above), so
+> an account that reaches the limit slowly is already partway through its window when it locks —
+> quoting the full length there tells a locked-out person to wait longer than they must. It falls
+> back to the full window if the key has no TTL or expired between the `isLocked` check and the
+> read, and is floored at 1 second so it can never advise a hot retry loop.
+> `TooManyAttemptsException` carries the number and `AuthServlet` writes the header from **one**
+> shared `writeAppError`, so the JSON envelope is untouched (`{status, error, message}`) — the
+> useful number is a header, not a new field. Tests:
+> `LoginThrottleIT.lockoutCarriesRetryAfterSeconds`, `retryAfterFallsBackWithoutACounter`.
+> **Not pinned:** the servlet's header write itself. `AuthServlet.init()` reads a live `AppConfig`,
+> whose only constructor boots Postgres, Flyway and Redis, so there is no cheap way to drive the
+> servlet in a test; the mapping is a three-line `instanceof` in that single shared writer. The
+> frontend covers the wire contract from its side (`frontst` story 96).
 
 **Symptom.** Unknown email returns immediately with no hashing while a known email runs bcrypt — a
 measurable timing difference for account enumeration. Rate limiting is per-IP fixed-window only (10/min),
