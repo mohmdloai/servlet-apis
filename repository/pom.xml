@@ -51,6 +51,13 @@
         <artifactId>postgresql</artifactId>
     </dependency>
 
+    <!-- D11: this module's own tests (RepositoryGuaranteesIT). It had none before, so the
+         JUnit 5 API was never on its test classpath — only JUnit 4 via a transitive. -->
+    <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <scope>test</scope>
+    </dependency>
     <dependency>
         <groupId>org.testcontainers</groupId>
         <artifactId>postgresql</artifactId>

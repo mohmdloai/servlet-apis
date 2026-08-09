@@ -425,11 +425,34 @@ credit-notes bare-GET-400 stands on its own rather than citing the sales-order r
 
 ## D11 — Test-coverage debt · **S4** · L (ongoing)
 
-> **PARTLY ADDRESSED** (story 141). Every "specific regression that would ship silently today" listed
-> below now has a test, written with its fix — except the two direct filter unit tests
-> (`JwtAuthFilter`/`CustomerAuthFilter` branch logic) and the `NotificationService` retry/suppression
-> unit test, which pair with no defect above. The broader ask — a repository-level IT layer for
-> `domain`/`common`/`repository` — is untouched and remains trailing work, as scoped.
+> **ADDRESSED** across stories 141 and 145. Every "specific regression that would ship silently
+> today" got its test with its fix in 141; story 145 closed the three items that paired with no
+> defect and so had nowhere else to land:
+>
+> - **The repository module has tests now** — `RepositoryGuaranteesIT`, the first in that module,
+>   over exactly the three guarantees named below: the stock version-CAS (a stale write is refused
+>   and changes *nothing*, and the org predicate is part of the CAS rather than a filter after it),
+>   the idempotent-restock `ON CONFLICT DO NOTHING` (first use claims the key, every replay returns
+>   empty, and the key is scoped per org so two tenants may reuse a string), and the `PUBLISHED` +
+>   `org_id` predicates (a draft, an archived row, and another tenant's published row are all
+>   unreachable through the published read — while the admin read still sees its own drafts). It
+>   needed `junit-jupiter` added to `repository/pom.xml`: the module had no tests, so the JUnit 5 API
+>   had never been on its test classpath.
+> - **The filters are tested directly** — `CustomerAuthFilterTest` (13) and
+>   `JwtAuthFilterAudienceTest` (6) drive each branch and pin each refusal to its own cause, plus
+>   `PortalCsrfTest` (8) for the CSRF rules as pure decisions. `CustomerAuthFilter` gained a
+>   package-private test constructor, the `CorsFilter`/`JwtAuthFilter` precedent. What these add over
+>   the ITs: an IT asserts an *outcome*, so a rejection that started happening for a different reason
+>   still read as green.
+> - **The notification state machine has a unit test** —
+>   `NotificationDeliveryStateMachineTest` (11) covers the retry/attempt ladder, the claim and settle
+>   transitions, and the reaper, with the transaction boundary run inline. Which outcome a given
+>   (attempts, budget, provider result) triple produces is arithmetic and should not need Docker.
+>
+> **Still open, and still scoped as trailing:** `domain` and `common` breadth beyond `TextTest`, and
+> service-level unit tests for the money and catalog services. The debt was always breadth, not rot.
+>
+> Correction to the note below: `common` is no longer bare — it has `TextTest`.
 >
 > Worth recording for whoever picks this up: `*IT.java` classes are **not** run by a plain `mvn test`
 > (default surefire includes only `*Test.java`, and no failsafe execution is configured). They run only
@@ -440,7 +463,8 @@ The suite is ~100 classes, **97 in the `api` module**, following a "thin service
 TestContainers ITs" style. Concretely:
 - **`domain`, `common`, and `repository` modules have zero tests of their own** — the stock version-CAS,
   the idempotent-restock `ON CONFLICT`, and the PUBLISHED+ORG_ID predicates are verified only
-  transitively through Docker-dependent ITs.
+  transitively through Docker-dependent ITs. *(Since fixed for `repository`; `common` has `TextTest`;
+  `domain` is still bare — see the status note above.)*
 - **`service` module has 3 unit tests total** (`OrgBillingProfileValidationTest`, `ReportServiceTest`,
   `DocumentRenderServiceTest`); none of the money or catalog services has a service-level unit test.
 - No `@Disabled`/skipped tests exist, and `mvn -o -pl service test` is green (38/38) — the debt is
@@ -570,5 +594,5 @@ it is what makes this change small rather than five-fold.
 | D8 | CORS origin parsing duplicated/untrimmed | S3 | S | M3 | **fixed** |
 | D9 | Login enumeration + no per-account throttle | S3 | M | M3 | **fixed** |
 | D10 | CLAUDE.md stale sales-order list | S4 | S | M3 | **fixed** |
-| D11 | Test-coverage debt | S4 | L | trailing | **partly** — per-defect tests done; repo-level IT layer open |
+| D11 | Test-coverage debt | S4 | L | trailing | **partly** — per-defect tests, the repository IT layer, both filters and the notification state machine done (141 + 145); `domain`/`common` breadth and service-level unit tests still trailing |
 | D12 | Approval 403 not machine-readable → client renders "forbidden" | S3 | S (after the shared-writer refactor) | M3 | **fixed** |

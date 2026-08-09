@@ -54,6 +54,25 @@ public class CustomerAuthFilter implements Filter {
   private ObjectMapper objectMapper;
   private Set<String> allowedOrigins;
 
+  /** No-arg constructor for the servlet container; config is read in {@link #init}. */
+  public CustomerAuthFilter() {}
+
+  /**
+   * Test constructor: inject the collaborators directly (bypasses {@link #init}), as CorsFilter and
+   * {@link JwtAuthFilter} do — {@code init} reads a live {@code AppConfig}, which boots Postgres
+   * and Redis, so the branch logic here is otherwise only reachable through a full IT.
+   */
+  CustomerAuthFilter(
+      JwtUtil customerJwtUtil,
+      CustomerAuthService customerAuthService,
+      ObjectMapper objectMapper,
+      Set<String> allowedOrigins) {
+    this.customerJwtUtil = customerJwtUtil;
+    this.customerAuthService = customerAuthService;
+    this.objectMapper = objectMapper;
+    this.allowedOrigins = allowedOrigins;
+  }
+
   @Override
   public void init(FilterConfig filterConfig) {
     AppConfig config =
