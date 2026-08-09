@@ -17,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.params.SetParams;
 
 /**
  * Per-IP fixed-window (Redis {@code INCR} + 60s TTL) rate limiter. Mapped to {@code /api/auth/*}
@@ -238,10 +239,12 @@ public class RateLimitFilter implements Filter {
 
     String key = keyPrefix + ip;
     try (Jedis jedis = jedisPool.getResource()) {
+      // TTL first, then count. The reverse (INCR, then EXPIRE only when the counter came back 1)
+      // leaves a window in which a crash between the two commands strands a key with no expiry —
+      // and a fixed-window counter that never expires blocks that IP for good. SET NX writes the
+      // TTL only when the key is absent, so it never resets a live window.
+      jedis.set(key, "0", SetParams.setParams().nx().ex(WINDOW_SECONDS));
       long current = jedis.incr(key);
-      if (current == 1) {
-        jedis.expire(key, WINDOW_SECONDS);
-      }
       if (current > limit) {
         resp.setStatus(429);
         resp.setContentType("application/json");

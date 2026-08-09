@@ -161,16 +161,14 @@ public final class RefundService {
                       + " exceeds payment unallocated "
                       + payment.getUnallocatedAmount());
             }
-            // Above-threshold direct refunds escalate to OWNER (no CreditNote issuance to gate it).
-            BigDecimal threshold = orgThreshold(txDsl, orgId);
-            if (amount.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
-              throw new AuthorizationException(
-                  "refund amount "
-                      + amount
-                      + " exceeds approval threshold "
-                      + threshold
-                      + "; requires OWNER");
-            }
+            // Above-threshold direct refunds escalate to OWNER (no CreditNote issuance to gate it),
+            // gated on the running total drawn from this payment — see requireApproval.
+            requireApproval(
+                txDsl,
+                orgId,
+                openDirectRefundTotal(txDsl, orgId, payment.getId()).add(amount),
+                callerIsOwnerOrAdmin,
+                "refunds against payment " + payment.getId() + " totalling ");
             customerId = payment.getCustomerId();
           }
 
@@ -312,16 +310,14 @@ public final class RefundService {
               + " exceeds payment unallocated "
               + payment.getUnallocatedAmount());
     }
-    // Same amount-based gate as the manual direct-refund path: large cash out needs OWNER.
-    BigDecimal threshold = orgThreshold(txDsl, orgId);
-    if (amount.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
-      throw new AuthorizationException(
-          "refund amount "
-              + amount
-              + " exceeds approval threshold "
-              + threshold
-              + "; requires OWNER");
-    }
+    // Same aggregate gate as the manual direct-refund path: large cash out needs OWNER, and the
+    // bar is the running total drawn from this payment, not this one call (see requireApproval).
+    requireApproval(
+        txDsl,
+        orgId,
+        openDirectRefundTotal(txDsl, orgId, payment.getId()).add(amount),
+        callerIsOwnerOrAdmin,
+        "refunds against payment " + payment.getId() + " totalling ");
 
     Refund refund =
         Refund.createPending(
@@ -658,6 +654,52 @@ public final class RefundService {
    */
   public BigDecimal approvalThreshold(DSLContext txDsl, UUID orgId) {
     return orgThreshold(txDsl, orgId);
+  }
+
+  /**
+   * The money already committed to going back out of one payment: every refund drawing on it that
+   * has not been CANCELLED (PENDING <em>and</em> EXECUTED — a PENDING refund is an obligation the
+   * org has already accepted, it just hasn't been transferred yet). Read inside the caller's
+   * transaction, and every caller holds {@code FOR UPDATE} on that payment, so two concurrent
+   * creates cannot both see a stale total.
+   *
+   * <p>Refunds per payment are bounded by real-world transfers, so the existing {@code
+   * findByPaymentId} read is the right shape — no new projection, and the same rows {@link
+   * #findOpenDirectByPaymentInTx} already filters.
+   */
+  private BigDecimal openDirectRefundTotal(DSLContext txDsl, UUID orgId, UUID paymentId) {
+    return refundRepoFactory.create(txDsl).findByPaymentId(orgId, paymentId).stream()
+        .filter(r -> r.getStatus() != RefundStatus.CANCELLED)
+        .map(Refund::getAmount)
+        .reduce(BigDecimal.ZERO, BigDecimal::add);
+  }
+
+  /**
+   * The OWNER-approval gate, applied to an <b>aggregate</b> rather than to the single amount of one
+   * call. {@code total} is what the whole money source will have paid out once this refund exists —
+   * the sum of every live refund against one payment, or an invoice's cumulative credited total.
+   *
+   * <p>The single-amount shape this replaced was structurable: a MANAGER could split one
+   * above-threshold payout into N sub-threshold calls and never meet an OWNER. {@code
+   * OrderCancellationService} already gated on the sum for exactly this reason; the standalone
+   * refund and credit-note paths did not.
+   *
+   * <p><b>The trade-off, stated:</b> refunds that are legitimately separate over the life of one
+   * payment (or invoice) now <em>cumulate</em>, so a later small refund can be the one that crosses
+   * the bar and needs OWNER. That is the intended posture — the threshold is a ceiling on
+   * unattended payout per money source, not a per-API-call allowance.
+   */
+  private void requireApproval(
+      DSLContext txDsl,
+      UUID orgId,
+      BigDecimal total,
+      boolean callerIsOwnerOrAdmin,
+      String subject) {
+    BigDecimal threshold = orgThreshold(txDsl, orgId);
+    if (total.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
+      throw new AuthorizationException(
+          subject + total + " exceed approval threshold " + threshold + "; requires OWNER");
+    }
   }
 
   private void validateCreate(CreateCommand cmd) {

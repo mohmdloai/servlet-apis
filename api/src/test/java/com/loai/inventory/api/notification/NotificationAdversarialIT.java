@@ -7,6 +7,7 @@ import static com.loai.inventory.repository.generated.Tables.ORG;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -95,7 +96,7 @@ class NotificationAdversarialIT {
             + " notification, customer, org RESTART IDENTITY CASCADE");
   }
 
-  // ── Fake senders ────────────────────────────────────────────────────────────
+  // Fake senders
 
   /** Captures every message; never throws. */
   static final class CapturingSender implements EmailSender {
@@ -138,7 +139,7 @@ class NotificationAdversarialIT {
     }
   }
 
-  // ── 1. Recipient injection / mail-relay amplification (FIXED) ────────────────
+  // 1. Recipient injection / mail-relay amplification (FIXED)
 
   /**
    * The address guard rejects anything that is not a single valid bare address, closing the
@@ -170,7 +171,7 @@ class NotificationAdversarialIT {
     assertTrue(ex.getMessage().contains("non-single/invalid"), ex.getMessage());
   }
 
-  // ── 2. Poison-delivery: an out-of-contract sender fault is bounded (FIXED) ────
+  // 2. Poison-delivery: an out-of-contract sender fault is bounded (FIXED)
 
   /**
    * A sender that throws a non-{@link EmailException} RuntimeException must still advance the
@@ -251,7 +252,7 @@ class NotificationAdversarialIT {
     assertEquals("FAILED", deliveryStatus(delivery));
   }
 
-  // ── 3. Concurrency: two overlapping ticks must not double-send ───────────────
+  // 3. Concurrency: two overlapping ticks must not double-send
 
   /**
    * Two threads each run a full sweeper tick with a barrier-synchronised sender so both are
@@ -277,9 +278,13 @@ class NotificationAdversarialIT {
     Thread b = new Thread(tick, "tick-B");
     a.start();
     b.start();
-    // The loser blocks on the row lock; the winner blocks on the barrier. Break the barrier after a
-    // moment so the winner proceeds; the loser then wakes to a SENT row and skips.
+    // The winner holds the row lock and blocks in the barrier (inside send()). D4: the loser must
+    // SKIP LOCKED past that row and finish its tick immediately — it used to block for the whole
+    // SMTP round-trip, so a second delivery node spent its tick waiting instead of draining work.
     Thread.sleep(1500);
+    assertTrue(
+        !a.isAlive() || !b.isAlive(),
+        "the second tick must skip the locked row, not queue behind the in-flight send");
     barrier.reset();
     a.join(10_000);
     b.join(10_000);
@@ -292,16 +297,45 @@ class NotificationAdversarialIT {
     assertEquals("DISPATCHED", notificationStatus(nid));
   }
 
-  // ── 4. Expiry boundary + blank-email producer fault ──────────────────────────
+  // 4. Expiry boundary + blank-email producer fault
 
-  /** A blank customer email makes the producer path throw inside the (business) txn. */
+  /**
+   * D3: an unsendable customer email is a suppressed <em>channel</em>, not a failed business event.
+   * This used to throw inside the caller's business transaction — which meant a customer row with a
+   * blank email rolled back the order placement (or the PAID flip) that produced the notification,
+   * not merely the email. The notification is still recorded, the in-app leg still lands, no email
+   * delivery is queued, and it finalizes DISPATCHED — the same shape the opt-out path produces.
+   */
   @Test
-  void blankCustomerEmail_throwsAtProduce() {
+  void blankCustomerEmail_suppressesTheEmailLegAndCommits() {
     UUID org = createOrg("acme");
     UUID customer = createCustomer(org, "   "); // whitespace-only
-    NotificationService service = service(new CapturingSender(), 5);
+    CapturingSender sender = new CapturingSender();
+    NotificationService service = service(sender, 5);
 
-    assertThrows(IllegalStateException.class, () -> produce(service, org, customer, "SO-NOEMAIL"));
+    UUID notificationId = produce(service, org, customer, "SO-NOEMAIL");
+
+    assertNull(emailDeliveryId(notificationId), "no email delivery is queued");
+    assertEquals(1, inAppDeliveryCount(notificationId), "the in-app leg still lands");
+
+    // Draining changes nothing on the email side and the record ends terminal, not stuck PENDING.
+    service.dispatchPendingEmail(100);
+    service.dispatchPendingInApp(100);
+    assertTrue(sender.captured.isEmpty(), "nothing was sent");
+    assertEquals("DISPATCHED", notificationStatus(notificationId));
+  }
+
+  /**
+   * A <em>literally</em> null email is unreachable through this table — {@code customer.email} is
+   * {@code NOT NULL} (V2), so whitespace is the worst a row can carry, which is what the test above
+   * uses. The service still treats null and blank identically, since the model field is nullable in
+   * Java and other producers could hand one over; this pins that the DB is the reason we cannot
+   * exercise it, rather than leaving a silent gap.
+   */
+  @Test
+  void nullCustomerEmail_isNotStorable() {
+    UUID org = createOrg("acme");
+    assertThrows(RuntimeException.class, () -> createCustomer(org, null));
   }
 
   /** Two orders for one customer: each email is independently addressed — no cross-wiring. */
@@ -322,7 +356,7 @@ class NotificationAdversarialIT {
     assertEquals(List.of("New order SO-A", "New order SO-B"), subjects);
   }
 
-  // ── helpers ──────────────────────────────────────────────────────────────────
+  // helpers
 
   private static NotificationService service(EmailSender sender, int maxAttempts) {
     return new NotificationService(
@@ -374,6 +408,15 @@ class NotificationAdversarialIT {
         .set(CUSTOMER.EMAIL, email)
         .execute();
     return id;
+  }
+
+  private int inAppDeliveryCount(UUID notificationId) {
+    return dsl.fetchCount(
+        NOTIFICATION_DELIVERY,
+        NOTIFICATION_DELIVERY
+            .NOTIFICATION_ID
+            .eq(notificationId)
+            .and(NOTIFICATION_DELIVERY.CHANNEL.eq("in_app")));
   }
 
   private UUID emailDeliveryId(UUID notificationId) {

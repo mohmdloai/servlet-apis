@@ -82,7 +82,7 @@ public class CustomerAuthService {
   public record SessionResult(
       String accessToken, String refreshToken, long expiresIn, Customer customer) {}
 
-  // ── Bootstrap: request-code / verify-code ───────────────────────────────────
+  // Bootstrap: request-code / verify-code
 
   /**
    * Send a login code for {@code (orgSlug, email)} if — and only if — that pair maps to a real
@@ -179,7 +179,7 @@ public class CustomerAuthService {
     return issueSession(orgId, fresh, deviceInfo, sourceIp);
   }
 
-  // ── Session lifecycle ───────────────────────────────────────────────────────
+  // Session lifecycle
 
   private SessionResult issueSession(
       UUID orgId, Customer customer, String deviceInfo, String sourceIp) {
@@ -209,10 +209,38 @@ public class CustomerAuthService {
             .find(hash)
             .orElseThrow(
                 () -> {
-                  log.warn("Customer refresh token not found — possible reuse of a revoked token");
+                  // Proven reuse (the token was rotated away, so two holders exist) burns the whole
+                  // family and its outstanding access tokens; an ordinary unknown token just 401s.
+                  // A re-presentation within seconds of the rotation is neither — it is the portal
+                  // bounce route racing the page's own refresh over one cookie jar, and burning
+                  // the family there logs the shopper out everywhere for nothing. Same rule as the
+                  // staff plane — see AuthService#refresh.
+                  if (sessionStore.rotatedWithinGrace(hash)) {
+                    log.debug(
+                        "Customer refresh token re-presented inside the rotation grace window —"
+                            + " 401 only");
+                  } else {
+                    sessionStore
+                        .findRotatedFamily(hash)
+                        .ifPresent(
+                            ref -> {
+                              log.warn(
+                                  "Customer refresh-token reuse detected — revoking family {} of"
+                                      + " customer {} in org {}",
+                                  ref.familyId(),
+                                  ref.customerId(),
+                                  ref.orgId());
+                              sessionStore.revokeFamily(
+                                  ref.familyId(), ref.orgId(), ref.customerId());
+                              sessionStore.denyFamilyAccess(
+                                  ref.familyId(), customerJwtUtil.getAccessTtlMillis() / 1000);
+                            });
+                  }
                   return new AuthenticationException("Invalid refresh token");
                 });
-    sessionStore.revoke(hash);
+    // Rotate: retire the presented token behind a tombstone, so its next presentation is
+    // identifiable as reuse rather than as an anonymous bad token.
+    sessionStore.rotateAway(hash, data);
 
     UUID orgId = data.orgId();
     UUID customerId = data.customerId();
@@ -270,7 +298,7 @@ public class CustomerAuthService {
     return sessionStore.listSessions(orgId, customerId);
   }
 
-  // ── Filter passthroughs (fail-closed token_version + per-device kill) ────────
+  // Filter passthroughs (fail-closed token_version + per-device kill)
 
   public boolean isTokenVersionValid(UUID orgId, UUID customerId, int claimedVersion) {
     Optional<Integer> cached = sessionStore.getCachedTokenVersion(orgId, customerId);
@@ -281,7 +309,7 @@ public class CustomerAuthService {
     return sessionStore.isFamilyAccessRevoked(familyId);
   }
 
-  // ── helpers ─────────────────────────────────────────────────────────────────
+  // helpers
 
   private Org resolveActiveOrg(String orgSlug) {
     Org org =

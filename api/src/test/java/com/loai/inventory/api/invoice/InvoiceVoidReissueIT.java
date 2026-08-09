@@ -275,6 +275,64 @@ class InvoiceVoidReissueIT {
     assertEquals(newId, live.getId());
   }
 
+  /**
+   * D6 — a reissue can be the event that settles the order's last live invoice, and until now
+   * nothing rolled the order up for it: FULFILLED → CLOSED only ever ran on a delivery, and the
+   * goods here are already delivered. The corrected invoice auto-allocates the prepayment that
+   * arrived after delivery, lands PAID, and the order must follow it to CLOSED.
+   */
+  @Test
+  void reissue_thatFullyPaysTheReplacement_closesTheOrder() {
+    // Delivered with no prepayment: invoice ISSUED-unpaid (so it is still voidable) and the order
+    // parked at FULFILLED.
+    Fixture f = deliverUnpaidInvoice("100.00");
+    assertEquals("FULFILLED", orderStatus(f.orderId));
+
+    // The customer's transfer lands afterwards — unallocated, because there is no live invoice
+    // issuance left to consume it.
+    seedPayment(f.org, f.customer, f.orderId, "100.00");
+    assertEquals("FULFILLED", orderStatus(f.orderId), "money alone does not move the order");
+
+    Issued issued =
+        invoiceAdminService.reissue(
+            f.org,
+            f.invoiceId,
+            "wrong customer address on the document",
+            List.of(
+                new ReissueLine(
+                    f.productId,
+                    "widget (corrected)",
+                    10,
+                    new BigDecimal("10.00"),
+                    BigDecimal.ZERO)));
+
+    assertEquals("PAID", invoiceStatus(issued.invoice().getId()), "the replacement auto-allocated");
+    assertEquals("CLOSED", orderStatus(f.orderId), "the order follows its last live invoice");
+  }
+
+  /** The roll-up is conditional: a replacement that is still unpaid leaves the order FULFILLED. */
+  @Test
+  void reissue_thatLeavesTheReplacementUnpaid_doesNotCloseTheOrder() {
+    Fixture f = deliverUnpaidInvoice("100.00");
+    assertEquals("FULFILLED", orderStatus(f.orderId));
+
+    Issued issued =
+        invoiceAdminService.reissue(
+            f.org,
+            f.invoiceId,
+            "typo in the line description",
+            List.of(
+                new ReissueLine(
+                    f.productId,
+                    "widget (corrected)",
+                    10,
+                    new BigDecimal("10.00"),
+                    BigDecimal.ZERO)));
+
+    assertEquals("ISSUED", invoiceStatus(issued.invoice().getId()));
+    assertEquals("FULFILLED", orderStatus(f.orderId), "nothing was paid — nothing to close");
+  }
+
   /** Reissue can be chained: each correction voids the prior live invoice — many VOIDs coexist. */
   @Test
   void reissue_canBeChained() {
@@ -597,6 +655,14 @@ class InvoiceVoidReissueIT {
         .from(SALES_INVOICE)
         .where(SALES_INVOICE.ID.eq(id))
         .fetchOne(SALES_INVOICE.STATUS)
+        .getLiteral();
+  }
+
+  private String orderStatus(UUID orderId) {
+    return dsl.select(SALES_ORDER.STATUS)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ID.eq(orderId))
+        .fetchOne(SALES_ORDER.STATUS)
         .getLiteral();
   }
 

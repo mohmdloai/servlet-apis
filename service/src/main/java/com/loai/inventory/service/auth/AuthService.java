@@ -4,6 +4,7 @@ import com.loai.inventory.common.exception.AuthenticationException;
 import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.common.exception.TooManyAttemptsException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.security.JwtUtil;
 import com.loai.inventory.common.security.PasswordHasher;
@@ -39,18 +40,37 @@ public class AuthService {
   private final JwtUtil jwtUtil;
   private final ImpersonationEventRepository impersonationEventRepo;
   private final long impersonationTtlMillis;
+  private final LoginThrottle loginThrottle;
 
+  /** Without a {@link LoginThrottle}: per-account lockout off (tests, non-login call paths). */
   public AuthService(
       UserRepository userRepo,
       RefreshTokenStore refreshTokenStore,
       JwtUtil jwtUtil,
       ImpersonationEventRepository impersonationEventRepo,
       long impersonationTtlMillis) {
+    this(
+        userRepo,
+        refreshTokenStore,
+        jwtUtil,
+        impersonationEventRepo,
+        impersonationTtlMillis,
+        LoginThrottle.disabled());
+  }
+
+  public AuthService(
+      UserRepository userRepo,
+      RefreshTokenStore refreshTokenStore,
+      JwtUtil jwtUtil,
+      ImpersonationEventRepository impersonationEventRepo,
+      long impersonationTtlMillis,
+      LoginThrottle loginThrottle) {
     this.userRepo = userRepo;
     this.refreshTokenStore = refreshTokenStore;
     this.jwtUtil = jwtUtil;
     this.impersonationEventRepo = impersonationEventRepo;
     this.impersonationTtlMillis = impersonationTtlMillis;
+    this.loginThrottle = loginThrottle;
   }
 
   public record LoginResult(
@@ -66,16 +86,35 @@ public class AuthService {
   public LoginResult login(String email, String rawPassword, String deviceInfo, String sourceIp) {
     // Normalize the presented address the same way registration/admin-create store it (NFC +
     // lowercase + trim), so login is case-insensitive and matches the canonical stored value.
-    AppUser user =
-        userRepo
-            .findByEmail(Text.normalizeEmail(email))
-            .orElseThrow(() -> new AuthenticationException("Invalid email or password"));
+    String normalizedEmail = Text.normalizeEmail(email);
+
+    // Per-account lockout, checked before any lookup: the per-IP bucket does nothing against a
+    // distributed guess-one-account attack, and this counter is keyed on the address rather than a
+    // user id precisely so it cannot answer "does this account exist".
+    if (loginThrottle.isLocked(normalizedEmail)) {
+      log.warn("Login refused — account locked after repeated failures");
+      throw new TooManyAttemptsException(
+          "Too many failed sign-in attempts. Try again in a few minutes.",
+          loginThrottle.retryAfterSeconds(normalizedEmail));
+    }
+
+    Optional<AppUser> found = userRepo.findByEmail(normalizedEmail);
+    if (found.isEmpty()) {
+      // Spend the same bcrypt time a real account costs. Returning here immediately made an
+      // unknown address measurably faster than a known one — an enumeration oracle on a public,
+      // unauthenticated endpoint.
+      PasswordHasher.verifyDummy(rawPassword);
+      loginThrottle.recordFailure(normalizedEmail);
+      throw new AuthenticationException("Invalid email or password");
+    }
+    AppUser user = found.get();
     // no point doing crypto work (password hashing) for a disabled account.
     if (!user.isActive()) {
       throw new AuthenticationException("Account is disabled");
     }
 
     if (!PasswordHasher.verify(rawPassword, user.getPasswordHash())) {
+      loginThrottle.recordFailure(normalizedEmail);
       throw new AuthenticationException("Invalid email or password");
     }
 
@@ -85,6 +124,9 @@ public class AuthService {
       throw new AuthorizationException("Email not verified");
     }
 
+    // The credential was right: this account is not under attack from wherever this request came
+    // from, so it starts its next budget clean.
+    loginThrottle.clear(normalizedEmail);
     log.info("User logged in: id={} email={}", user.getId(), user.getEmail());
     return issueSession(user, deviceInfo, sourceIp);
   }
@@ -189,13 +231,41 @@ public class AuthService {
     Optional<RefreshTokenStore.TokenData> existing = refreshTokenStore.find(tokenHash);
 
     if (existing.isEmpty()) {
-      log.warn("Refresh token not found — possible reuse of revoked token");
+      // Not an active token. If it was rotated away, this is proven reuse — the legitimate holder
+      // and a thief are both presenting tokens from the same family and only one of them can have
+      // the current one. Burn the family (every device-token in it) and kill its outstanding access
+      // tokens, then 401. Without this the classic theft ordering wins: the thief refreshes first,
+      // the victim's stale token 401s, and the thief's fresh token is never touched.
+      //
+      // Unless the rotation was seconds ago, in which case this is a concurrent refresh, not
+      // theft: one cookie jar has several refreshers (two tabs, or a server-side bounce redirect
+      // overlapping an in-page 401), so the same token really can be presented twice. The loser
+      // still 401s — it has no fresh token to return — but revoking here would kill the winner's
+      // brand-new token and sign the user out everywhere over a benign race. See
+      // RefreshTokenStore#rotatedWithinGrace for the window and its trade-off.
+      if (refreshTokenStore.rotatedWithinGrace(tokenHash)) {
+        log.debug("Refresh token re-presented inside the rotation grace window — 401 only");
+      } else {
+        refreshTokenStore
+            .findRotatedFamily(tokenHash)
+            .ifPresent(
+                ref -> {
+                  log.warn(
+                      "Refresh-token reuse detected — revoking family {} of user {}",
+                      ref.familyId(),
+                      ref.userId());
+                  refreshTokenStore.revokeFamily(ref.familyId(), ref.userId());
+                  refreshTokenStore.denyFamilyAccess(ref.familyId(), accessTtlSeconds());
+                });
+      }
       throw new AuthenticationException("Invalid refresh token");
     }
 
     RefreshTokenStore.TokenData data = existing.get();
 
-    refreshTokenStore.revoke(tokenHash);
+    // Rotate: retire the presented token, leaving the tombstone that makes a later presentation of
+    // it identifiable as reuse rather than as an anonymous bad token.
+    refreshTokenStore.rotateAway(tokenHash, data);
 
     AppUser user =
         userRepo

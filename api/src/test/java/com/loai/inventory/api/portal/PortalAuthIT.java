@@ -252,7 +252,7 @@ class PortalAuthIT {
   // AC4: session security
 
   @Test
-  void refreshRotates_andReuseOfOldTokenIsRejected() {
+  void refreshRotates_andTheNewTokenKeepsWorking() {
     String slug = createOrg();
     createCustomer(slug, "nadia@acme.test");
     CustomerAuthService.SessionResult s1 = login(slug, "nadia@acme.test");
@@ -261,11 +261,89 @@ class PortalAuthIT {
     assertNotNull(s2.refreshToken());
     assertFalse(s1.refreshToken().equals(s2.refreshToken()), "refresh rotates the token");
 
-    // Reusing the rotated-away token is a hard 401.
+    // The rotated-current token still works — rotation alone revokes nothing.
+    assertNotNull(authService.refresh(s2.refreshToken(), "1.2.3.4"));
+  }
+
+  /**
+   * D2: reuse of a rotated-away token is proof that two holders exist, so the whole family dies —
+   * including the token the *first* presenter (in a theft, the attacker) just minted. Previously
+   * this only logged and 401'd, which left the thief's token live and made reuse detection a no-op.
+   *
+   * <p>Proof, though, only once the concurrent-refresh grace window has closed — hence the key
+   * surgery below, which does deterministically what the {@code crt:rotated-recent:} TTL does ten
+   * seconds later.
+   */
+  @Test
+  void reuseOfRotatedToken_burnsTheWholeFamily() {
+    String slug = createOrg();
+    createCustomer(slug, "nadia@acme.test");
+    CustomerAuthService.SessionResult s1 = login(slug, "nadia@acme.test");
+    UUID fam =
+        UUID.fromString(customerJwtUtil.parseAndVerify(s1.accessToken()).get("fam", String.class));
+
+    // The attacker refreshes first: s1 → s2.
+    CustomerAuthService.SessionResult s2 = authService.refresh(s1.refreshToken(), "9.9.9.9");
+
+    elapseGraceWindow(s1.refreshToken());
+
+    // The real customer then presents the stale s1.
     assertThrows(
         AuthenticationException.class, () -> authService.refresh(s1.refreshToken(), "1.2.3.4"));
-    // The rotated-current token still works.
-    assertNotNull(authService.refresh(s2.refreshToken(), "1.2.3.4"));
+
+    // s2 must be dead too, and the family's outstanding access tokens denylisted.
+    assertThrows(
+        AuthenticationException.class,
+        () -> authService.refresh(s2.refreshToken(), "9.9.9.9"),
+        "the family is burned on proven reuse — the attacker's fresh token included");
+    assertTrue(authService.isDeviceRevoked(fam), "the family's access tokens are killed too");
+  }
+
+  /**
+   * The benign twin, and why the window exists: the portal's server-side bounce route can refresh
+   * while the page's own client is refreshing from the same cookie jar. The loser 401s — but the
+   * winner's seconds-old token has to keep working, or a shopper is signed out of every device by a
+   * race that involved no attacker at all.
+   */
+  @Test
+  void concurrentRefresh_401sTheLoserButLeavesTheWinnersSessionAlive() {
+    String slug = createOrg();
+    createCustomer(slug, "nadia@acme.test");
+    CustomerAuthService.SessionResult s1 = login(slug, "nadia@acme.test");
+    UUID fam =
+        UUID.fromString(customerJwtUtil.parseAndVerify(s1.accessToken()).get("fam", String.class));
+
+    CustomerAuthService.SessionResult s2 = authService.refresh(s1.refreshToken(), "1.2.3.4");
+
+    // Inside the real window — no sleep, no key surgery.
+    assertThrows(
+        AuthenticationException.class, () -> authService.refresh(s1.refreshToken(), "1.2.3.4"));
+
+    assertNotNull(
+        authService.refresh(s2.refreshToken(), "1.2.3.4"),
+        "the winner's fresh token must survive the loser's 401");
+    assertFalse(authService.isDeviceRevoked(fam), "a benign race must not denylist the device");
+  }
+
+  /** Expire the grace marker for this token — the deterministic stand-in for waiting it out. */
+  private static void elapseGraceWindow(String rawRefreshToken) {
+    try (var jedis = jedisPool.getResource()) {
+      jedis.del("crt:rotated-recent:" + CustomerSessionStore.hashRefresh(rawRefreshToken));
+    }
+  }
+
+  /** An unknown refresh token is not evidence — it 401s and must revoke nothing. */
+  @Test
+  void unknownRefreshToken_401sButLeavesTheSessionAlone() {
+    String slug = createOrg();
+    createCustomer(slug, "nadia@acme.test");
+    CustomerAuthService.SessionResult s = login(slug, "nadia@acme.test");
+
+    assertThrows(
+        AuthenticationException.class,
+        () -> authService.refresh(UUID.randomUUID().toString(), "1.2.3.4"));
+
+    assertNotNull(authService.refresh(s.refreshToken(), "1.2.3.4"), "the live session survives");
   }
 
   @Test

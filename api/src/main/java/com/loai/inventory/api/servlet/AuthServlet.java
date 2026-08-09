@@ -14,6 +14,7 @@ import com.loai.inventory.api.dto.TokenPasswordRequest;
 import com.loai.inventory.api.dto.VerifyEmailRequest;
 import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.common.exception.AppException;
+import com.loai.inventory.common.exception.TooManyAttemptsException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.SecurityContext;
@@ -74,7 +75,7 @@ public class AuthServlet extends HttpServlet {
         }
       }
     } catch (AppException e) {
-      writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+      writeAppError(resp, e);
     } catch (Exception e) {
       log.error("Unhandled exception in AuthServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));
@@ -92,7 +93,7 @@ public class AuthServlet extends HttpServlet {
         writeJson(resp, 404, ApiError.of(404, "Unknown auth endpoint"));
       }
     } catch (AppException e) {
-      writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+      writeAppError(resp, e);
     } catch (Exception e) {
       log.error("Unhandled exception in AuthServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));
@@ -119,7 +120,7 @@ public class AuthServlet extends HttpServlet {
         writeJson(resp, 404, ApiError.of(404, "Unknown auth endpoint"));
       }
     } catch (AppException e) {
-      writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+      writeAppError(resp, e);
     } catch (Exception e) {
       log.error("Unhandled exception in AuthServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));
@@ -344,6 +345,22 @@ public class AuthServlet extends HttpServlet {
       // Empty/truncated/malformed body — a 400, not an unhandled 500.
       throw new ValidationException("request body is required and must be valid JSON");
     }
+  }
+
+  /**
+   * The one place an {@link AppException} becomes a response, so the error envelope stays identical
+   * across the three verbs while a status that carries extra protocol information can add it.
+   *
+   * <p>Today that is {@code Retry-After} on the per-account login lockout: the body shape is
+   * untouched — still {@code {status, error, message}} — because the useful number is a header, not
+   * a field. The 429 without it is honest but useless: "too many attempts" with no way to know
+   * whether that means seconds or a quarter of an hour, so every client has to invent a guess.
+   */
+  private void writeAppError(HttpServletResponse resp, AppException e) throws IOException {
+    if (e instanceof TooManyAttemptsException tooMany) {
+      resp.setHeader("Retry-After", String.valueOf(tooMany.getRetryAfterSeconds()));
+    }
+    writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
   }
 
   private void writeJson(HttpServletResponse resp, int status, Object body) throws IOException {

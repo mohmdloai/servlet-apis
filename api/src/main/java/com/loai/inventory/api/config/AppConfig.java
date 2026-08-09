@@ -140,6 +140,7 @@ import com.loai.inventory.service.auth.CredentialTokenService;
 import com.loai.inventory.service.auth.CustomerAuthService;
 import com.loai.inventory.service.auth.CustomerOtpStore;
 import com.loai.inventory.service.auth.CustomerSessionStore;
+import com.loai.inventory.service.auth.LoginThrottle;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import com.loai.inventory.service.document.DocumentRenderService;
 import com.loai.inventory.service.document.PresignedLogoSource;
@@ -353,6 +354,7 @@ public class AppConfig {
           "CUSTOMER_JWT_SECRET env var is required and must be at least 32 bytes after Base64"
               + " decode");
     }
+    requireDistinctSigningSecrets(jwtSecret, customerJwtSecret);
     long customerRefreshTtlDays = parseLong(System.getenv("CUSTOMER_REFRESH_TTL_DAYS"), 30L);
     this.customerRefreshMaxAgeSeconds = (int) (customerRefreshTtlDays * 24 * 3600);
     this.corsAllowedOrigins = resolveAllowedOrigins();
@@ -435,7 +437,10 @@ public class AppConfig {
             refreshTokenStore,
             jwtUtil,
             impersonationEventRepository,
-            impersonationTtl);
+            impersonationTtl,
+            // Per-account failed-login lockout — the half of login throttling the per-IP filter
+            // cannot cover (a distributed attack on one account never fills one IP's bucket).
+            new LoginThrottle(jedisPool));
     // Base URL for emailed CUSTOMER links (order view, unsubscribe — MagicLinkService below):
     // the storefront app in prod.
     String publicBaseUrl = getenvOrDefault("PUBLIC_BASE_URL", "http://localhost:8080");
@@ -940,11 +945,53 @@ public class AppConfig {
   }
 
   /**
-   * The CORS_ALLOWED_ORIGINS allowlist (same default as CorsFilter) — trimmed, for the portal CSRF
-   * Origin check.
+   * Fail fast when the two auth planes are signed with the <em>same</em> key. Presence and length
+   * are already enforced (here and in {@link JwtUtil}); this is the third property the
+   * customer/staff isolation rests on — a {@code CUSTOMER_JWT_SECRET} copy-pasted from {@code
+   * JWT_SECRET} silently collapses the cryptographic half of that separation, leaving only the
+   * {@code aud} claim between a customer token and the staff plane. Defense in depth, and one
+   * {@code if}.
+   *
+   * <p>Compared on the <b>decoded bytes</b>, not the strings: two Base64 spellings of one key (a
+   * padding or line-break variant) are the same key and must be rejected the same way. An
+   * undecodable value is left alone — {@link JwtUtil}'s constructor owns that message.
+   */
+  static void requireDistinctSigningSecrets(String staffSecret, String customerSecret) {
+    byte[] staff = decodeOrNull(staffSecret);
+    byte[] customer = decodeOrNull(customerSecret);
+    if (staff == null || customer == null) {
+      return;
+    }
+    if (java.security.MessageDigest.isEqual(staff, customer)) {
+      throw new IllegalStateException(
+          "CUSTOMER_JWT_SECRET must differ from JWT_SECRET — the customer portal and the staff"
+              + " plane must not share a signing key");
+    }
+  }
+
+  private static byte[] decodeOrNull(String base64) {
+    try {
+      return java.util.Base64.getDecoder().decode(base64);
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
+  }
+
+  /**
+   * The one CORS_ALLOWED_ORIGINS allowlist. Consumed by <em>both</em> the portal's CSRF {@code
+   * Origin} check and {@link com.loai.inventory.api.filter.CorsFilter} — which used to re-parse the
+   * env var itself, untrimmed, and so disagreed with this set on any value written with a space
+   * after the comma.
    */
   private static java.util.Set<String> resolveAllowedOrigins() {
-    String env = System.getenv("CORS_ALLOWED_ORIGINS");
+    return parseAllowedOrigins(System.getenv("CORS_ALLOWED_ORIGINS"));
+  }
+
+  /**
+   * Split a comma-separated origin list, trimming each entry and dropping empties; a blank/absent
+   * value yields the dev default. Pure (no environment access) so the parsing rule is testable.
+   */
+  public static java.util.Set<String> parseAllowedOrigins(String env) {
     if (env == null || env.isBlank()) {
       return java.util.Set.of("http://localhost:3000", "http://localhost:5173");
     }

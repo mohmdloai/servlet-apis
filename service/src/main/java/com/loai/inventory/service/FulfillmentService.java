@@ -527,23 +527,22 @@ public final class FulfillmentService {
                   txDsl, orgId, order, fulfillmentId, customer, specs, now);
 
           // (d) Order roll-up: FULFILLED when every line is delivered; CLOSED when all invoices
-          // PAID.
+          // PAID. The transitions live in OrderRollUp, shared with the invoice-reissue path —
+          // delivery is not the only event that can settle an order's last live invoice.
           boolean wasFulfilling = order.getStatus() == OrderStatus.FULFILLING;
-          maybeRollUpOrder(txDsl, orgId, order, orderLines, fulfillmentRepo, orderRepo, now);
+          OrderRollUp.afterDelivery(
+              txDsl, orgId, order, orderLines, fulfillmentRepo, orderRepo, invoiceService, now);
 
           // (e) Review-request notification (roadmap item 1): fire once per order, on the
           // FULFILLING → FULFILLED|CLOSED edge this txn drew — so a multi-shipment order fires only
           // when its last line delivers, and a partial delivery (stays FULFILLING) never fires. The
-          // in-store sale never reaches here (no FULFILLING roll-up). Guarded on an emailable
-          // customer: notify()'s email leg throws on an email-less customer, which would roll back
-          // the whole deliver txn.
+          // in-store sale never reaches here (no FULFILLING roll-up). An email-less customer used
+          // to be excluded here too, because notify()'s email leg threw and would have rolled back
+          // the whole deliver txn (D3). It no longer throws — it suppresses that one channel — so
+          // such a customer now gets the in-app feed row like everyone else.
           boolean nowComplete =
               order.getStatus() == OrderStatus.FULFILLED || order.getStatus() == OrderStatus.CLOSED;
-          if (wasFulfilling
-              && nowComplete
-              && customer != null
-              && customer.getEmail() != null
-              && !customer.getEmail().isBlank()) {
+          if (wasFulfilling && nowComplete && customer != null) {
             MagicLinkService.OrderViewLink reviewLink =
                 magicLinkService.issueOrderViewLink(
                     txDsl, orgId, order.getCustomerId(), order.getId(), now);
@@ -1137,7 +1136,7 @@ public final class FulfillmentService {
     return new FulfillmentView(fulfillment, fulfillmentLines);
   }
 
-  // ─────────────────────── Reads (stories/fulfillment_reads.md) ───────────────────────
+  // Reads (stories/fulfillment_reads.md)
 
   /** One page of the fulfillment queue/ledger plus the filtered total (for tab badges). */
   public record FulfillmentPage(List<FulfillmentView> items, long total) {}
@@ -1279,41 +1278,6 @@ public final class FulfillmentService {
               ol.getTaxRate()));
     }
     return InvoiceService.grandTotalOf(specs);
-  }
-
-  /**
-   * Roll the order forward after an online delivery: FULFILLING → FULFILLED once every order line's
-   * delivered quantity equals its ordered quantity, then FULFILLED → CLOSED once every invoice for
-   * the order is PAID. Persists only if something changed.
-   */
-  private void maybeRollUpOrder(
-      DSLContext txDsl,
-      UUID orgId,
-      SalesOrder order,
-      Map<UUID, SalesOrderLine> orderLines,
-      FulfillmentRepository fulfillmentRepo,
-      SalesOrderRepository orderRepo,
-      OffsetDateTime now) {
-    if (order.getStatus() != OrderStatus.FULFILLING) {
-      return; // e.g. already terminal; nothing to roll up
-    }
-    Map<UUID, Integer> delivered = fulfillmentRepo.sumDeliveredQtyByOrderLine(order.getId());
-    boolean allDelivered = true;
-    for (SalesOrderLine ol : orderLines.values()) {
-      if (delivered.getOrDefault(ol.getId(), 0) < ol.getQuantity()) {
-        allDelivered = false;
-        break;
-      }
-    }
-    if (!allDelivered) {
-      return; // partial delivery: stays FULFILLING
-    }
-
-    order.markFulfilled(now);
-    if (invoiceService.allLiveInvoicesPaid(txDsl, orgId, order.getId())) {
-      order.close(now);
-    }
-    orderRepo.updateFulfillmentState(order);
   }
 
   private void requireFulfillable(SalesOrder order) {

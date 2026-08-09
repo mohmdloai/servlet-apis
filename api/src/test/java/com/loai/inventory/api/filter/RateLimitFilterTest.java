@@ -2,9 +2,10 @@ package com.loai.inventory.api.filter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -17,10 +18,18 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
+import redis.clients.jedis.CommandArguments;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.Protocol;
+import redis.clients.jedis.args.Rawable;
+import redis.clients.jedis.params.SetParams;
 
 /**
  * Unit coverage for {@link RateLimitFilter}'s public-surface bucketing and client-IP resolution
@@ -30,7 +39,7 @@ import redis.clients.jedis.JedisPool;
  */
 class RateLimitFilterTest {
 
-  // ── bucket selection ──────────────────────────────────────────────────────
+  // bucket selection
 
   @Test
   void postCheckout_selectsCheckoutBucketAndLimit() throws Exception {
@@ -40,8 +49,7 @@ class RateLimitFilterTest {
 
     f.filter.doFilter(f.request, f.response, f.chain);
 
-    verify(f.jedis).incr("rl:pub-checkout:1.1.1.1");
-    verify(f.jedis).expire("rl:pub-checkout:1.1.1.1", 60);
+    verifyTtlThenCount(f, "rl:pub-checkout:1.1.1.1");
     verify(f.chain).doFilter(f.request, f.response);
   }
 
@@ -83,7 +91,7 @@ class RateLimitFilterTest {
     verify(refresh.jedis).incr("rl:refresh:9.9.9.9");
   }
 
-  // ── self-serve auth buckets (story 87 — previously fail-open) ─────────────
+  // self-serve auth buckets (story 87 — previously fail-open)
 
   @Test
   void register_selectsItsOwnBucket_andPassesUnderLimit() throws Exception {
@@ -93,8 +101,7 @@ class RateLimitFilterTest {
 
     f.filter.doFilter(f.request, f.response, f.chain);
 
-    verify(f.jedis).incr("rl:auth-register:4.4.4.4");
-    verify(f.jedis).expire("rl:auth-register:4.4.4.4", 60);
+    verifyTtlThenCount(f, "rl:auth-register:4.4.4.4");
     verify(f.chain).doFilter(f.request, f.response);
   }
 
@@ -109,8 +116,7 @@ class RateLimitFilterTest {
 
     f.filter.doFilter(f.request, f.response, f.chain);
 
-    verify(f.jedis).incr("rl:pub-coupon:6.6.6.6");
-    verify(f.jedis).expire("rl:pub-coupon:6.6.6.6", 60);
+    verifyTtlThenCount(f, "rl:pub-coupon:6.6.6.6");
     verify(f.jedis, never()).incr("rl:pub-read:6.6.6.6");
     verify(f.chain).doFilter(f.request, f.response);
   }
@@ -178,7 +184,7 @@ class RateLimitFilterTest {
     }
   }
 
-  // ── counter mechanics ──────────────────────────────────────────────────────
+  // counter mechanics
 
   @Test
   void firstHit_setsTtl_underLimit_passesThrough() throws Exception {
@@ -188,7 +194,7 @@ class RateLimitFilterTest {
 
     f.filter.doFilter(f.request, f.response, f.chain);
 
-    verify(f.jedis).expire("rl:pub-read:1.1.1.1", 60);
+    verifyTtlThenCount(f, "rl:pub-read:1.1.1.1");
     verify(f.chain).doFilter(f.request, f.response);
     verify(f.response, never()).setStatus(429);
   }
@@ -203,7 +209,8 @@ class RateLimitFilterTest {
 
     verify(f.response).setStatus(429);
     verify(f.chain, never()).doFilter(f.request, f.response);
-    verify(f.jedis, never()).expire(eq("rl:pub-checkout:1.1.1.1"), anyInt());
+    // The window key still gets its TTL — the counter is written expiring-first, always.
+    verify(f.jedis).set(eq("rl:pub-checkout:1.1.1.1"), eq("0"), any(SetParams.class));
     assertTrue(f.body().contains("Too many requests"));
   }
 
@@ -217,7 +224,7 @@ class RateLimitFilterTest {
     verify(f.response).setStatus(429);
   }
 
-  // ── client-IP resolution ────────────────────────────────────────────────────
+  // client-IP resolution
 
   @Test
   void trustProxyFalse_ignoresXff_usesRemoteAddr() throws Exception {
@@ -255,7 +262,36 @@ class RateLimitFilterTest {
     assertEquals("rl:pub-read:10.0.0.1", f.keyCaptor.getValue());
   }
 
-  // ── fixture ────────────────────────────────────────────────────────────────
+  /**
+   * The window counter is written <b>TTL first</b>: {@code SET key 0 NX EX 60} then {@code INCR}.
+   * The old order (INCR, then EXPIRE only when the counter came back 1) leaves a window in which a
+   * crash between the two commands strands a key with no expiry — and a fixed-window counter that
+   * never expires blocks that IP permanently. {@code NX} is what stops the TTL write from resetting
+   * a window that is already running. Order matters, hence {@link org.mockito.InOrder}.
+   */
+  private static void verifyTtlThenCount(Fixture f, String key) {
+    ArgumentCaptor<SetParams> params = ArgumentCaptor.forClass(SetParams.class);
+    InOrder order = inOrder(f.jedis);
+    order.verify(f.jedis).set(eq(key), eq("0"), params.capture());
+    order.verify(f.jedis).incr(key);
+    assertEquals(
+        render(SetParams.setParams().nx().ex(60)),
+        render(params.getValue()),
+        "the TTL write must be NX (never resets a live window) with the 60s window");
+  }
+
+  /** The wire tokens a {@link SetParams} contributes — it has no {@code equals}. */
+  private static List<String> render(SetParams params) {
+    CommandArguments args = new CommandArguments(Protocol.Command.SET);
+    args.addParams(params);
+    List<String> tokens = new ArrayList<>();
+    for (Rawable raw : args) {
+      tokens.add(new String(raw.getRaw(), StandardCharsets.UTF_8));
+    }
+    return tokens;
+  }
+
+  // fixture
 
   private static final class Fixture {
     final JedisPool pool = mock(JedisPool.class);
