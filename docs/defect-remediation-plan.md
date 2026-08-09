@@ -177,16 +177,44 @@ is finalized DISPATCHED.
 
 ## D4 — SMTP has no timeouts and the delivery row lock is held across the send · **S3** · S (+ M follow-up)
 
-> **PARTLY FIXED** (story 141). Shipped: the three timeouts (`SmtpTimeoutConfigTest`), and
+> **FIXED** across two stories — 141 (timeouts + `SKIP LOCKED`) and 144 (send outside the txn).
+> Both halves are recorded below; the middle block is the state between them, kept because it is the
+> reasoning that deferred the second half deliberately rather than dropping it.
+>
+> **Half one** (story 141). Shipped: the three timeouts (`SmtpTimeoutConfigTest`), and
 > `FOR UPDATE **SKIP LOCKED**` on the per-delivery claim so a second tick moves on instead of blocking
 > for the winner's whole round-trip (`NotificationAdversarialIT.concurrentTicks_sendExactlyOnce` now
 > asserts the loser has finished while the winner is still sending).
 >
-> **Still open — the send is still inside the txn.** Moving it out needs a claimed state
+> **Was still open at that point — the send was inside the txn.** Moving it out needs a claimed state
 > (`PENDING → SENDING`: a migration against the `status` CHECK) plus a lease/reaper for rows stranded
 > mid-send by a crash — a new failure mode to design, not a mechanical change. With the lock hold now
 > bounded at ~25 s and losers no longer serializing, this is a smaller risk than it was; it is left as
 > a deliberate decision rather than done badly.
+>
+> **Half two — DONE** (story 144). The send now runs outside the delivery transaction. **V78** adds a
+> claimed state — `SENDING` on the status CHECK plus `claimed_at` — and dispatch became three steps:
+> claim (`PENDING → SENDING`, short txn, commits at once), send (no transaction, no connection, no
+> row lock), settle (`SENT` / back to `PENDING` / terminal `FAILED`, short txn). From the claim
+> onward it is the row's *state*, not a held lock, that keeps other workers off it.
+>
+> The new failure mode the plan predicted is handled rather than ignored: a worker that dies between
+> claim and settle leaves the row `SENDING`, invisible to a drain that only looks for `PENDING`, so
+> `reapStrandedEmail` returns claims older than a **120 s lease** to the queue (≈5× the ~25 s the
+> SMTP timeouts bound a send at) and the sweeper tick reaps before it drains. A stranded claim
+> **spends an attempt**, so a message that reliably kills the process cannot be reclaimed forever.
+>
+> **The delivery guarantee is unchanged — at-least-once.** A crash after the provider accepted but
+> before the settle commits re-sends; the old code had the identical window between `send()` and its
+> commit. The window moved, it did not open.
+>
+> Tests: `NotificationAdversarialIT.sendRunsOutsideTheTransaction_theRowIsClaimedButUnlocked`
+> asserts `SENDING` **and** that `FOR UPDATE NOWAIT` from an independent connection succeeds while
+> the provider call is in flight — the direct proof, since NOWAIT throws if anyone holds the row —
+> plus `aStrandedClaimIsReturnedToTheQueue` (including that a claim *inside* its lease is left
+> alone) and `aStrandedClaimOutOfAttemptsFailsTerminally`. `concurrentTicks_sendExactlyOnce` passes
+> unchanged: what excludes the loser moved from `SKIP LOCKED` to the `SENDING` state, and the
+> observable guarantee is the same.
 
 **Symptom.** `mail.properties` sets no connect/read/write timeout, and `dispatchOneEmail` holds
 `SELECT … FOR UPDATE` on the delivery row **plus** a pooled DB connection for the entire SMTP
@@ -536,7 +564,7 @@ it is what makes this change small rather than five-fold.
 | D2 | Refresh-reuse doesn't revoke family | S1 | M | M1 | **fixed** |
 | D7 | Distinct-secret not asserted at boot | S1 | S | M1 | **fixed** |
 | D3 | Null-email customer poisons business txn | S2 | S | M2 | **fixed** |
-| D4 | SMTP no timeouts + lock held across send | S3 | S (+M) | M2 | **partly** — timeouts + SKIP LOCKED done; send-outside-txn open |
+| D4 | SMTP no timeouts + lock held across send | S3 | S (+M) | M2 | **fixed** — timeouts + SKIP LOCKED (story 141), send-outside-txn + lease/reaper (story 144) |
 | D5 | Online duplicate placement → 500 not replay | S2 | S | M2 | **fixed** |
 | D6 | Reissue leaves order FULFILLED-not-CLOSED | S2 | S | M3 | **fixed** |
 | D8 | CORS origin parsing duplicated/untrimmed | S3 | S | M3 | **fixed** |

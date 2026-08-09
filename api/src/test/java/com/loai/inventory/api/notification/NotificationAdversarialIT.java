@@ -4,6 +4,7 @@ import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY;
 import static com.loai.inventory.repository.generated.Tables.ORG;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -26,12 +27,16 @@ import com.loai.inventory.service.email.SmtpEmailSender;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import jakarta.mail.Session;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
 import org.flywaydb.core.Flyway;
 import org.jooq.DSLContext;
 import org.jooq.SQLDialect;
@@ -278,9 +283,11 @@ class NotificationAdversarialIT {
     Thread b = new Thread(tick, "tick-B");
     a.start();
     b.start();
-    // The winner holds the row lock and blocks in the barrier (inside send()). D4: the loser must
-    // SKIP LOCKED past that row and finish its tick immediately — it used to block for the whole
-    // SMTP round-trip, so a second delivery node spent its tick waiting instead of draining work.
+    // The winner is blocked in the barrier inside send(). The loser must finish its tick at once
+    // rather than queue behind the round-trip. What excludes it changed with the D4 follow-up —
+    // the winner no longer holds a lock during send, so the loser is turned away by the row's
+    // SENDING *state* instead of by SKIP LOCKED — and the observable guarantee is identical, which
+    // is why this test did not have to change.
     Thread.sleep(1500);
     assertTrue(
         !a.isAlive() || !b.isAlive(),
@@ -295,6 +302,124 @@ class NotificationAdversarialIT {
     // The P5 in_app feed leg is also pending — drain it before the parent can finalize.
     service.dispatchPendingInApp(100);
     assertEquals("DISPATCHED", notificationStatus(nid));
+  }
+
+  // D4 follow-up: the send no longer runs inside the delivery transaction
+
+  /**
+   * The point of the claimed state, asserted directly: while the provider call is in flight the row
+   * is <b>SENDING and not locked</b>.
+   *
+   * <p>Before this, {@code send()} ran inside the transaction that had the row under {@code FOR
+   * UPDATE}, so a hung peer pinned the row lock and a pooled DB connection for the whole round-trip
+   * — bounded at ~25 s by the D4 timeouts, but still a slice of the pool per stuck message, and the
+   * reason a second delivery node was never safe to run. {@code FOR UPDATE NOWAIT} from an
+   * independent connection is the honest test: it throws if anyone holds the row, so it passing is
+   * proof the transaction really was committed and released before the send began.
+   */
+  @Test
+  void sendRunsOutsideTheTransaction_theRowIsClaimedButUnlocked() throws Exception {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "nadia@acme.test");
+    CountDownLatch inSend = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    EmailSender blocking =
+        m -> {
+          inSend.countDown();
+          try {
+            release.await(10, TimeUnit.SECONDS);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          }
+        };
+    NotificationService service = service(blocking, 5);
+    UUID nid = produce(service, org, customer, "SO-UNLOCKED");
+    UUID delivery = emailDeliveryId(nid);
+
+    Thread tick = new Thread(() -> service.dispatchPendingEmail(100), "tick");
+    tick.start();
+    assertTrue(inSend.await(10, TimeUnit.SECONDS), "the sender was reached");
+
+    // The claim committed: visible to everyone, from a different connection.
+    assertEquals("SENDING", deliveryStatus(delivery), "the row is claimed while the send is open");
+
+    // And nothing holds it. NOWAIT throws instead of blocking if a lock is outstanding.
+    assertDoesNotThrow(
+        () ->
+            dsl.transaction(
+                cfg ->
+                    DSL.using(cfg)
+                        .selectFrom(NOTIFICATION_DELIVERY)
+                        .where(NOTIFICATION_DELIVERY.ID.eq(delivery))
+                        .forUpdate()
+                        .noWait()
+                        .fetch()),
+        "no transaction may hold the delivery row while SMTP is in flight");
+
+    release.countDown();
+    tick.join(10_000);
+    assertEquals("SENT", deliveryStatus(delivery));
+    assertEquals(1, attempts(delivery), "one claim, one attempt");
+  }
+
+  /**
+   * The other half of the lease. A worker that dies between claiming and settling leaves the row
+   * SENDING, and the PENDING drain never looks at it — so without the reaper that is a permanent
+   * silent loss, which is exactly the new failure mode this state introduces.
+   */
+  @Test
+  void aStrandedClaimIsReturnedToTheQueue() {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "nadia@acme.test");
+    CapturingSender sender = new CapturingSender();
+    NotificationService service = service(sender, 5);
+    UUID nid = produce(service, org, customer, "SO-STRANDED");
+    UUID delivery = emailDeliveryId(nid);
+
+    // Simulate the crash: claimed, never settled, and the claim is now older than the lease.
+    strandAsSending(delivery, OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(10));
+    assertEquals("SENDING", deliveryStatus(delivery));
+
+    // A lease that has not elapsed must NOT reap — an in-flight send is not a stranded one.
+    service.reapStrandedEmail(3600, 100);
+    assertEquals("SENDING", deliveryStatus(delivery), "a claim inside its lease is left alone");
+
+    service.reapStrandedEmail(60, 100);
+    assertEquals("PENDING", deliveryStatus(delivery), "past the lease it rejoins the queue");
+    assertEquals(
+        1, attempts(delivery), "the dead claim spent an attempt — else a poison row loops");
+
+    // And it really is deliverable again.
+    service.dispatchPendingEmail(100);
+    assertEquals("SENT", deliveryStatus(delivery));
+    assertEquals(1, sender.captured.size());
+  }
+
+  /** A row that strands until its budget is gone fails terminally rather than cycling forever. */
+  @Test
+  void aStrandedClaimOutOfAttemptsFailsTerminally() {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "nadia@acme.test");
+    NotificationService service = service(new CapturingSender(), 2);
+    UUID nid = produce(service, org, customer, "SO-POISON");
+    UUID delivery = emailDeliveryId(nid);
+
+    strandAsSending(delivery, OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(10));
+    service.reapStrandedEmail(60, 100); // attempts 0 -> 1, back to PENDING
+    assertEquals("PENDING", deliveryStatus(delivery));
+
+    strandAsSending(delivery, OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(10));
+    service.reapStrandedEmail(60, 100); // attempts 1 -> 2 == the budget
+    assertEquals("FAILED", deliveryStatus(delivery), "the retry budget bounds stranding too");
+  }
+
+  /** Force a delivery into the state a crashed worker would leave behind. */
+  private void strandAsSending(UUID deliveryId, OffsetDateTime claimedAt) {
+    dsl.update(NOTIFICATION_DELIVERY)
+        .set(NOTIFICATION_DELIVERY.STATUS, "SENDING")
+        .set(NOTIFICATION_DELIVERY.CLAIMED_AT, claimedAt)
+        .where(NOTIFICATION_DELIVERY.ID.eq(deliveryId))
+        .execute();
   }
 
   // 4. Expiry boundary + blank-email producer fault

@@ -446,46 +446,162 @@ public class NotificationService {
     return new DeliverySummary(ids.size(), sent, retried, failed, skipped);
   }
 
-  /** Dispatch one email delivery and report what happened (see {@link DeliveryOutcome}). */
+  /** What a claim produced: the row as claimed plus the frozen content to hand the provider. */
+  private record ClaimedEmail(
+      NotificationDelivery delivery, NotificationRepository.EmailDeliveryContent content) {}
+
+  /**
+   * Dispatch one email delivery in <b>three</b> steps — claim, send, settle — where only the first
+   * and last touch the database (D4 follow-up).
+   *
+   * <p>It used to be one transaction wrapping all three, which meant the SMTP round-trip ran
+   * holding the delivery row's lock <em>and</em> a pooled connection. With the timeouts added in D4
+   * that is bounded at ~25 s rather than forever, but a handful of slow peers still pins a
+   * meaningful slice of the pool, and it is the reason a second delivery node was never a safe
+   * thing to run.
+   *
+   * <p>The claim is what makes the split possible: {@code PENDING → SENDING} commits immediately,
+   * so from then on it is the row's <em>state</em>, not a held lock, that keeps other workers off
+   * it.
+   *
+   * <p><b>The delivery guarantee is unchanged: at-least-once.</b> A crash after the provider
+   * accepted the message but before the settle commits leaves the row SENDING; the reaper returns
+   * it to PENDING and it sends again. That window existed before too — the old code could crash
+   * between {@code send()} and the transaction commit and re-send next tick — so this moves the
+   * window, it does not open one.
+   */
   private DeliveryOutcome dispatchOneEmail(UUID deliveryId) {
+    // 1. Claim — short transaction, no provider call inside it.
+    ClaimedEmail claimed;
+    try {
+      claimed = claimEmail(deliveryId);
+    } catch (MissingEmailContent e) {
+      return DeliveryOutcome.FAILED;
+    }
+    if (claimed == null) {
+      return DeliveryOutcome.SKIPPED; // not PENDING: another tick won it, or it is already terminal
+    }
+
+    // 2. Send — NO transaction, NO connection, NO row lock. The slow part is on its own.
+    RuntimeException failure = null;
+    try {
+      emailSender.send(
+          new EmailMessage(
+              claimed.content().toAddress(),
+              claimed.content().subject(),
+              claimed.content().renderedHtml()));
+    } catch (RuntimeException e) {
+      // Any provider fault — EmailException OR an out-of-contract runtime error from the sender.
+      // Both must advance the attempt counter; otherwise a sender that throws e.g. an NPE would
+      // leave the row retryable with attempts unchanged and be re-sent forever.
+      failure = e;
+    }
+
+    // 3. Settle — short transaction. The row is SENDING, so this is the only writer for it.
+    return settleEmail(claimed.delivery(), failure);
+  }
+
+  /**
+   * Thrown out of the claim transaction when the subtype row is missing — a terminal producer bug.
+   */
+  private static final class MissingEmailContent extends RuntimeException {}
+
+  /** Claim + read content in one short transaction. Null = not claimable. */
+  private ClaimedEmail claimEmail(UUID deliveryId) {
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           NotificationRepository repo = notificationRepoFactory.create(txDsl);
-          NotificationDelivery d = repo.findDeliveryById(deliveryId).orElse(null);
-          if (d == null || d.getStatus() != DeliveryStatus.PENDING) {
-            return DeliveryOutcome.SKIPPED; // consumed by another tick, or gone
-          }
           OffsetDateTime now = now();
+          NotificationDelivery d = repo.claimForSend(deliveryId, now).orElse(null);
+          if (d == null) {
+            return null;
+          }
           NotificationRepository.EmailDeliveryContent content =
               repo.findEmailDeliveryContent(deliveryId).orElse(null);
           if (content == null) {
-            // Missing subtype row is a producer bug, not transient — fail terminally.
+            // A producer bug, not transient — fail terminally here rather than claiming a row we
+            // can never send. Committing the FAILED write means it leaves the queue for good.
             repo.markDeliveryFailed(deliveryId, "missing email subtype row", now);
             finalizeIfTerminal(repo, d.getNotificationId(), now);
+            throw new MissingEmailContent();
+          }
+          return new ClaimedEmail(d, content);
+        });
+  }
+
+  /** Move a claimed row out of SENDING: SENT, back to PENDING for retry, or terminally FAILED. */
+  private DeliveryOutcome settleEmail(NotificationDelivery claimed, RuntimeException failure) {
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          NotificationRepository repo = notificationRepoFactory.create(txDsl);
+          OffsetDateTime now = now();
+          UUID deliveryId = claimed.getId();
+          if (failure == null) {
+            repo.markDeliverySent(deliveryId, now);
+            finalizeIfTerminal(repo, claimed.getNotificationId(), now);
+            return DeliveryOutcome.SENT;
+          }
+          if (claimed.getAttempts() + 1 >= emailMaxAttempts) {
+            repo.markDeliveryFailed(deliveryId, truncateError(failure.getMessage()), now);
+            finalizeIfTerminal(repo, claimed.getNotificationId(), now);
             return DeliveryOutcome.FAILED;
           }
-          try {
-            emailSender.send(
-                new EmailMessage(content.toAddress(), content.subject(), content.renderedHtml()));
-          } catch (RuntimeException e) {
-            // Any provider fault — EmailException OR an out-of-contract runtime error from the
-            // sender. Both must advance the attempt counter; otherwise a sender that throws e.g. an
-            // NPE would leave the row PENDING with attempts unchanged and be re-sent forever.
-            int attempted = d.getAttempts() + 1;
-            if (attempted >= emailMaxAttempts) {
-              repo.markDeliveryFailed(deliveryId, truncateError(e.getMessage()), now);
-              finalizeIfTerminal(repo, d.getNotificationId(), now);
-              return DeliveryOutcome.FAILED;
-            }
-            // Leave PENDING so the next sweep retries.
-            repo.markDeliveryRetry(deliveryId, truncateError(e.getMessage()), now);
-            return DeliveryOutcome.RETRIED;
-          }
-          repo.markDeliverySent(deliveryId, now);
-          finalizeIfTerminal(repo, d.getNotificationId(), now);
-          return DeliveryOutcome.SENT;
+          repo.markDeliveryRetry(deliveryId, truncateError(failure.getMessage()), now);
+          return DeliveryOutcome.RETRIED;
         });
+  }
+
+  /**
+   * Return deliveries stranded in SENDING to the queue — the other half of the lease.
+   *
+   * <p>A worker that dies between claiming and settling leaves a row SENDING with nobody coming
+   * back for it, and the sweeper only looks for PENDING, so without this it is a permanent silent
+   * loss. A stranded claim <b>counts as an attempt</b>: otherwise a message that reliably kills the
+   * process would be reclaimed forever, which is the one failure mode a retry budget exists to
+   * stop.
+   *
+   * @param leaseSeconds how long a claim may be outstanding before it is presumed dead. Must exceed
+   *     the worst-case send — the SMTP timeouts bound that at ~25 s — or a live send gets reaped
+   *     underneath itself and the message goes twice.
+   */
+  public DeliverySummary reapStrandedEmail(long leaseSeconds, int batchLimit) {
+    OffsetDateTime cutoff = now().minusSeconds(leaseSeconds);
+    List<UUID> ids =
+        notificationRepoFactory.create(rootDsl).findStrandedSendingIds(cutoff, batchLimit);
+    int retried = 0;
+    int failed = 0;
+    for (UUID id : ids) {
+      DeliveryOutcome outcome =
+          rootDsl.transactionResult(
+              cfg -> {
+                DSLContext txDsl = DSL.using(cfg);
+                NotificationRepository repo = notificationRepoFactory.create(txDsl);
+                NotificationDelivery d = repo.findDeliveryById(id).orElse(null);
+                if (d == null || d.getStatus() != DeliveryStatus.SENDING) {
+                  return DeliveryOutcome.SKIPPED; // settled or reaped between the read and now
+                }
+                OffsetDateTime now = now();
+                if (d.getAttempts() + 1 >= emailMaxAttempts) {
+                  repo.markDeliveryFailed(id, "stranded mid-send; attempts exhausted", now);
+                  finalizeIfTerminal(repo, d.getNotificationId(), now);
+                  return DeliveryOutcome.FAILED;
+                }
+                repo.markDeliveryRetry(id, "stranded mid-send; returned to the queue", now);
+                return DeliveryOutcome.RETRIED;
+              });
+      switch (outcome) {
+        case RETRIED -> retried++;
+        case FAILED -> failed++;
+        default -> {}
+      }
+    }
+    if (retried + failed > 0) {
+      log.warn(
+          "reaped {} stranded email deliveries ({} failed terminally)", retried + failed, failed);
+    }
+    return new DeliverySummary(ids.size(), 0, retried, failed, ids.size() - retried - failed);
   }
 
   /**
