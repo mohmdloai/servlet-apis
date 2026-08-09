@@ -8,12 +8,17 @@
 > can be fixed deliberately rather than lost in prose. It is a **remediation plan, not a feature plan**
 > — every item is a fix to already-shipped behavior.
 >
-> **Status: D1–D10 fixed** on branch `141_fix/delivery-review-defects` (story
-> `stories/141_st_delivery_review_defects.md`), each with the test the item asked for. One piece is
-> deliberately still open — **D4's follow-up** (moving the SMTP send outside the DB transaction); its
-> must-do half (timeouts) and the lock-contention half (`SKIP LOCKED`) shipped. **D11** stays open as
-> the plan always scoped it: its per-defect tests landed with their fixes, its broader
-> repository-level IT layer is still trailing work. Per-item status is marked below.
+> **Status: D1–D10 fixed**, merged as **PR #141** (`141_fix/delivery-review-defects`, story
+> `stories/141_st_delivery_review_defects.md`), each with the test the item asked for. Two pieces are
+> deliberately still open — **D4's follow-up** (moving the SMTP send outside the DB transaction; its
+> must-do half, timeouts, and the lock-contention half, `SKIP LOCKED`, shipped) and **D11**, which
+> the plan always scoped as trailing: its per-defect tests landed with their fixes, its broader
+> repository-level IT layer has not.
+>
+> **D12 is new** and did not come from the 2026-07-16 review — it was found while wiring story 141's
+> client-side follow-ups and is the one item here whose *symptom* is user-visible today. Everything
+> above it is a review finding; it is kept in the same document because this is where outstanding
+> backend defects get re-checked. Per-item status is marked below.
 >
 > File:line anchors were verified against the working tree on branch
 > `77_fix/owner-org-seo-fields-readback` and the code has since moved — read the anchors as
@@ -32,7 +37,7 @@
 
 1. **M1 — Security** (do first): D1 refund structuring, D2 refresh-reuse revocation, D7 distinct-secret assertion.
 2. **M2 — Correctness & reliability**: D3 null-email txn poison, D4 SMTP timeouts + lock hold, D5 online idempotency race.
-3. **M3 — Polish & hygiene**: D6 reissue roll-up, D8 CORS parse dedup, D9 login hardening, D10 CLAUDE.md staleness, D11 test-coverage debt.
+3. **M3 — Polish & hygiene**: D6 reissue roll-up, D8 CORS parse dedup, D9 login hardening, D10 CLAUDE.md staleness, D11 test-coverage debt, D12 approval-403 error shape.
 
 Each defect below carries **Symptom · Evidence · Fix · Test · Effort** (S ≤ half-day, M ~1–2 days, L > 2 days).
 
@@ -430,6 +435,86 @@ can trail M1–M3.
 
 ---
 
+## D12 — The approval 403 is not machine-readable, so the client renders the wrong refusal · **S3** · S (after a small refactor)
+
+> **OPEN.** Found while wiring story 141's frontend follow-ups (`frontst` story 96) and recorded
+> there and in story 141's *Not in scope*; promoted here because those are narrative records of
+> finished work, and this is outstanding.
+
+**Symptom.** A MANAGER who trips the refund/credit-note approval threshold is told **"You don't have
+permission to do that."** That is not merely vague, it is wrong: they *do* have permission — the
+payout needs a second signature. The admin app already ships the accurate string in both locales
+(`errors.approval_required` → "This needs OWNER approval." / "يتطلب هذا موافقة المالك.") and it is
+**unreachable**.
+
+**Evidence.**
+- `frontst/packages/shared/src/api/errors.ts:137` fires the state on
+  `status === 403 && (code === 'APPROVAL_REQUIRED' || env.required_role)`, and reads
+  `required_role` / `threshold_amount` / `requested_amount` off the body.
+- The backend emits none of them. `ApiError` (`api/.../dto/ApiError.java`) carries only
+  `{status, error, message}` — there is no `error_code` field anywhere in `api`, and no
+  `required_role` in `api` or `service`. Both halves of that guard are permanently false, so
+  execution falls through to the next line, `if (status === 403) return { kind: 'forbidden' }`.
+- The numbers exist, but only inside the human-readable message string ("…exceed approval threshold
+  N; requires OWNER"), which the frontend never renders by policy (§3.5 — no raw backend message
+  reaches a user).
+
+**Why it bites harder since D1.** It predates D1 and is independent of it, but D1 changed the gate
+from *this amount* to the money source's **running total** while the client-side pre-warning
+(`frontst/packages/shared/src/lib/approval.ts` `needsOwnerApproval`) still compares one amount. The
+two used to agree, so a MANAGER normally saw the warning before submitting and rarely met the raw
+403. Now the gate trips in cumulative cases the client cannot predict — no warning, then a flat
+permission error. The helper is correctly documented as a pre-warning and never the gate, so
+nothing is *broken*; the refusal copy is simply wrong in exactly the case D1 exists for.
+
+**Why it wasn't done in story 141.** Adding the fields to `ApiError` is cheap and precedented — the
+`ofShortages` pattern, and Jackson omits nulls so no existing client sees a change. The cost is
+structural: **there is no central error writer.** Each handler owns a private
+`writeError(HttpServletResponse, AppException)`, and the approval 403 can surface from **five** of
+them, because the three throw sites fan out:
+
+| Throw site | Reaches | Route |
+|---|---|---|
+| `RefundService.create` | `RefundHandler` | `POST /refunds` |
+| `CreditNoteService.issue` | `CreditNoteHandler` | `POST /credit-notes` |
+| `OrderCancellationService` | `SalesOrderHandler` | `POST /sales-orders/{id}/cancel` |
+| `RefundService.createDirectPendingInTx` | `FulfillmentHandler` | `POST /fulfillments/{id}/refund` |
+| `RefundService.createDirectPendingInTx` | `PaymentTransactionHandler` | `POST /payment-transactions/{id}/refund` |
+
+Five hand-written branches across the money routes, where covering four of five leaves the same 403
+machine-readable on some and not others — a worse state than covering none, and a poor trade for
+display copy on a branch nobody was reading yet.
+
+**Fix — the refactor first, then this is three lines.** Give `AppException` subclasses one place to
+contribute fields to `ApiError`, instead of teaching five handlers about a sixth exception type:
+
+1. Add an `ApprovalRequiredException extends AuthorizationException` carrying `requiredRole`,
+   `thresholdAmount`, `requestedAmount`; throw it from the one shared `RefundService.requireApproval`
+   helper and from `CreditNoteService` / `OrderCancellationService` (D1 already funnels refunds and
+   credit notes through one helper — extend that, don't add a second).
+2. Give `ApiError` the three optional fields plus a factory, following `ofShortages`.
+3. Collapse the per-handler `writeError(resp, AppException)` bodies onto **one** shared writer that
+   both handles this and leaves room for the next status that carries extra data. `AuthServlet`
+   already took this shape for `Retry-After` in D9a (`writeAppError`) — the same move, applied to
+   the org-scoped handlers.
+
+Step 3 has its own justification independent of this defect (five copies of one error mapping), and
+it is what makes this change small rather than five-fold.
+
+**Test.**
+- Backend: an IT per plane-of-entry asserting the 403 body carries `required_role` /
+  `threshold_amount` / `requested_amount` — at minimum `RefundHandler` and `CreditNoteHandler`
+  (extending `CreditNoteRefundIT`, which already drives the D1 aggregate cases), plus one of the
+  three `createDirectPendingInTx` routes so the shared writer is proven, not assumed.
+- Frontend: a component test that an above-threshold 403 renders `approval_required`, not
+  `forbidden`. **No test anywhere asserts the approval path today** — that is why the dead branch
+  survived. The 403 assertions that do exist are all about ordinary permission denials on unrelated
+  routes (`client.test.ts` "normalises a 403 into a forbidden ApiError" over a PDF read,
+  `DocumentActions.test.tsx`, `LoginForm.test.tsx`'s reserved unverified-email 403), and each is
+  correct for its own case — none of them would change.
+
+---
+
 ## Quick reference
 
 | ID | Title | Sev | Effort | Milestone | Status |
@@ -445,3 +530,4 @@ can trail M1–M3.
 | D9 | Login enumeration + no per-account throttle | S3 | M | M3 | **fixed** |
 | D10 | CLAUDE.md stale sales-order list | S4 | S | M3 | **fixed** |
 | D11 | Test-coverage debt | S4 | L | trailing | **partly** — per-defect tests done; repo-level IT layer open |
+| D12 | Approval 403 not machine-readable → client renders "forbidden" | S3 | S (after the shared-writer refactor) | M3 | **open** |
