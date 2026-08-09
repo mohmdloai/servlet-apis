@@ -2,6 +2,7 @@ package com.loai.inventory.api.servlet.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.CreateFulfillmentRequest;
 import com.loai.inventory.api.dto.FailFulfillmentRequest;
 import com.loai.inventory.api.dto.PageResponse;
@@ -10,7 +11,6 @@ import com.loai.inventory.api.dto.ReplaceFulfillmentRequest;
 import com.loai.inventory.api.mapper.FulfillmentMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
-import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.FulfillmentStatus;
 import com.loai.inventory.domain.model.OrgRole;
@@ -336,20 +336,8 @@ public class FulfillmentHandler implements OrgResourceHandler {
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {
-    // A short-stock 409 (e.g. re-reservation on /replace) carries a structured per-product
-    // shortage list — surface it like SalesOrderHandler does, not just the summary message.
-    if (e instanceof InsufficientStockException ise) {
-      var shortages =
-          ise.getShortages().stream()
-              .map(s -> new ApiError.Shortage(s.productId(), s.requested(), s.available()))
-              .toList();
-      writeJson(
-          resp,
-          e.getStatusCode(),
-          ApiError.ofShortages(e.getStatusCode(), e.getMessage(), shortages));
-      return;
-    }
-    writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+    ApiErrors.applyHeaders(resp, e);
+    writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
   }
 
   private void writeError(HttpServletResponse resp, int status, String message) throws IOException {

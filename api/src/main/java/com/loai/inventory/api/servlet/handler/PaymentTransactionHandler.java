@@ -2,6 +2,7 @@ package com.loai.inventory.api.servlet.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.OrphanRefundResponse;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PaymentTransactionResponse;
@@ -312,7 +313,8 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {
-    writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+    ApiErrors.applyHeaders(resp, e);
+    writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
   }
 
   private void writeError(HttpServletResponse resp, int status, String message) throws IOException {

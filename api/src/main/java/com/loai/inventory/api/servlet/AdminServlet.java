@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.servlet.handler.AdminResourceHandler;
 import com.loai.inventory.api.servlet.handler.AuditAdminHandler;
 import com.loai.inventory.api.servlet.handler.FunnelAdminHandler;
@@ -104,7 +105,8 @@ public class AdminServlet extends HttpServlet {
       }
       handler.handle(req.getMethod(), req, resp, route.remaining());
     } catch (AppException e) {
-      writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+      ApiErrors.applyHeaders(resp, e);
+      writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
     } catch (Exception e) {
       log.error("Unhandled exception in AdminServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));

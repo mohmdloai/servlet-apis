@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.AdminUserDetailResponse;
 import com.loai.inventory.api.dto.AdminUserResponse;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.CreateUserRequest;
 import com.loai.inventory.api.dto.OrgRoleRequest;
 import com.loai.inventory.api.dto.PageResponse;
@@ -425,7 +426,8 @@ public class UserAdminHandler implements AdminResourceHandler {
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {
-    writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+    ApiErrors.applyHeaders(resp, e);
+    writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
   }
 
   private void writeError(HttpServletResponse resp, int status, String message) throws IOException {

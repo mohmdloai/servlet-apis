@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.ImpersonateRequest;
 import com.loai.inventory.api.dto.ImpersonationResponse;
 import com.loai.inventory.api.filter.JwtAuthFilter;
@@ -58,7 +59,8 @@ public class PlatformImpersonationServlet extends HttpServlet {
       AuthCookies.writeAccess(resp, result.accessToken(), (int) result.expiresIn(), secureCookies);
       writeJson(resp, 200, ImpersonationResponse.started(result));
     } catch (AppException e) {
-      writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+      ApiErrors.applyHeaders(resp, e);
+      writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
     } catch (Exception e) {
       log.error("Unhandled exception in PlatformImpersonationServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));

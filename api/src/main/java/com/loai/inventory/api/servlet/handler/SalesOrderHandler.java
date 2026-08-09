@@ -2,6 +2,7 @@ package com.loai.inventory.api.servlet.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.CancelOrderRequest;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
@@ -12,7 +13,6 @@ import com.loai.inventory.api.mapper.PaymentMapper;
 import com.loai.inventory.api.mapper.SalesOrderMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
-import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.OrderChannel;
@@ -409,18 +409,8 @@ public class SalesOrderHandler implements OrgResourceHandler {
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {
-    if (e instanceof InsufficientStockException ise) {
-      var shortages =
-          ise.getShortages().stream()
-              .map(s -> new ApiError.Shortage(s.productId(), s.requested(), s.available()))
-              .toList();
-      writeJson(
-          resp,
-          e.getStatusCode(),
-          ApiError.ofShortages(e.getStatusCode(), e.getMessage(), shortages));
-      return;
-    }
-    writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+    ApiErrors.applyHeaders(resp, e);
+    writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
   }
 
   private void writeError(HttpServletResponse resp, int status, String message) throws IOException {
