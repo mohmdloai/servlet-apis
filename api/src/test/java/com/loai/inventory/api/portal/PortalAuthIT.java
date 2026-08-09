@@ -377,6 +377,70 @@ class PortalAuthIT {
         "logout-all bumps the version — the old token is revoked");
   }
 
+  @Test
+  void revokeSession_killsOnlyThatDevice() {
+    String slug = createOrg();
+    UUID customerId = createCustomer(slug, "nadia@acme.test");
+    CustomerAuthService.SessionResult phone = login(slug, "nadia@acme.test");
+    CustomerAuthService.SessionResult laptop = login(slug, "nadia@acme.test");
+    UUID phoneFam = familyOf(phone);
+    UUID laptopFam = familyOf(laptop);
+    assertEquals(2, authService.listSessions(orgId(slug), customerId).size());
+
+    authService.revokeSession(orgId(slug), customerId, phoneFam);
+
+    // The revoked device is dead on both axes — its access token is denylisted now, and its
+    // refresh no longer rotates.
+    assertTrue(authService.isDeviceRevoked(phoneFam));
+    assertThrows(
+        AuthenticationException.class, () -> authService.refresh(phone.refreshToken(), "1.2.3.4"));
+
+    // The other device is untouched: this is a per-device revoke, not logout-all.
+    assertFalse(authService.isDeviceRevoked(laptopFam));
+    assertNotNull(authService.refresh(laptop.refreshToken(), "1.2.3.4"));
+    assertEquals(1, authService.listSessions(orgId(slug), customerId).size());
+  }
+
+  @Test
+  void revokeSession_leavesTokenVersionAlone() {
+    String slug = createOrg();
+    UUID customerId = createCustomer(slug, "nadia@acme.test");
+    CustomerAuthService.SessionResult s = login(slug, "nadia@acme.test");
+    int version =
+        customerJwtUtil.parseAndVerify(s.accessToken()).get("token_version", Integer.class);
+
+    authService.revokeSession(orgId(slug), customerId, familyOf(s));
+
+    // The distinction from logout-all: the version survives, so sibling devices keep validating.
+    assertTrue(authService.isTokenVersionValid(orgId(slug), customerId, version));
+  }
+
+  @Test
+  void revokeSession_unknownFamily_is404() {
+    String slug = createOrg();
+    UUID customerId = createCustomer(slug, "nadia@acme.test");
+    login(slug, "nadia@acme.test");
+
+    assertThrows(
+        NotFoundException.class,
+        () -> authService.revokeSession(orgId(slug), customerId, UUID.randomUUID()));
+  }
+
+  @Test
+  void revokeSession_anotherCustomersFamily_is404AndRevokesNothing() {
+    String slug = createOrg();
+    UUID mine = createCustomer(slug, "nadia@acme.test");
+    createCustomer(slug, "omar@acme.test");
+    CustomerAuthService.SessionResult theirs = login(slug, "omar@acme.test");
+    UUID theirFam = familyOf(theirs);
+
+    // Guessing a family id you don't own must not sign that person out.
+    assertThrows(
+        NotFoundException.class, () -> authService.revokeSession(orgId(slug), mine, theirFam));
+    assertFalse(authService.isDeviceRevoked(theirFam));
+    assertNotNull(authService.refresh(theirs.refreshToken(), "1.2.3.4"));
+  }
+
   // AC6: scoping
 
   @Test
@@ -407,6 +471,12 @@ class PortalAuthIT {
     String html = emailSender.captured.get(emailSender.captured.size() - 1).html();
     Matcher m = SIX_DIGITS.matcher(html);
     return m.find() ? m.group(1) : null;
+  }
+
+  /** The session family baked into a login's access token — the handle the device list exposes. */
+  private UUID familyOf(CustomerAuthService.SessionResult s) {
+    return UUID.fromString(
+        customerJwtUtil.parseAndVerify(s.accessToken()).get("fam", String.class));
   }
 
   private String createOrg() {
