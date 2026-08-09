@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.AuthResponse;
 import com.loai.inventory.api.dto.ForgotPasswordRequest;
 import com.loai.inventory.api.dto.ImpersonationResponse;
@@ -14,7 +15,6 @@ import com.loai.inventory.api.dto.TokenPasswordRequest;
 import com.loai.inventory.api.dto.VerifyEmailRequest;
 import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.common.exception.AppException;
-import com.loai.inventory.common.exception.TooManyAttemptsException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Environment;
 import com.loai.inventory.domain.model.SecurityContext;
@@ -348,19 +348,15 @@ public class AuthServlet extends HttpServlet {
   }
 
   /**
-   * The one place an {@link AppException} becomes a response, so the error envelope stays identical
-   * across the three verbs while a status that carries extra protocol information can add it.
+   * One writer for the three verbs, so the envelope cannot drift between them.
    *
-   * <p>Today that is {@code Retry-After} on the per-account login lockout: the body shape is
-   * untouched — still {@code {status, error, message}} — because the useful number is a header, not
-   * a field. The 429 without it is honest but useless: "too many attempts" with no way to know
-   * whether that means seconds or a quarter of an hour, so every client has to invent a guess.
+   * <p>What an exception looks like on the wire is {@link ApiErrors}' decision, not this servlet's
+   * — including the {@code Retry-After} on the per-account login lockout, which lived here as a
+   * local {@code instanceof} until D12 gave every handler the same shared mapping.
    */
   private void writeAppError(HttpServletResponse resp, AppException e) throws IOException {
-    if (e instanceof TooManyAttemptsException tooMany) {
-      resp.setHeader("Retry-After", String.valueOf(tooMany.getRetryAfterSeconds()));
-    }
-    writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+    ApiErrors.applyHeaders(resp, e);
+    writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
   }
 
   private void writeJson(HttpServletResponse resp, int status, Object body) throws IOException {

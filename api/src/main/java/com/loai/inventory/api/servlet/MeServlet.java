@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.ChangePasswordRequest;
 import com.loai.inventory.api.dto.MeResponse;
 import com.loai.inventory.common.exception.AppException;
@@ -58,7 +59,8 @@ public class MeServlet extends HttpServlet {
         writeJson(resp, 404, ApiError.of(404, "Unknown endpoint"));
       }
     } catch (AppException e) {
-      writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+      ApiErrors.applyHeaders(resp, e);
+      writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
     } catch (Exception e) {
       log.error("Unhandled exception in MeServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));
@@ -74,7 +76,8 @@ public class MeServlet extends HttpServlet {
         writeJson(resp, 404, ApiError.of(404, "Unknown endpoint"));
       }
     } catch (AppException e) {
-      writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+      ApiErrors.applyHeaders(resp, e);
+      writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
     } catch (Exception e) {
       log.error("Unhandled exception in MeServlet", e);
       writeJson(resp, 500, ApiError.of(500, "Internal server error"));

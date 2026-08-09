@@ -8,6 +8,7 @@ import com.loai.inventory.api.dto.AdminOrgTimelineResponse;
 import com.loai.inventory.api.dto.AdminProvisionOrgResponse;
 import com.loai.inventory.api.dto.AdminUpdateOrgRequest;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.OrgResponse;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.SuspendOrgRequest;
@@ -264,7 +265,8 @@ public class OrgAdminHandler implements AdminResourceHandler {
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {
-    writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()));
+    ApiErrors.applyHeaders(resp, e);
+    writeJson(resp, e.getStatusCode(), ApiErrors.body(e));
   }
 
   private void writeError(HttpServletResponse resp, int status, String message) throws IOException {

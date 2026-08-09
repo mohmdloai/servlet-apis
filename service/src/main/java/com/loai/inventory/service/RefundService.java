@@ -1,6 +1,6 @@
 package com.loai.inventory.service;
 
-import com.loai.inventory.common.exception.AuthorizationException;
+import com.loai.inventory.common.exception.ApprovalRequiredException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -8,6 +8,7 @@ import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.CreditNote;
 import com.loai.inventory.domain.model.CreditNoteStatus;
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
 import com.loai.inventory.domain.model.PaymentProvider;
@@ -697,8 +698,14 @@ public final class RefundService {
       String subject) {
     BigDecimal threshold = orgThreshold(txDsl, orgId);
     if (total.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
-      throw new AuthorizationException(
-          subject + total + " exceed approval threshold " + threshold + "; requires OWNER");
+      // ApprovalRequiredException, not a bare AuthorizationException: the numbers below are the
+      // whole explanation, and a client that only gets the message string cannot use them (raw
+      // backend messages are never rendered). D12.
+      throw new ApprovalRequiredException(
+          subject + total + " exceed approval threshold " + threshold + "; requires OWNER",
+          OrgRole.OWNER.name(),
+          threshold,
+          total);
     }
   }
 

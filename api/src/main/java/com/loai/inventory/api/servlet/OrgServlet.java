@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.servlet.handler.BannerHandler;
 import com.loai.inventory.api.servlet.handler.CategoryHandler;
 import com.loai.inventory.api.servlet.handler.CollectionHandler;
@@ -187,10 +188,11 @@ public class OrgServlet extends HttpServlet {
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {
+    ApiErrors.applyHeaders(resp, e);
     resp.setStatus(e.getStatusCode());
     resp.setContentType("application/json");
     resp.setCharacterEncoding("UTF-8");
-    mapper.writeValue(resp.getOutputStream(), ApiError.of(e.getStatusCode(), e.getMessage()));
+    mapper.writeValue(resp.getOutputStream(), ApiErrors.body(e));
   }
 
   private void writeError(HttpServletResponse resp, int status, String message) throws IOException {

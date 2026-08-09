@@ -19,6 +19,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
+import com.loai.inventory.common.exception.ApprovalRequiredException;
 import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -775,6 +778,90 @@ class CreditNoteRefundIT {
             .creditNote()
             .getId();
     assertEquals("ISSUED", creditNoteStatus(second));
+  }
+
+  // D12: the refusal has to be machine-readable, or the client cannot explain it
+
+  /**
+   * The above-threshold refusal carries the role that could approve it and the two numbers that
+   * produced it. Without them the 403 is indistinguishable from an ordinary permission denial, and
+   * the admin app rendered it as one — "You don't have permission to do that." — which is wrong
+   * rather than merely vague, since the caller *does* have permission.
+   *
+   * <p>Asserted on the <b>requested amount specifically</b>, because since D1 that is the payment's
+   * running total (300 + 300) and not the 300 in front of the user. A client cannot derive it,
+   * which is exactly why it has to be on the wire.
+   */
+  @Test
+  void threshold_refusalCarriesTheRoleAndTheNumbers() {
+    UUID org = createOrg("acme");
+    UUID payment = seedOrphanPayment(org, null, "900.00");
+    refundService.create(org, directRefund(payment, "300.00"), false);
+
+    ApprovalRequiredException e =
+        assertThrows(
+            ApprovalRequiredException.class,
+            () -> refundService.create(org, directRefund(payment, "300.00"), false));
+
+    assertEquals("OWNER", e.getRequiredRole());
+    assertEquals(0, new BigDecimal("500.00").compareTo(e.getThresholdAmount()), "the org's bar");
+    assertEquals(
+        0,
+        new BigDecimal("600.00").compareTo(e.getRequestedAmount()),
+        "the payment's running total, not this call's 300 — the D1 rule, on the wire");
+    // Still a 403 and still an AuthorizationException: this widens the body, it does not move the
+    // status or break callers that only catch the supertype.
+    assertEquals(403, e.getStatusCode());
+    assertTrue(e instanceof AuthorizationException);
+  }
+
+  /** The credit-note half carries the same three facts, sourced from the invoice's total. */
+  @Test
+  void threshold_creditNoteRefusalCarriesTheRoleAndTheNumbers() {
+    Fixture f = deliverPaidInvoice("900.00", "900.00");
+    creditNoteService.issue(f.org, returnCommand(f.invoiceId, "300.00"), false);
+
+    ApprovalRequiredException e =
+        assertThrows(
+            ApprovalRequiredException.class,
+            () -> creditNoteService.issue(f.org, returnCommand(f.invoiceId, "300.00"), false));
+
+    assertEquals("OWNER", e.getRequiredRole());
+    assertEquals(0, new BigDecimal("500.00").compareTo(e.getThresholdAmount()));
+    assertEquals(
+        0,
+        new BigDecimal("600.00").compareTo(e.getRequestedAmount()),
+        "the invoice's cumulative credited total");
+  }
+
+  /**
+   * The mapping the five money handlers now share. {@code ApiErrors.body} is the single place an
+   * exception decides its own wire shape — the point of the D12 refactor — so proving it here
+   * proves every route that can raise this, rather than proving one handler and hoping.
+   */
+  @Test
+  void threshold_refusalSerializesTheFields() {
+    UUID org = createOrg("acme");
+    UUID payment = seedOrphanPayment(org, null, "900.00");
+    refundService.create(org, directRefund(payment, "300.00"), false);
+
+    ApprovalRequiredException e =
+        assertThrows(
+            ApprovalRequiredException.class,
+            () -> refundService.create(org, directRefund(payment, "300.00"), false));
+
+    ApiError body = ApiErrors.body(e);
+    assertEquals("OWNER", body.getRequiredRole());
+    assertEquals(0, new BigDecimal("500.00").compareTo(body.getThresholdAmount()));
+    assertEquals(0, new BigDecimal("600.00").compareTo(body.getRequestedAmount()));
+    assertEquals(403, body.getStatus());
+
+    // And an ordinary 403 is untouched — the fields are absent, so Jackson omits them and the
+    // envelope is byte-identical to what every existing client already parses.
+    ApiError plain = ApiErrors.body(new AuthorizationException("nope"));
+    assertNull(plain.getRequiredRole());
+    assertNull(plain.getThresholdAmount());
+    assertNull(plain.getRequestedAmount());
   }
 
   // fixtures & helpers

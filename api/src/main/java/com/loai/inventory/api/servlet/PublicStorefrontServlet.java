@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PortalMeResponse;
 import com.loai.inventory.api.dto.PortalRequestCodeRequest;
@@ -528,7 +529,8 @@ public class PublicStorefrontServlet extends HttpServlet {
   }
 
   private void writeError(HttpServletResponse resp, AppException e) throws IOException {
-    writeJson(resp, e.getStatusCode(), ApiError.of(e.getStatusCode(), e.getMessage()), null);
+    ApiErrors.applyHeaders(resp, e);
+    writeJson(resp, e.getStatusCode(), ApiErrors.body(e), null);
   }
 
   private void writeError(HttpServletResponse resp, int status, String message) throws IOException {

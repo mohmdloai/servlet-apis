@@ -1,12 +1,13 @@
 package com.loai.inventory.service;
 
-import com.loai.inventory.common.exception.AuthorizationException;
+import com.loai.inventory.common.exception.ApprovalRequiredException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.FulfillmentStatus;
+import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.Refund;
@@ -208,12 +209,15 @@ public final class OrderCancellationService {
           }
           BigDecimal threshold = refundService.approvalThreshold(txDsl, orgId);
           if (totalToRefund.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
-            throw new AuthorizationException(
+            throw new ApprovalRequiredException(
                 "cancel refunds totalling "
                     + totalToRefund
                     + " exceed approval threshold "
                     + threshold
-                    + "; requires OWNER");
+                    + "; requires OWNER",
+                OrgRole.OWNER.name(),
+                threshold,
+                totalToRefund);
           }
 
           // Create a PENDING direct refund per prepayment (FIFO-locked). No money moves here — the

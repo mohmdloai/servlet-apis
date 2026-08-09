@@ -1,6 +1,6 @@
 package com.loai.inventory.service;
 
-import com.loai.inventory.common.exception.AuthorizationException;
+import com.loai.inventory.common.exception.ApprovalRequiredException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -11,6 +11,7 @@ import com.loai.inventory.domain.model.CreditNoteReason;
 import com.loai.inventory.domain.model.CreditNoteStatus;
 import com.loai.inventory.domain.model.InvoiceStatus;
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.repository.CreditNoteRepository;
 import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
@@ -164,14 +165,17 @@ public final class CreditNoteService {
           // unattended payout per invoice, not per call. Same posture as OrderCancellationService.
           BigDecimal threshold = orgThreshold(txDsl, orgId);
           if (creditedWithThis.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
-            throw new AuthorizationException(
+            throw new ApprovalRequiredException(
                 "credit notes for invoice "
                     + invoice.getInvoiceNumber()
                     + " totalling "
                     + creditedWithThis
                     + " exceed approval threshold "
                     + threshold
-                    + "; requires OWNER");
+                    + "; requires OWNER",
+                OrgRole.OWNER.name(),
+                threshold,
+                creditedWithThis);
           }
 
           CreditNote note =

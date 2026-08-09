@@ -16,9 +16,9 @@
 > repository-level IT layer has not.
 >
 > **D12 is new** and did not come from the 2026-07-16 review — it was found while wiring story 141's
-> client-side follow-ups and is the one item here whose *symptom* is user-visible today. Everything
-> above it is a review finding; it is kept in the same document because this is where outstanding
-> backend defects get re-checked. Per-item status is marked below.
+> client-side follow-ups, and was the one item here whose symptom was user-visible. Everything above
+> it is a review finding; it is kept in the same document because this is where outstanding backend
+> defects get re-checked. Per-item status is marked below.
 >
 > File:line anchors were verified against the working tree on branch
 > `77_fix/owner-org-seo-fields-readback` and the code has since moved — read the anchors as
@@ -437,9 +437,22 @@ can trail M1–M3.
 
 ## D12 — The approval 403 is not machine-readable, so the client renders the wrong refusal · **S3** · S (after a small refactor)
 
-> **OPEN.** Found while wiring story 141's frontend follow-ups (`frontst` story 96) and recorded
-> there and in story 141's *Not in scope*; promoted here because those are narrative records of
-> finished work, and this is outstanding.
+> **FIXED** (story 143 / `frontst` story 94). The shared writer landed first — `ApiErrors` is now
+> the one place an `AppException` decides its wire shape, replacing **33** per-handler copies —
+> then `ApprovalRequiredException` carries `required_role` / `threshold_amount` /
+> `requested_amount` from the three throw sites. Tests: `CreditNoteRefundIT`'s three D12 cases
+> (both money sources plus the serialized body, and an ordinary 403 proven unchanged);
+> `useApiErrorMessage.test.tsx` on the client. 1012 api ITs green after the refactor.
+>
+> **One correction to the symptom below, found while fixing it:** the refusal did *not* render the
+> same way everywhere, which is worse than the single wrong string this entry first described. Only
+> the order-cancel dialog reached `errors.forbidden`; the refund and credit-note sheets prefer the
+> backend's raw message (`e.apiError.message || getErrorMessage(e)`, 24 sites across the admin app),
+> so they showed untranslated English naming an internal payment UUID. The "no raw backend message
+> reaches a user" rule is real in `useApiErrorMessage` and bypassed at those call sites. Fixing all
+> 24 is out of scope — several *parse* the message deliberately — so the approval refusal alone is
+> now always localised, via a `useMoneyErrorMessage` hook that keeps the raw preference for every
+> other kind.
 
 **Symptom.** A MANAGER who trips the refund/credit-note approval threshold is told **"You don't have
 permission to do that."** That is not merely vague, it is wrong: they *do* have permission — the
@@ -530,4 +543,4 @@ it is what makes this change small rather than five-fold.
 | D9 | Login enumeration + no per-account throttle | S3 | M | M3 | **fixed** |
 | D10 | CLAUDE.md stale sales-order list | S4 | S | M3 | **fixed** |
 | D11 | Test-coverage debt | S4 | L | trailing | **partly** — per-defect tests done; repo-level IT layer open |
-| D12 | Approval 403 not machine-readable → client renders "forbidden" | S3 | S (after the shared-writer refactor) | M3 | **open** |
+| D12 | Approval 403 not machine-readable → client renders "forbidden" | S3 | S (after the shared-writer refactor) | M3 | **fixed** |
