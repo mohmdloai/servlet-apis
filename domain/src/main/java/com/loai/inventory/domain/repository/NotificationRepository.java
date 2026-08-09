@@ -52,14 +52,42 @@ public interface NotificationRepository {
    */
   Optional<NotificationDelivery> findDeliveryById(UUID deliveryId);
 
+  /**
+   * Take ownership of a PENDING delivery for sending: {@code PENDING → SENDING} plus a {@code
+   * claimed_at} stamp, under the same {@code FOR UPDATE SKIP LOCKED} as {@link #findDeliveryById}.
+   * Returns the row as it was when claimed, or empty if it was not PENDING (another tick won it, or
+   * it is already terminal).
+   *
+   * <p>This is what lets the SMTP call happen <b>outside</b> a transaction (D4 follow-up). The
+   * claim commits immediately, so no row lock and no pooled connection is held across a round-trip
+   * that can take up to 25 s; the state itself, not the lock, is what stops a second worker picking
+   * the row up.
+   *
+   * <p>It deliberately does <b>not</b> touch {@code attempts}. A claim is not an attempt — the
+   * settle step counts one, and the reaper counts one for a claim that never settled, so every path
+   * out of SENDING increments exactly once.
+   */
+  Optional<NotificationDelivery> claimForSend(UUID deliveryId, OffsetDateTime now);
+
+  /**
+   * Deliveries stranded in SENDING by a worker that died between claiming and settling — {@code
+   * claimed_at} older than {@code cutoff}. Without this they would sit SENDING forever, invisible
+   * to a sweeper that only looks for PENDING: the lease is what makes a crash recoverable rather
+   * than a silent permanent loss.
+   */
+  List<UUID> findStrandedSendingIds(OffsetDateTime cutoff, int limit);
+
   void markDeliverySent(UUID deliveryId, OffsetDateTime now);
 
   void markDeliveryFailed(UUID deliveryId, String lastError, OffsetDateTime now);
 
   /**
-   * Record a failed send attempt while keeping the delivery {@code PENDING} so the next sweep
-   * retries: {@code attempts++}, {@code last_error} set. Used by channels the recurring sweeper
-   * (not a per-job scheduler) retries — email today.
+   * Record a failed send attempt and return the delivery to {@code PENDING} so the next sweep
+   * retries: {@code attempts++}, {@code last_error} set, {@code claimed_at} cleared. Used by
+   * channels the recurring sweeper (not a per-job scheduler) retries — email today.
+   *
+   * <p>The status write became explicit with the claimed state: the row is SENDING when this is
+   * called, so "leave it PENDING" is no longer something that happens by not writing.
    */
   void markDeliveryRetry(UUID deliveryId, String lastError, OffsetDateTime now);
 

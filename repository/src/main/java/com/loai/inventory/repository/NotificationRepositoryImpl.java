@@ -154,9 +154,48 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
   }
 
   @Override
-  public void markDeliveryRetry(UUID deliveryId, String lastError, OffsetDateTime now) {
-    // Keep status PENDING so the next sweep retries; only the attempt counter + last_error move.
+  public Optional<NotificationDelivery> claimForSend(UUID deliveryId, OffsetDateTime now) {
+    // Lock exactly as findDeliveryById does, then flip PENDING -> SENDING in the same transaction.
+    // The caller commits immediately, so the claim outlives the lock: from then on it is the STATE
+    // that keeps other workers off this row, which is what frees the send from the transaction.
+    Optional<NotificationDelivery> locked =
+        dsl.selectFrom(NOTIFICATION_DELIVERY)
+            .where(NOTIFICATION_DELIVERY.ID.eq(deliveryId))
+            .and(NOTIFICATION_DELIVERY.STATUS.eq(DeliveryStatus.PENDING.name()))
+            .forUpdate()
+            .skipLocked()
+            .fetchOptional()
+            .map(this::toDelivery);
+    if (locked.isEmpty()) {
+      return Optional.empty();
+    }
     dsl.update(NOTIFICATION_DELIVERY)
+        .set(NOTIFICATION_DELIVERY.STATUS, DeliveryStatus.SENDING.name())
+        .set(NOTIFICATION_DELIVERY.CLAIMED_AT, now)
+        .set(NOTIFICATION_DELIVERY.UPDATED_AT, now)
+        .where(NOTIFICATION_DELIVERY.ID.eq(deliveryId))
+        .execute();
+    return locked;
+  }
+
+  @Override
+  public List<UUID> findStrandedSendingIds(OffsetDateTime cutoff, int limit) {
+    return dsl.select(NOTIFICATION_DELIVERY.ID)
+        .from(NOTIFICATION_DELIVERY)
+        .where(NOTIFICATION_DELIVERY.STATUS.eq(DeliveryStatus.SENDING.name()))
+        .and(NOTIFICATION_DELIVERY.CLAIMED_AT.lt(cutoff))
+        .orderBy(NOTIFICATION_DELIVERY.CLAIMED_AT.asc())
+        .limit(limit)
+        .fetch(NOTIFICATION_DELIVERY.ID);
+  }
+
+  @Override
+  public void markDeliveryRetry(UUID deliveryId, String lastError, OffsetDateTime now) {
+    // Back to PENDING so the next sweep retries. The status write is explicit now that the row
+    // arrives here SENDING — before the claimed state, "still PENDING" was the absence of a write.
+    dsl.update(NOTIFICATION_DELIVERY)
+        .set(NOTIFICATION_DELIVERY.STATUS, DeliveryStatus.PENDING.name())
+        .set(NOTIFICATION_DELIVERY.CLAIMED_AT, (OffsetDateTime) null)
         .set(NOTIFICATION_DELIVERY.ATTEMPTS, NOTIFICATION_DELIVERY.ATTEMPTS.plus(1))
         .set(NOTIFICATION_DELIVERY.LAST_ERROR, lastError)
         .set(NOTIFICATION_DELIVERY.UPDATED_AT, now)
