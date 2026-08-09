@@ -253,6 +253,17 @@ public final class InvoiceAdminService {
               invoiceService.issueForFulfillment(
                   txDsl, orgId, order, old.getFulfillmentId(), customer, specs, now);
 
+          // The replacement invoice re-runs prepayment auto-allocation and can land PAID. If the
+          // goods are already delivered, that was the order's last open obligation — and the
+          // FULFILLED → CLOSED roll-up only ever ran on delivery events, so an order corrected
+          // after its final shipment could sit FULFILLED with nothing left to deliver. Same
+          // transaction, same helper the delivery path uses.
+          if (OrderRollUp.closeIfFullyPaid(txDsl, orgId, order, invoiceService, now)) {
+            orderRepoFactory.create(txDsl).updateFulfillmentState(order);
+            log.info(
+                "Reissue settled order {} — rolled up FULFILLED → CLOSED", order.getOrderNumber());
+          }
+
           log.info(
               "Reissued invoice: voided {} (id={}) -> issued {} (id={}) orgId={} fulfillment={} reason={}",
               old.getInvoiceNumber(),

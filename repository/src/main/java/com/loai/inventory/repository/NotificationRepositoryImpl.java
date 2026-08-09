@@ -41,7 +41,7 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
     this.dsl = dsl;
   }
 
-  // ── Producer ──────────────────────────────────────────────────────────────
+  // Producer
 
   @Override
   public Notification insertNotification(Notification n) {
@@ -104,7 +104,7 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .execute();
   }
 
-  // ── Worker ────────────────────────────────────────────────────────────────
+  // Worker
 
   @Override
   public List<UUID> findPendingDeliveryIds(NotificationChannel channel, int limit) {
@@ -120,10 +120,12 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
   @Override
   public Optional<NotificationDelivery> findDeliveryById(UUID deliveryId) {
     // FOR UPDATE: the delivery sweeper locks the row so two concurrent ticks that both picked this
-    // id serialize — the second waits, then sees the non-PENDING status and skips (no double-send).
+    // id can never both send it. SKIP LOCKED: the loser returns empty and moves on to the next
+    // delivery instead of blocking for the length of the winner's SMTP round-trip.
     return dsl.selectFrom(NOTIFICATION_DELIVERY)
         .where(NOTIFICATION_DELIVERY.ID.eq(deliveryId))
         .forUpdate()
+        .skipLocked()
         .fetchOptional()
         .map(this::toDelivery);
   }
@@ -199,7 +201,7 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .execute();
   }
 
-  // ── Feed ──────────────────────────────────────────────────────────────────
+  // Feed
 
   @Override
   public List<InAppFeedItem> findInAppFeed(
@@ -324,7 +326,7 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .execute();
   }
 
-  // ── helpers ───────────────────────────────────────────────────────────────
+  // helpers
 
   /**
    * In-app delivery ids for one notification that actually belong to this org+user (own-only gate).

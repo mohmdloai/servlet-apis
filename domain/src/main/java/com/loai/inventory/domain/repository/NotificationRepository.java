@@ -24,7 +24,7 @@ import java.util.UUID;
  */
 public interface NotificationRepository {
 
-  // ── Producer ──────────────────────────────────────────────────────────────
+  // Producer
   Notification insertNotification(Notification notification);
 
   NotificationDelivery insertDelivery(NotificationDelivery delivery);
@@ -37,9 +37,19 @@ public interface NotificationRepository {
    */
   void insertEmailDelivery(UUID deliveryId, String toAddress, String subject, String renderedHtml);
 
-  // ── Worker (delivery sweeper) ─────────────────────────────────────────────
+  // Worker (delivery sweeper)
   List<UUID> findPendingDeliveryIds(NotificationChannel channel, int limit);
 
+  /**
+   * Claim one delivery for this tick: read it under {@code SELECT … FOR UPDATE SKIP LOCKED}. Empty
+   * means either "no such row" or "another tick is already working it" — both are a skip, and the
+   * caller cannot tell them apart on purpose.
+   *
+   * <p>{@code SKIP LOCKED} rather than a plain {@code FOR UPDATE}: two ticks fetch overlapping id
+   * sets, and a plain lock made the loser <em>block</em> for the whole of the winner's SMTP
+   * round-trip — a second delivery node would spend its tick waiting on rows instead of draining
+   * the ones nobody holds. The exclusion the row lock gives (never double-send) is unchanged.
+   */
   Optional<NotificationDelivery> findDeliveryById(UUID deliveryId);
 
   void markDeliverySent(UUID deliveryId, OffsetDateTime now);
@@ -66,7 +76,7 @@ public interface NotificationRepository {
 
   void markNotificationDispatched(UUID notificationId, OffsetDateTime now);
 
-  // ── Feed (own-only) ───────────────────────────────────────────────────────
+  // Feed (own-only)
   List<InAppFeedItem> findInAppFeed(
       UUID orgId, UUID userId, boolean unreadOnly, int offset, int limit);
 

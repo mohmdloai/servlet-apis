@@ -717,9 +717,74 @@ class CreditNoteRefundIT {
     assertEquals("ISSUED", creditNoteStatus(cnId)); // 600 < raised threshold 1000
   }
 
+  // threshold — structuring (D1)
+
+  /**
+   * D1: the OWNER bar is the running total drawn from one payment, not the size of one call. Three
+   * sub-threshold direct refunds against the same payment used to drain an above-threshold sum
+   * without an OWNER ever seeing it.
+   */
+  @Test
+  void threshold_directRefundStructuringIsGatedOnTheAggregate() {
+    UUID org = createOrg("acme");
+    UUID payment = seedOrphanPayment(org, null, "900.00");
+
+    // Sub-threshold and nothing before it: a MANAGER may create it.
+    UUID first = refundService.create(org, directRefund(payment, "300.00"), false).getId();
+    assertEquals("PENDING", refundStatus(first));
+
+    // Also sub-threshold on its own — but 300 + 300 crosses the org's 500 bar, so it escalates.
+    assertThrows(
+        AuthorizationException.class,
+        () -> refundService.create(org, directRefund(payment, "300.00"), false));
+
+    // The very same call succeeds for an OWNER.
+    UUID second = refundService.create(org, directRefund(payment, "300.00"), true).getId();
+    assertEquals("PENDING", refundStatus(second));
+
+    // The total counts live refunds only: cancelling one gives its room back.
+    refundService.cancel(org, second, "customer changed their mind");
+    UUID third = refundService.create(org, directRefund(payment, "200.00"), false).getId();
+    assertEquals("PENDING", refundStatus(third)); // 300 + 200 == 500, not over it
+  }
+
+  /**
+   * D1, the credit-note half: the cumulative credited total of one invoice is what meets the
+   * threshold. The cap on N notes was the invoice's grand total, so a MANAGER could credit (and
+   * then refund) far above the bar in sub-threshold slices.
+   */
+  @Test
+  void threshold_creditNoteStructuringIsGatedOnTheInvoiceTotal() {
+    Fixture f = deliverPaidInvoice("900.00", "900.00");
+
+    UUID first =
+        creditNoteService
+            .issue(f.org, returnCommand(f.invoiceId, "300.00"), false)
+            .creditNote()
+            .getId();
+    assertEquals("ISSUED", creditNoteStatus(first));
+
+    // 300 + 300 = 600 > 500, even though neither note alone reaches the bar.
+    assertThrows(
+        AuthorizationException.class,
+        () -> creditNoteService.issue(f.org, returnCommand(f.invoiceId, "300.00"), false));
+
+    UUID second =
+        creditNoteService
+            .issue(f.org, returnCommand(f.invoiceId, "300.00"), true)
+            .creditNote()
+            .getId();
+    assertEquals("ISSUED", creditNoteStatus(second));
+  }
+
   // fixtures & helpers
 
   private record Fixture(UUID org, UUID customer, UUID invoiceId, UUID paymentId) {}
+
+  private CreateCommand directRefund(UUID paymentId, String amount) {
+    return new CreateCommand(
+        null, paymentId, new BigDecimal(amount), "EGP", PaymentProvider.CASH, null);
+  }
 
   private IssueCommand badLineCommand(
       UUID invoiceId, int quantity, String unitPrice, String taxRate) {

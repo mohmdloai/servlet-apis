@@ -31,6 +31,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -120,7 +121,7 @@ public class NotificationService {
     SKIPPED
   }
 
-  // ── Producer (runs inside the caller's business transaction) ────────────────
+  // Producer (runs inside the caller's business transaction)
 
   /**
    * Fan out one notification per active staff member of {@code orgId} (one row per recipient, per
@@ -188,6 +189,21 @@ public class NotificationService {
       if (!isChannelEnabled(txDsl, orgId, recipient, type.name(), channel)) {
         continue;
       }
+      // An email channel with nowhere to send is resolved BEFORE the delivery row is written, so a
+      // customer without an address costs nothing and leaves nothing half-created.
+      String toAddress = null;
+      if (channel == NotificationChannel.EMAIL) {
+        Optional<String> resolved = resolveCustomerEmail(txDsl, orgId, recipient.customerId());
+        if (resolved.isEmpty()) {
+          log.warn(
+              "Skipping email leg of {} for customer {} in org {} — no address on the record",
+              type,
+              recipient.customerId(),
+              orgId);
+          continue;
+        }
+        toAddress = resolved.get();
+      }
       NotificationDelivery d = new NotificationDelivery();
       d.setNotificationId(saved.getId());
       d.setChannel(channel);
@@ -199,7 +215,6 @@ public class NotificationService {
         case EMAIL -> {
           // Freeze the send target + rendered content now; the sweeper transmits it later. Every
           // customer email carries a one-click unsubscribe link (minted in this same txn).
-          String toAddress = resolveCustomerEmail(txDsl, orgId, recipient.customerId());
           String unsubscribeUrl =
               magicLinkService.issueUnsubscribeLink(txDsl, orgId, recipient.customerId(), now);
           String html =
@@ -248,20 +263,28 @@ public class NotificationService {
     };
   }
 
-  /** The current email for a customer recipient — required for an email delivery. */
-  private String resolveCustomerEmail(DSLContext txDsl, UUID orgId, UUID customerId) {
+  /**
+   * The current email for a customer recipient, or empty when there is nowhere to send.
+   *
+   * <p><b>This must not throw.</b> {@code notify} runs inside the caller's <em>business</em>
+   * transaction, so an exception here does not fail an email — it rolls back the order placement or
+   * the PENDING_PAYMENT→PAID flip that produced the notification. A customer row whose email is
+   * null or blank (anonymous checkout writes what it is given; imports and older rows exist) is a
+   * suppressed channel, exactly like an opt-out preference — never a failed business event.
+   */
+  private Optional<String> resolveCustomerEmail(DSLContext txDsl, UUID orgId, UUID customerId) {
     CustomerRepository customers = customerRepoFactory.create(txDsl);
-    Customer c =
-        customers
-            .findById(orgId, customerId)
-            .orElseThrow(() -> new NotFoundException("Customer", customerId));
-    if (c.getEmail() == null || c.getEmail().isBlank()) {
-      throw new IllegalStateException("customer " + customerId + " has no email for notification");
+    Optional<Customer> c = customers.findById(orgId, customerId);
+    if (c.isEmpty()) {
+      log.warn(
+          "Customer {} not found in org {} while resolving an email recipient", customerId, orgId);
+      return Optional.empty();
     }
-    return c.getEmail();
+    String email = c.get().getEmail();
+    return email == null || email.isBlank() ? Optional.empty() : Optional.of(email);
   }
 
-  // ── Preferences (opt-out) ───────────────────────────────────────────────────
+  // Preferences (opt-out)
 
   /** A staff user's own preference rows (for the read endpoint). */
   public List<NotificationPreference> getUserPreferences(UUID orgId, UUID userId) {
@@ -347,7 +370,7 @@ public class NotificationService {
     }
   }
 
-  // ── Worker: drain pending in-app deliveries ─────────────────────────────────
+  // Worker: drain pending in-app deliveries
 
   public DeliverySummary dispatchPendingInApp(int batchLimit) {
     // Read candidates in autocommit (no long-held txn), then dispatch each in its own transaction.
@@ -388,7 +411,7 @@ public class NotificationService {
         });
   }
 
-  // ── Worker: drain pending email deliveries ──────────────────────────────────
+  // Worker: drain pending email deliveries
 
   /**
    * Drain PENDING email deliveries: read candidate ids in autocommit, then dispatch each in its own
@@ -482,7 +505,7 @@ public class NotificationService {
     return message.length() <= 500 ? message : message.substring(0, 500);
   }
 
-  // ── Feed (own-only) ─────────────────────────────────────────────────────────
+  // Feed (own-only)
 
   public List<InAppFeedItem> getFeed(
       UUID orgId, UUID userId, boolean unreadOnly, int page, int size) {
@@ -560,7 +583,7 @@ public class NotificationService {
         });
   }
 
-  // ── helpers ───────────────────────────────────────────────────────────────
+  // helpers
 
   private String serialize(Map<String, Object> payload) {
     if (payload == null || payload.isEmpty()) {

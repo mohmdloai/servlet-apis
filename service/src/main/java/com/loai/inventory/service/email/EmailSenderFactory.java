@@ -58,7 +58,12 @@ public final class EmailSenderFactory {
     return new SmtpEmailSender(session, from);
   }
 
-  private static Properties loadMailProperties() {
+  /**
+   * The committed non-secret SMTP config, exactly as it is handed to the {@link Session}. Visible
+   * for test so the bounded socket timeouts can be pinned — an unbounded {@code Transport.send()}
+   * is what turns one hung peer into a pinned thread, connection and row lock.
+   */
+  static Properties loadMailProperties() {
     Properties props = new Properties();
     try (InputStream is =
         EmailSenderFactory.class.getClassLoader().getResourceAsStream("mail.properties")) {

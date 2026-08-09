@@ -252,7 +252,7 @@ class PortalAuthIT {
   // AC4: session security
 
   @Test
-  void refreshRotates_andReuseOfOldTokenIsRejected() {
+  void refreshRotates_andTheNewTokenKeepsWorking() {
     String slug = createOrg();
     createCustomer(slug, "nadia@acme.test");
     CustomerAuthService.SessionResult s1 = login(slug, "nadia@acme.test");
@@ -261,11 +261,50 @@ class PortalAuthIT {
     assertNotNull(s2.refreshToken());
     assertFalse(s1.refreshToken().equals(s2.refreshToken()), "refresh rotates the token");
 
-    // Reusing the rotated-away token is a hard 401.
+    // The rotated-current token still works — rotation alone revokes nothing.
+    assertNotNull(authService.refresh(s2.refreshToken(), "1.2.3.4"));
+  }
+
+  /**
+   * D2: reuse of a rotated-away token is proof that two holders exist, so the whole family dies —
+   * including the token the *first* presenter (in a theft, the attacker) just minted. Previously
+   * this only logged and 401'd, which left the thief's token live and made reuse detection a no-op.
+   */
+  @Test
+  void reuseOfRotatedToken_burnsTheWholeFamily() {
+    String slug = createOrg();
+    createCustomer(slug, "nadia@acme.test");
+    CustomerAuthService.SessionResult s1 = login(slug, "nadia@acme.test");
+    UUID fam =
+        UUID.fromString(customerJwtUtil.parseAndVerify(s1.accessToken()).get("fam", String.class));
+
+    // The attacker refreshes first: s1 → s2.
+    CustomerAuthService.SessionResult s2 = authService.refresh(s1.refreshToken(), "9.9.9.9");
+
+    // The real customer then presents the stale s1.
     assertThrows(
         AuthenticationException.class, () -> authService.refresh(s1.refreshToken(), "1.2.3.4"));
-    // The rotated-current token still works.
-    assertNotNull(authService.refresh(s2.refreshToken(), "1.2.3.4"));
+
+    // s2 must be dead too, and the family's outstanding access tokens denylisted.
+    assertThrows(
+        AuthenticationException.class,
+        () -> authService.refresh(s2.refreshToken(), "9.9.9.9"),
+        "the family is burned on proven reuse — the attacker's fresh token included");
+    assertTrue(authService.isDeviceRevoked(fam), "the family's access tokens are killed too");
+  }
+
+  /** An unknown refresh token is not evidence — it 401s and must revoke nothing. */
+  @Test
+  void unknownRefreshToken_401sButLeavesTheSessionAlone() {
+    String slug = createOrg();
+    createCustomer(slug, "nadia@acme.test");
+    CustomerAuthService.SessionResult s = login(slug, "nadia@acme.test");
+
+    assertThrows(
+        AuthenticationException.class,
+        () -> authService.refresh(UUID.randomUUID().toString(), "1.2.3.4"));
+
+    assertNotNull(authService.refresh(s.refreshToken(), "1.2.3.4"), "the live session survives");
   }
 
   @Test

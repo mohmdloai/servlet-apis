@@ -153,13 +153,23 @@ public final class CreditNoteService {
                     + invoice.getGrandTotal());
           }
 
-          // Above-threshold escalation: returning this much money requires an OWNER.
+          // Above-threshold escalation: returning this much money requires an OWNER. Gated on the
+          // invoice's CUMULATIVE credited total, not this one note — the same money source, the
+          // same bar. Checking the single note was structurable: N sub-threshold notes against one
+          // invoice (capped only by its grand total) refund an above-threshold sum with no OWNER
+          // ever involved. This reuses `creditedWithThis`, which the cap guard above already
+          // computed under the invoice's row lock, so concurrent issuances cannot both slip past a
+          // stale total. Trade-off, deliberate: separate small credits over an invoice's life
+          // cumulate, so a later one can be the first to need OWNER — the threshold is a ceiling on
+          // unattended payout per invoice, not per call. Same posture as OrderCancellationService.
           BigDecimal threshold = orgThreshold(txDsl, orgId);
-          if (total.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
+          if (creditedWithThis.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
             throw new AuthorizationException(
-                "credit note total "
-                    + total
-                    + " exceeds approval threshold "
+                "credit notes for invoice "
+                    + invoice.getInvoiceNumber()
+                    + " totalling "
+                    + creditedWithThis
+                    + " exceed approval threshold "
                     + threshold
                     + "; requires OWNER");
           }

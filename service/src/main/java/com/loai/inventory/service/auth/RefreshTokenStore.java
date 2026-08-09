@@ -81,6 +81,53 @@ public class RefreshTokenStore {
     }
   }
 
+  /** Who a rotated-away refresh token belonged to — the tombstone {@link #rotateAway} leaves. */
+  public record RotatedRef(UUID userId, UUID familyId) {}
+
+  /**
+   * Retire a refresh token because it was just rotated, leaving a <b>tombstone</b> that names the
+   * family it belonged to.
+   *
+   * <p>Rotation used to simply {@code DEL} the old hash, which made a stolen-then-rotated token
+   * indistinguishable from a random string on its next presentation: the code could log "possible
+   * reuse" but had nothing to revoke, so reuse detection was a no-op and the thief's freshly-minted
+   * token stayed valid. The tombstone (hash → family, never the raw token) is what turns a 401 into
+   * "burn the whole family". It expires with the token TTL — after that the token would have been
+   * dead anyway.
+   */
+  public void rotateAway(String tokenHash, TokenData data) {
+    try (Jedis jedis = jedisPool.getResource()) {
+      jedis.del("rt:" + tokenHash);
+      jedis.setex(
+          "rt:rotated:" + tokenHash, TOKEN_TTL_SECONDS, data.userId() + ":" + data.familyId());
+    }
+  }
+
+  /**
+   * The family a presented-but-unknown token was rotated out of, if we recorded one. Empty means a
+   * plain unknown token (expired, logged out, or garbage) — not proof of reuse, so the caller must
+   * treat it as an ordinary 401 and revoke nothing.
+   */
+  public Optional<RotatedRef> findRotatedFamily(String tokenHash) {
+    String val;
+    try (Jedis jedis = jedisPool.getResource()) {
+      val = jedis.get("rt:rotated:" + tokenHash);
+    }
+    if (val == null) {
+      return Optional.empty();
+    }
+    String[] parts = val.split(":", 2);
+    if (parts.length != 2) {
+      return Optional.empty();
+    }
+    try {
+      return Optional.of(new RotatedRef(UUID.fromString(parts[0]), UUID.fromString(parts[1])));
+    } catch (IllegalArgumentException e) {
+      log.warn("Malformed rotation tombstone ignored");
+      return Optional.empty();
+    }
+  }
+
   /**
    * Per-device access-token kill-switch. Denylists one refresh-token family so any already-issued
    * access token carrying that {@code fam} claim is rejected by the filter on its next request. The

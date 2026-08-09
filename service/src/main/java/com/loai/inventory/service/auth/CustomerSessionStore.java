@@ -98,6 +98,51 @@ public class CustomerSessionStore {
     }
   }
 
+  /** Who a rotated-away refresh token belonged to — the tombstone {@link #rotateAway} leaves. */
+  public record RotatedRef(UUID orgId, UUID customerId, UUID familyId) {}
+
+  /**
+   * Retire a refresh token because it was just rotated, leaving a tombstone naming its family — the
+   * customer-plane copy of {@link RefreshTokenStore#rotateAway}, and for the same reason: a plain
+   * {@code DEL} makes a stolen-then-rotated token indistinguishable from garbage on its next
+   * presentation, so reuse can be logged but not acted on.
+   */
+  public void rotateAway(String tokenHash, TokenData data) {
+    try (Jedis jedis = jedisPool.getResource()) {
+      jedis.del(tokenKey(tokenHash));
+      jedis.setex(
+          "crt:rotated:" + tokenHash,
+          tokenTtlSeconds,
+          data.orgId() + ":" + data.customerId() + ":" + data.familyId());
+    }
+  }
+
+  /**
+   * The family a presented-but-unknown token was rotated out of, if we recorded one. Empty = an
+   * ordinary unknown token; the caller must revoke nothing.
+   */
+  public Optional<RotatedRef> findRotatedFamily(String tokenHash) {
+    String val;
+    try (Jedis jedis = jedisPool.getResource()) {
+      val = jedis.get("crt:rotated:" + tokenHash);
+    }
+    if (val == null) {
+      return Optional.empty();
+    }
+    String[] parts = val.split(":", 3);
+    if (parts.length != 3) {
+      return Optional.empty();
+    }
+    try {
+      return Optional.of(
+          new RotatedRef(
+              UUID.fromString(parts[0]), UUID.fromString(parts[1]), UUID.fromString(parts[2])));
+    } catch (IllegalArgumentException e) {
+      log.warn("Malformed customer rotation tombstone ignored");
+      return Optional.empty();
+    }
+  }
+
   /** Per-device access-token kill-switch — denylist a family for the access-token TTL. */
   public void denyFamilyAccess(UUID familyId, long ttlSeconds) {
     try (Jedis jedis = jedisPool.getResource()) {

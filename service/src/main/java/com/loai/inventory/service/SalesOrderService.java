@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
+import org.jooq.exception.DataAccessException;
 import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,6 +61,14 @@ public class SalesOrderService {
 
   private static final Logger log = LoggerFactory.getLogger(SalesOrderService.class);
   private static final String CURRENCY_EGP = "EGP";
+
+  /**
+   * Postgres-named unique index behind {@code UNIQUE (org_id, idempotency_key)} on {@code
+   * sales_order} (V17) — the backstop that catches the placement race the read-then-insert
+   * short-circuit cannot. Narrowed by name so a different integrity violation still bubbles.
+   */
+  private static final String ORDER_IDEMPOTENCY_CONSTRAINT =
+      "sales_order_org_id_idempotency_key_key";
 
   private final DSLContext rootDsl;
   private final SalesOrderRepositoryFactory repoFactory;
@@ -321,14 +330,7 @@ public class SalesOrderService {
     if (idempotencyKey != null && !idempotencyKey.isBlank()) {
       var existing = repo.findByIdempotencyKey(orgId, idempotencyKey);
       if (existing.isPresent()) {
-        SalesOrder prior = existing.get();
-        List<SalesOrderLine> priorLines = repo.findLinesByOrderId(prior.getId());
-        Customer priorCustomer = loadCustomerOrThrow(repo, orgId, prior.getCustomerId());
-        log.info(
-            "Idempotent replay: returning existing order id={} number={}",
-            prior.getId(),
-            prior.getOrderNumber());
-        return new PlacementResult(prior, priorLines, priorCustomer, null, false);
+        return replayOf(repo, orgId, existing.get());
       }
     }
 
@@ -342,24 +344,61 @@ public class SalesOrderService {
             .create(txDsl)
             .findById(orgId)
             .orElseThrow(() -> new NotFoundException("Org", orgId));
-    BuiltOrder built =
-        buildDraftOrder(
-            txDsl,
-            repo,
-            org,
-            OrderChannel.ONLINE,
-            customerResolver.resolve(repo),
-            lines,
-            idempotencyKey,
-            notes,
-            couponCode,
-            now);
+
+    // 2. Build + insert, behind a SAVEPOINT.
+    //
+    // The short-circuit above is a read, and reads don't serialize: two genuinely-concurrent
+    // submits carrying the SAME Idempotency-Key both see "absent", and the loser meets the
+    // (org_id, idempotency_key) UNIQUE on insert. That used to surface as an uncaught
+    // DataAccessException — a 500 for a shopper whose double-tap the header exists to make safe.
+    // The savepoint is what makes recovery possible at all: a constraint violation poisons the
+    // whole Postgres transaction, so without one there is nothing left to read the winner's order
+    // with (and the outer transaction may not even be ours — the portal checkout owns it).
+    // Rolling back to it also un-claims the order number, so a race leaves no gap in the sequence.
+    BuiltOrder built;
+    try {
+      built =
+          txDsl.transactionResult(
+              nested -> {
+                BuiltOrder b =
+                    buildDraftOrder(
+                        txDsl,
+                        repo,
+                        org,
+                        OrderChannel.ONLINE,
+                        customerResolver.resolve(repo),
+                        lines,
+                        idempotencyKey,
+                        notes,
+                        couponCode,
+                        now);
+                OffsetDateTime expires = now.plus(Duration.ofMinutes(org.getOrderTtlMinutes()));
+                b.order().markPendingPayment(now, expires);
+                repo.insert(b.order(), b.lines());
+                return b;
+              });
+    } catch (DataAccessException e) {
+      if (!NumberSequenceConflicts.isUniqueViolationOn(e, ORDER_IDEMPOTENCY_CONSTRAINT)) {
+        throw e;
+      }
+      // The other submit won and has committed (that is *why* we saw the violation), so this read
+      // — taken after the savepoint rollback, on a fresh statement snapshot — finds its order.
+      // Both callers therefore resolve to the same order: one 201, one 200, never a 500.
+      SalesOrder winner =
+          repo.findByIdempotencyKey(orgId, idempotencyKey)
+              .orElseThrow(
+                  () ->
+                      new ConflictException(
+                          "duplicate order submission for idempotency key " + idempotencyKey));
+      log.info(
+          "Concurrent duplicate placement resolved as a replay: order id={} number={} key={}",
+          winner.getId(),
+          winner.getOrderNumber(),
+          idempotencyKey);
+      return replayOf(repo, orgId, winner);
+    }
     SalesOrder order = built.order();
     List<SalesOrderLine> orderLines = built.lines();
-
-    OffsetDateTime expiresAt = now.plus(Duration.ofMinutes(org.getOrderTtlMinutes()));
-    order.markPendingPayment(now, expiresAt);
-    repo.insert(order, orderLines);
     // FIRST_ORDER — the order row exists now, in this txn (online + storefront placement share
     // this method). A rolled-back placement (e.g. the shortage check below) leaves no stamp.
     milestoneService.reach(txDsl, orgId, PlatformFunnelStage.FIRST_ORDER, now);
@@ -409,6 +448,21 @@ public class SalesOrderService {
         orderLines.size());
 
     return new PlacementResult(order, orderLines, built.customer(), trackUrl, true);
+  }
+
+  /**
+   * The replay answer for an {@code Idempotency-Key} that already has an order: the prior order and
+   * its lines, {@code created=false} (the servlet turns that into a 200), and no {@code trackUrl} —
+   * the magic-link token was minted once and its raw value is not reconstructable.
+   */
+  private PlacementResult replayOf(SalesOrderRepository repo, UUID orgId, SalesOrder prior) {
+    List<SalesOrderLine> priorLines = repo.findLinesByOrderId(prior.getId());
+    Customer priorCustomer = loadCustomerOrThrow(repo, orgId, prior.getCustomerId());
+    log.info(
+        "Idempotent replay: returning existing order id={} number={}",
+        prior.getId(),
+        prior.getOrderNumber());
+    return new PlacementResult(prior, priorLines, priorCustomer, null, false);
   }
 
   private static List<OrderLineInput> toOrderLineInputs(List<StorefrontLineInput> lines) {
