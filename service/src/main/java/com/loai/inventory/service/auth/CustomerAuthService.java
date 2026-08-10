@@ -298,6 +298,23 @@ public class CustomerAuthService {
     return sessionStore.listSessions(orgId, customerId);
   }
 
+  /**
+   * Sign one device out — the staff plane's {@code AuthService#revokeSession} scoped to a customer.
+   * {@code revokeFamily} is the ownership check: it returns false unless the family is a member of
+   * *this* {@code (orgId, customerId)}'s set, so another shopper's family id is a 404 and never a
+   * revoke. The denylist write is what kills that device's outstanding access token now rather than
+   * at its next refresh — without it the revoked phone keeps reading for up to the access TTL.
+   *
+   * <p>Deliberately NOT a {@code token_version} bump: that is {@link #logoutAll}'s hammer and would
+   * sign out every other device too, which is the opposite of what a per-device revoke means.
+   */
+  public void revokeSession(UUID orgId, UUID customerId, UUID familyId) {
+    if (!sessionStore.revokeFamily(familyId, orgId, customerId)) {
+      throw new NotFoundException("Session not found: " + familyId);
+    }
+    sessionStore.denyFamilyAccess(familyId, accessTtlSeconds());
+  }
+
   // Filter passthroughs (fail-closed token_version + per-device kill)
 
   public boolean isTokenVersionValid(UUID orgId, UUID customerId, int claimedVersion) {

@@ -67,7 +67,8 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li>{@code POST /auth/refresh} — rotate the session off the {@code customer_refresh} cookie
  *   <li>{@code POST /auth/logout} — kill this device; {@code POST /auth/logout-all} — every device
- *   <li>{@code GET /auth/sessions} — this customer's active devices
+ *   <li>{@code GET /auth/sessions} — this customer's active devices; {@code DELETE
+ *       /auth/sessions/{familyId}} — sign one of them out
  *   <li>{@code GET|PATCH /me} — read / merge-update the caller's own profile
  *   <li>{@code GET /orders} — the caller's own orders, newest first, paged (slice P2)
  *   <li>{@code GET /orders/{orderNumber}} — one owned order (customer-safe); opaque 404 otherwise
@@ -278,6 +279,11 @@ public class PortalServlet extends HttpServlet {
         }
         return;
       }
+      if (path.startsWith("/auth/sessions/")) {
+        String rest = path.substring("/auth/sessions/".length());
+        requireDelete(method, () -> handleRevokeSession(req, resp, rest));
+        return;
+      }
       switch (path) {
         case "/auth/refresh" -> requirePost(method, () -> handleRefresh(req, resp));
         case "/auth/logout" -> requirePost(method, () -> handleLogout(req, resp));
@@ -331,6 +337,29 @@ public class PortalServlet extends HttpServlet {
     CustomerPrincipal principal = requirePrincipal(req);
     authService.logoutAll(principal.orgId(), principal.customerId());
     CustomerAuthCookies.clearAll(resp, secureCookies);
+    resp.setStatus(204);
+  }
+
+  /**
+   * {@code DELETE /auth/sessions/{familyId}} — sign one device out (204). The family id comes from
+   * the shopper's own {@code GET /auth/sessions} list; ownership is re-checked against the token's
+   * {@code (org_id, customer_id)} in the store, so a foreign id is a 404 and never a revoke.
+   *
+   * <p>Cookies are deliberately left alone: revoking the device you are *currently* on is a
+   * legitimate move, and clearing the jar here would sign the caller out of the page they are
+   * standing on as a side effect of a row-level action. The denylist already makes that token dead
+   * on its next request; {@code /auth/logout} is the verb that means "end this device's session".
+   */
+  private void handleRevokeSession(HttpServletRequest req, HttpServletResponse resp, String rawId)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    UUID familyId;
+    try {
+      familyId = UUID.fromString(rawId);
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Invalid session id: " + rawId);
+    }
+    authService.revokeSession(principal.orgId(), principal.customerId(), familyId);
     resp.setStatus(204);
   }
 
@@ -915,6 +944,13 @@ public class PortalServlet extends HttpServlet {
 
   private void requireGet(String method, Handler h) throws IOException {
     if (!"GET".equals(method)) {
+      throw new ValidationException("Method not allowed");
+    }
+    h.run();
+  }
+
+  private void requireDelete(String method, Handler h) throws IOException {
+    if (!"DELETE".equals(method)) {
       throw new ValidationException("Method not allowed");
     }
     h.run();

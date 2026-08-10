@@ -129,6 +129,18 @@ public class MagicLinkService {
    * Mint an UNSUBSCRIBE token for {@code customerId} inside the caller's txn and return the
    * absolute public URL. Not order-scoped ({@code resource_id} null) — it turns the customer's
    * email off for the org. Minted in {@code txDsl} so a rolled-back producer leaves no token.
+   *
+   * <p>The link targets the storefront's confirmation page, not the API — the same {@code
+   * /{locale}/{orgSlug}/…} shape {@link #issueOrderViewLink} builds, for the same reason (an
+   * emailed link should land a human on a page that says what happened). It is also the fix for a
+   * real defect: {@code PublicUnsubscribeServlet} applies on {@code GET}, so pointing the footer
+   * straight at it let any mail client that prefetches links silently unsubscribe a customer who
+   * never clicked. The page applies nothing on render; the shopper's button press is a {@code
+   * POST}.
+   *
+   * <p>The servlet's {@code GET} is deliberately left working — links already sitting in inboxes
+   * carry the old URL and must keep resolving. This changes the address we hand out, not the
+   * addresses we honour.
    */
   public String issueUnsubscribeLink(
       DSLContext txDsl, UUID orgId, UUID customerId, OffsetDateTime now) {
@@ -139,7 +151,16 @@ public class MagicLinkService {
         .insert(
             CustomerMagicToken.forInsert(
                 orgId, customerId, tokenHash, MagicTokenPurpose.UNSUBSCRIBE, null, now.plus(ttl)));
-    return publicBaseUrl + "/api/public/unsubscribe/" + rawToken;
+    Org org =
+        orgRepositoryFactory
+            .create(txDsl)
+            .findById(orgId)
+            .orElseThrow(() -> new IllegalStateException("org not found for magic link: " + orgId));
+    String locale =
+        (org.getDefaultLocale() != null && !org.getDefaultLocale().isBlank())
+            ? org.getDefaultLocale()
+            : DEFAULT_LOCALE;
+    return publicBaseUrl + "/" + locale + "/" + org.getSlug() + "/unsubscribe/" + rawToken;
   }
 
   /**

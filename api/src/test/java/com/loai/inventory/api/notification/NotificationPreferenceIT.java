@@ -268,6 +268,24 @@ class NotificationPreferenceIT {
   }
 
   @Test
+  void unsubscribeLink_targetsTheStorefrontPage_notTheApi() {
+    UUID org = createOrg("acme");
+    UUID customer = createCustomer(org, "nadia@acme.test");
+    String slug = dsl.select(ORG.SLUG).from(ORG).where(ORG.ID.eq(org)).fetchOne(ORG.SLUG);
+
+    String url =
+        magicLink.issueUnsubscribeLink(dsl, org, customer, OffsetDateTime.now(ZoneOffset.UTC));
+
+    // The emailed address is a page a human lands on, not the endpoint that applies the change:
+    // PublicUnsubscribeServlet acts on GET, so a link-prefetching mail client following the old
+    // API URL unsubscribed people who never clicked.
+    assertFalse(url.contains("/api/public/unsubscribe/"), "the footer must not point at the API");
+    assertTrue(
+        url.startsWith("http://localhost:8080/ar/" + slug + "/unsubscribe/"),
+        "locale + org slug + /unsubscribe/{token}, the issueOrderViewLink shape — was: " + url);
+  }
+
+  @Test
   void resolveUnsubscribe_unknownToken_isEmpty() {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     assertTrue(magicLink.resolveUnsubscribe("nope", now).isEmpty());
