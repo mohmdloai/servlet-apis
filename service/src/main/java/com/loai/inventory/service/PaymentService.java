@@ -160,6 +160,7 @@ public final class PaymentService {
       Payment payment = createPrepayment(txDsl, orgId, order, txn, now);
       order.addPrepayment(order.getPrepaidAmount().add(txn.getAmount()), now);
       orderRepo.updatePaymentState(order);
+      notifyPaymentNeedsAttention(txDsl, orgId, order, txn, now);
       log.info(
           "Reconcile UNDERPAID: order {} prepaid {} < grandTotal {} (payment {} RECEIVED amount={})",
           order.getOrderNumber(),
@@ -236,6 +237,46 @@ public final class PaymentService {
         Map.of(
             "order_number", order.getOrderNumber(),
             "amount", txn.getAmount(),
+            "currency", txn.getCurrency()),
+        "sales_order",
+        order.getId(),
+        viewLink.absolute());
+  }
+
+  /**
+   * PAYMENT_NEEDS_ATTENTION producer ({@code stories/order_lifecycle_notifications.md}): "we got
+   * your transfer, it's short by X, your items are still held". Raised on the <b>UNDERPAID</b>
+   * branch only, inside {@code txDsl} and after the partial {@link Payment} and the order's new
+   * {@code prepaid_amount} are persisted — so the acknowledgement and the money record commit
+   * together, and {@code order.getPrepaidAmount()} already includes this transfer when the
+   * remainder is computed.
+   *
+   * <p>This is the sharpest silence in the flow: the shopper moved real money, the order stays
+   * {@code PENDING_PAYMENT}, and from their side that is indistinguishable from a failed transfer.
+   * Firing <b>per recorded partial</b> is deliberate — a second top-up that still falls short
+   * raises it again carrying the new, smaller remainder, which is the only number they need.
+   *
+   * <p>Silent when the order has no customer ({@code customer_id} NULL on some PHONE orders),
+   * mirroring {@link #notifyOrderPaid}: there is nobody to mail.
+   */
+  private void notifyPaymentNeedsAttention(
+      DSLContext txDsl, UUID orgId, SalesOrder order, PaymentTransaction txn, OffsetDateTime now) {
+    if (order.getCustomerId() == null) {
+      return;
+    }
+    BigDecimal outstanding = order.getGrandTotal().subtract(order.getPrepaidAmount());
+    MagicLinkService.OrderViewLink viewLink =
+        magicLinkService.issueOrderViewLink(
+            txDsl, orgId, order.getCustomerId(), order.getId(), now);
+    notificationService.notify(
+        txDsl,
+        orgId,
+        NotificationRecipient.customer(order.getCustomerId()),
+        NotificationType.PAYMENT_NEEDS_ATTENTION,
+        Map.of(
+            "order_number", order.getOrderNumber(),
+            "amount", txn.getAmount(),
+            "outstanding", outstanding,
             "currency", txn.getCurrency()),
         "sales_order",
         order.getId(),

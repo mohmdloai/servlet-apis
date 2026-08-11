@@ -150,7 +150,9 @@ class OrderPaymentsIT {
                 new InventoryRepositoryFactoryImpl(),
                 new InventoryReservationRepositoryFactoryImpl(),
                 new InventoryLogRepositoryFactoryImpl()),
-            refundService);
+            refundService,
+            TestWiring.notificationService(dsl),
+            TestWiring.magicLinkService(dsl));
   }
 
   @AfterAll

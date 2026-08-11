@@ -128,7 +128,9 @@ class OrderCancellationAdversarialIT {
             new PaymentRepositoryFactoryImpl(),
             new com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl(),
             reservationService,
-            refundService);
+            refundService,
+            com.loai.inventory.api.support.TestWiring.notificationService(dsl),
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
   }
 
   @AfterAll

@@ -216,7 +216,10 @@ recommendation in this plan's discussion. Not in the notifications scope.
 | Order placed | Org staff | in_app | ✅ |
 | Payment needs verification (manual InstaPay) | Org admin | in_app | |
 | Payment verified | Customer | email | ✅ shipped as `ORDER_PAID` — fired at both `markPaid` sites in `PaymentService.reconcileAndCreate` (MATCHED + OVERPAID, so verify **and** orphan-resolve), not on UNDERPAID or the in-store sale; carries a fresh order-view magic link (`stories/notify_order_paid.md`) |
-| Order shipped / delivered | Customer | email | |
+| Order shipped | Customer | email | ✅ shipped as `ORDER_SHIPPED` — fired in `FulfillmentService.ship` on `PENDING → SHIPPED`, **once per fulfillment** (a split order is two boxes, two messages); carries `carrier`/`tracking_number` only when recorded. Deliberately **not** named `OUT_FOR_DELIVERY`, which `stories/rider_self_delivery.md` reserves for the rider-pickup edge (`stories/order_lifecycle_notifications.md`) |
+| Order delivered | Customer | email | only via the `REVIEW_REQUESTED` roll-up; a per-shipment "part of your order arrived" is not built |
+| Order cancelled | Customer | email | ✅ shipped as `ORDER_CANCELLED` — fired in `OrderCancellationService.cancel` after the refund obligations exist, so a cancel refused by the approval gate rolls back and stays silent. Names the refund total as *being processed* (refunds are created PENDING — no money has moved); an order with no prepayment gets no money sentence at all |
+| Payment received but short (UNDERPAID) | Customer | email | ✅ shipped as `PAYMENT_NEEDS_ATTENTION` — fired on the UNDERPAID reconcile branch beside the partial Payment, **per recorded partial** (each top-up restates the smaller remainder). Silent on OVERPAID (that order is PAID) and on DISPUTED |
 | Invoice issued / reissued | Customer | email *(delivery only — does not harden the invoice)* | |
 | Low-stock threshold crossed | Org manager | in_app | |
 | Refund executed | Customer | email | |
@@ -259,6 +262,18 @@ each calling `notify(...)` inside its business txn.
 5. **Phase 4 — Explicit sends:** admin→org and org→customer producers.
 6. **Later:** customer-session magic links / portal (own slice), SMS/WhatsApp subtypes, ESP webhooks
    for true DELIVERED, org template customization, broadcast model.
+
+> **A new type is free; a new channel is not.** `notification.type` is open TEXT, so the three
+> lifecycle events above cost no migration. `notification_delivery.channel` is `TEXT + CHECK
+> (channel IN ('in_app','email'))`, so **WhatsApp/SMS need a migration (next: V79)**, a subtype
+> table beside `notification_delivery_email`, and `channelsFor(recipient)` — today a constant
+> two-line switch — becoming a per-org/per-customer resolution. The owner decision is a
+> **per-merchant WABA** (each merchant connects their own number, brand and template approval).
+> Its blocking prerequisite is that **no E.164 phone exists anywhere**: `customer.phone` is free
+> text through `Text.normalizeNumeric`, which deliberately keeps `+` and other non-digits, so
+> `01012345678` / `+20 100 123 4567` / `0100-123-4567` are all live values. Phone normalization +
+> validation + backfill is its own slice, in front of the channel work — see
+> `stories/order_lifecycle_notifications.md` §Slice B.
 
 ## Verification (per phase)
 `docker-compose up -d` · regen jOOQ after each migration · `mvn install` · Testcontainers ITs
