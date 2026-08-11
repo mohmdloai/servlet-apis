@@ -515,12 +515,23 @@ class OrderPaidNotificationIT {
         .fetchOne(SALES_ORDER.STATUS, String.class);
   }
 
+  /**
+   * An <b>English</b> org. Explicit on purpose: {@code org.default_locale} defaults to {@code 'ar'}
+   * (V52), so since slice L a seed that leaves it unset produces Arabic notifications. The
+   * assertions below are about notification mechanics, not language, so they pin the locale rather
+   * than restating every template in Arabic — the Arabic path has its own coverage.
+   */
   private UUID createOrg(String slug) {
+    return createOrg(slug, "en");
+  }
+
+  private UUID createOrg(String slug, String defaultLocale) {
     UUID id = UUID.randomUUID();
     dsl.insertInto(ORG)
         .set(ORG.ID, id)
         .set(ORG.NAME, slug)
         .set(ORG.SLUG, slug + "-" + id)
+        .set(ORG.DEFAULT_LOCALE, defaultLocale)
         .execute();
     return id;
   }

@@ -149,6 +149,7 @@ class OrderLineTitleSnapshotIT {
             dsl,
             new CustomerMagicTokenRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
+            new CustomerRepositoryFactoryImpl(),
             "http://localhost:8080",
             Duration.ofDays(30));
     PaymentService paymentService =

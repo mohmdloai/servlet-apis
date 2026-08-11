@@ -567,6 +567,7 @@ public class StorefrontService {
               idempotencyKey,
               input.notes(),
               input.couponCode(),
+              resolvedLocale,
               STOREFRONT_ACTOR);
       return new CheckoutResult(
           placed.order(),

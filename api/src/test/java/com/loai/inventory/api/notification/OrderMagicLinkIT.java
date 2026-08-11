@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
+import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.MagicLinkService.ResolvedOrderView;
@@ -71,6 +72,7 @@ class OrderMagicLinkIT {
             dsl,
             new CustomerMagicTokenRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
+            new CustomerRepositoryFactoryImpl(),
             "http://localhost:8080/",
             Duration.ofDays(30));
   }

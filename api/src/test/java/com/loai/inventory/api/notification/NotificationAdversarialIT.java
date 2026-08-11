@@ -490,11 +490,13 @@ class NotificationAdversarialIT {
         new UserRepositoryFactoryImpl(),
         new CustomerRepositoryFactoryImpl(),
         new com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl(),
+        new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
         sender,
         new com.loai.inventory.service.MagicLinkService(
             dsl,
             new com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
             "http://localhost:8080",
             java.time.Duration.ofDays(30)),
         maxAttempts);
@@ -514,12 +516,23 @@ class NotificationAdversarialIT {
     return n.getId();
   }
 
+  /**
+   * An <b>English</b> org. Explicit on purpose: {@code org.default_locale} defaults to {@code 'ar'}
+   * (V52), so since slice L a seed that leaves it unset produces Arabic notifications. The
+   * assertions below are about notification mechanics, not language, so they pin the locale rather
+   * than restating every template in Arabic — the Arabic path has its own coverage.
+   */
   private UUID createOrg(String slug) {
+    return createOrg(slug, "en");
+  }
+
+  private UUID createOrg(String slug, String defaultLocale) {
     UUID id = UUID.randomUUID();
     dsl.insertInto(ORG)
         .set(ORG.ID, id)
         .set(ORG.NAME, slug)
         .set(ORG.SLUG, slug + "-" + id)
+        .set(ORG.DEFAULT_LOCALE, defaultLocale)
         .execute();
     return id;
   }

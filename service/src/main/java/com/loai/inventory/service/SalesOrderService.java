@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Locales;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
@@ -214,7 +215,7 @@ public class SalesOrderService {
     // Admin-placed phone orders take no coupon in v1 (the same call as the in-store POS: a
     // staff-granted discount is a different authority question — documented in the slice).
     PlacementResult r =
-        placeReserved(orgId, customer, resolved, idempotencyKey, notes, null, actor);
+        placeReserved(orgId, customer, resolved, idempotencyKey, notes, null, null, actor);
     return new Placed(r.order(), r.lines(), r.customer());
   }
 
@@ -234,6 +235,7 @@ public class SalesOrderService {
       String idempotencyKey,
       String notes,
       String couponCode,
+      String locale,
       ActorContext actor) {
 
     validateOnlineInputs(customer, toOrderLineInputs(lines));
@@ -242,7 +244,7 @@ public class SalesOrderService {
             .map(l -> new ResolvedLine(l.productId(), l.quantity(), l.unitPrice(), l.description()))
             .toList();
     PlacementResult r =
-        placeReserved(orgId, customer, resolved, idempotencyKey, notes, couponCode, actor);
+        placeReserved(orgId, customer, resolved, idempotencyKey, notes, couponCode, locale, actor);
     return new StorefrontPlaced(r.order(), r.lines(), r.customer(), r.trackUrl(), r.created());
   }
 
@@ -302,6 +304,7 @@ public class SalesOrderService {
       String idempotencyKey,
       String notes,
       String couponCode,
+      String locale,
       ActorContext actor) {
 
     return rootDsl.transactionResult(
@@ -309,7 +312,7 @@ public class SalesOrderService {
             placeReservedInTx(
                 DSL.using(cfg),
                 orgId,
-                repo -> resolveCustomer(repo, orgId, customer, true),
+                repo -> resolveCustomer(repo, orgId, customer, true, locale),
                 // On the anonymous form the single contact block IS both the buyer's identity and
                 // the delivery contact — there is no separate address input — so the order's
                 // snapshot is that same block. The portal path supplies a distinct one.
@@ -555,7 +558,9 @@ public class SalesOrderService {
                   repo,
                   inStoreOrg,
                   OrderChannel.IN_STORE,
-                  resolveCustomer(repo, orgId, customer, false),
+                  // In-store: the counter has no storefront locale, so a walk-in customer's
+                  // language stays unlearned and their notifications follow the org default.
+                  resolveCustomer(repo, orgId, customer, false, null),
                   lines.stream()
                       .map(l -> new ResolvedLine(l.productId(), l.quantity(), null, null))
                       .toList(),
@@ -895,7 +900,11 @@ public class SalesOrderService {
    * customer_id} stays null).
    */
   private Customer resolveCustomer(
-      SalesOrderRepository repo, UUID orgId, CustomerInput customer, boolean required) {
+      SalesOrderRepository repo,
+      UUID orgId,
+      CustomerInput customer,
+      boolean required,
+      String locale) {
     boolean hasEmail = customer != null && customer.email() != null && !customer.email().isBlank();
     if (!hasEmail) {
       if (required) {
@@ -925,7 +934,10 @@ public class SalesOrderService {
         normalizedEmail,
         Text.normalizeText(customer.name()),
         Text.normalizeNumeric(customer.phone()),
-        Text.normalizeText(customer.address()));
+        Text.normalizeText(customer.address()),
+        // Fill-once on the repository side: this teaches us the shopper's language the first time,
+        // and never overrides one they have since chosen in the portal (slice L).
+        Locales.normalize(locale));
   }
 
   /**

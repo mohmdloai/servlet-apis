@@ -22,6 +22,15 @@ public class Customer {
   private String phoneE164;
 
   private String address;
+
+  /**
+   * Preferred content language ({@code ar}/{@code en}, V81), or null when we have never learned it
+   * — in which case the org's {@code default_locale} decides. Learned at anonymous checkout, filled
+   * once at portal checkout if still absent, and settable by the customer at {@code PATCH
+   * /api/portal/me}. This is what makes a notification arrive in a language the shopper reads.
+   */
+  private String locale;
+
   private OffsetDateTime emailVerifiedAt;
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
@@ -85,6 +94,14 @@ public class Customer {
 
   public void setPhone(String phone) {
     this.phone = phone;
+  }
+
+  public String getLocale() {
+    return locale;
+  }
+
+  public void setLocale(String locale) {
+    this.locale = locale;
   }
 
   public String getPhoneE164() {

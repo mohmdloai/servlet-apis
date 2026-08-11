@@ -109,6 +109,7 @@ class PortalNotificationsIT {
             dsl,
             new CustomerMagicTokenRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
+            new CustomerRepositoryFactoryImpl(),
             "http://localhost:8080",
             Duration.ofDays(30));
     service =
@@ -118,6 +119,7 @@ class PortalNotificationsIT {
             new UserRepositoryFactoryImpl(),
             new CustomerRepositoryFactoryImpl(),
             new NotificationPreferenceRepositoryFactoryImpl(),
+            new OrgRepositoryFactoryImpl(),
             new LoggingEmailSender(),
             magicLink,
             NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS);

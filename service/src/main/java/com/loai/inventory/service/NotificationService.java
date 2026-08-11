@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.common.Pagination;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Locales;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.DeliveryStatus;
 import com.loai.inventory.domain.model.InAppFeedItem;
@@ -15,6 +16,7 @@ import com.loai.inventory.domain.model.NotificationPreference;
 import com.loai.inventory.domain.model.NotificationRecipient;
 import com.loai.inventory.domain.model.NotificationStatus;
 import com.loai.inventory.domain.model.NotificationType;
+import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.RecipientType;
 import com.loai.inventory.domain.repository.CustomerRepository;
@@ -23,6 +25,7 @@ import com.loai.inventory.domain.repository.NotificationPreferenceRepository;
 import com.loai.inventory.domain.repository.NotificationPreferenceRepositoryFactory;
 import com.loai.inventory.domain.repository.NotificationRepository;
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.service.email.EmailMessage;
@@ -77,6 +80,7 @@ public class NotificationService {
   private final UserRepositoryFactory userRepoFactory;
   private final CustomerRepositoryFactory customerRepoFactory;
   private final NotificationPreferenceRepositoryFactory preferenceRepoFactory;
+  private final OrgRepositoryFactory orgRepoFactory;
   private final EmailSender emailSender;
   private final MagicLinkService magicLinkService;
   private final int emailMaxAttempts;
@@ -88,6 +92,7 @@ public class NotificationService {
       UserRepositoryFactory userRepoFactory,
       CustomerRepositoryFactory customerRepoFactory,
       NotificationPreferenceRepositoryFactory preferenceRepoFactory,
+      OrgRepositoryFactory orgRepoFactory,
       EmailSender emailSender,
       MagicLinkService magicLinkService,
       int emailMaxAttempts) {
@@ -96,6 +101,7 @@ public class NotificationService {
     this.userRepoFactory = userRepoFactory;
     this.customerRepoFactory = customerRepoFactory;
     this.preferenceRepoFactory = preferenceRepoFactory;
+    this.orgRepoFactory = orgRepoFactory;
     this.emailSender = emailSender;
     this.magicLinkService = magicLinkService;
     this.emailMaxAttempts = emailMaxAttempts > 0 ? emailMaxAttempts : DEFAULT_EMAIL_MAX_ATTEMPTS;
@@ -166,7 +172,8 @@ public class NotificationService {
       UUID sourceId,
       String linkTarget) {
     NotificationRepository repo = notificationRepoFactory.create(txDsl);
-    NotificationTemplates.Rendered rendered = NotificationTemplates.render(type, payload);
+    String locale = resolveLocale(txDsl, orgId, recipient);
+    NotificationTemplates.Rendered rendered = NotificationTemplates.render(type, payload, locale);
     OffsetDateTime now = now();
 
     Notification n = new Notification();
@@ -219,7 +226,7 @@ public class NotificationService {
               magicLinkService.issueUnsubscribeLink(txDsl, orgId, recipient.customerId(), now);
           String html =
               NotificationTemplates.emailHtml(
-                  rendered.body(), linkTarget, rendered.ctaLabel(), unsubscribeUrl);
+                  rendered.body(), linkTarget, rendered.ctaLabel(), unsubscribeUrl, locale);
           repo.insertEmailDelivery(savedDelivery.getId(), toAddress, rendered.title(), html);
         }
       }
@@ -261,6 +268,49 @@ public class NotificationService {
       case USER -> List.of(NotificationChannel.IN_APP);
       case CUSTOMER -> List.of(NotificationChannel.IN_APP, NotificationChannel.EMAIL);
     };
+  }
+
+  /**
+   * The language to write this notification in: the customer's own {@code locale} when we have
+   * learned one, else the org's {@code default_locale}, else Arabic (slice L).
+   *
+   * <p>A <b>USER</b> recipient resolves to the org default — {@code app_user} carries no locale,
+   * and an org's staff notifications reasonably follow the store's own language. Giving staff their
+   * own preference is a separate slice with its own surface (a setting nobody has asked for yet).
+   *
+   * <p><b>This must not throw</b>, for the same reason {@link #resolveCustomerEmail} must not:
+   * {@code notify} runs inside the caller's <em>business</em> transaction, so an exception here
+   * would roll back the order placement or the PAID flip, not merely pick the wrong language. A
+   * missing org or an unreadable value degrades to {@link Locales#resolve}'s Arabic floor.
+   *
+   * <p>Costs one small org read per notification. Deliberately not cached or hoisted out of the
+   * staff fan-out: these events fire at human cadence inside transactions that already do far more
+   * work, and a stale locale cache would be a much worse bug than a redundant primary-key lookup.
+   */
+  private String resolveLocale(DSLContext txDsl, UUID orgId, NotificationRecipient recipient) {
+    String orgDefault = null;
+    try {
+      orgDefault =
+          orgRepoFactory.create(txDsl).findById(orgId).map(Org::getDefaultLocale).orElse(null);
+    } catch (RuntimeException e) {
+      log.warn("Could not read the default locale for org {} — falling back", orgId, e);
+    }
+    if (recipient.type() != RecipientType.CUSTOMER) {
+      return Locales.resolve(null, orgDefault);
+    }
+    String customerLocale = null;
+    try {
+      customerLocale =
+          customerRepoFactory
+              .create(txDsl)
+              .findById(orgId, recipient.customerId())
+              .map(Customer::getLocale)
+              .orElse(null);
+    } catch (RuntimeException e) {
+      log.warn(
+          "Could not read the locale for customer {} — falling back", recipient.customerId(), e);
+    }
+    return Locales.resolve(customerLocale, orgDefault);
   }
 
   /**

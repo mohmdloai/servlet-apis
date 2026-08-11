@@ -269,7 +269,7 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
 
   @Override
   public Customer upsertCustomerByEmail(
-      UUID orgId, String email, String name, String phone, String address) {
+      UUID orgId, String email, String name, String phone, String address, String locale) {
     CustomerRecord record =
         dsl.insertInto(CUSTOMER)
             .columns(
@@ -278,8 +278,9 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
                 CUSTOMER.NAME,
                 CUSTOMER.PHONE,
                 CUSTOMER.PHONE_E164,
-                CUSTOMER.ADDRESS)
-            .values(orgId, email, name, phone, Phone.toE164(phone), address)
+                CUSTOMER.ADDRESS,
+                CUSTOMER.LOCALE)
+            .values(orgId, email, name, phone, Phone.toE164(phone), address, locale)
             .onConflict(CUSTOMER.ORG_ID, CUSTOMER.EMAIL)
             .doUpdate()
             .set(CUSTOMER.NAME, DSL.coalesce(excluded(CUSTOMER.NAME), CUSTOMER.NAME))
@@ -294,6 +295,11 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
                 DSL.when(excluded(CUSTOMER.PHONE).isNotNull(), excluded(CUSTOMER.PHONE_E164))
                     .otherwise(CUSTOMER.PHONE_E164))
             .set(CUSTOMER.ADDRESS, DSL.coalesce(excluded(CUSTOMER.ADDRESS), CUSTOMER.ADDRESS))
+            // Fill-once, and note the argument order is REVERSED from its neighbours: the STORED
+            // value wins. A checkout locale is implicit (whichever link they opened); the portal
+            // profile is explicit. One English checkout must not permanently flip an Arabic
+            // speaker's language.
+            .set(CUSTOMER.LOCALE, DSL.coalesce(CUSTOMER.LOCALE, excluded(CUSTOMER.LOCALE)))
             .set(CUSTOMER.UPDATED_AT, DSL.currentOffsetDateTime())
             .returning()
             .fetchOne();

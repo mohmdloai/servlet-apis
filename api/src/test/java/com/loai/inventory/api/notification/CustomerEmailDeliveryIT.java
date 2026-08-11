@@ -218,11 +218,13 @@ class CustomerEmailDeliveryIT {
         new UserRepositoryFactoryImpl(),
         new CustomerRepositoryFactoryImpl(),
         new com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl(),
+        new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
         sender,
         new com.loai.inventory.service.MagicLinkService(
             dsl,
             new com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
             "http://localhost:8080",
             java.time.Duration.ofDays(30)),
         maxAttempts);
@@ -243,12 +245,18 @@ class CustomerEmailDeliveryIT {
     return n.getId();
   }
 
+  /**
+   * An <b>English</b> org — explicit because {@code org.default_locale} defaults to {@code 'ar'}
+   * (V52) and since slice L that decides the notification language. These assertions are about
+   * delivery mechanics, not wording.
+   */
   private UUID createOrg(String slug) {
     UUID id = UUID.randomUUID();
     dsl.insertInto(ORG)
         .set(ORG.ID, id)
         .set(ORG.NAME, slug)
         .set(ORG.SLUG, slug + "-" + id)
+        .set(ORG.DEFAULT_LOCALE, "en")
         .execute();
     return id;
   }
