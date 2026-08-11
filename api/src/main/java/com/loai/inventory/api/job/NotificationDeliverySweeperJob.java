@@ -48,11 +48,19 @@ public final class NotificationDeliverySweeperJob {
         notificationService.dispatchPendingInApp(batchLimit);
     NotificationService.DeliverySummary email =
         notificationService.dispatchPendingEmail(batchLimit);
+    // The third channel (slice B). Same tick, same batch limit, same lease — the reaper above is
+    // channel-agnostic (it keys on status=SENDING), so a stranded WhatsApp claim is already covered
+    // by it and needs no second reaper.
+    NotificationService.DeliverySummary whatsapp =
+        notificationService.dispatchPendingWhatsApp(batchLimit);
     if (reaped.picked() > 0) {
       log.warn("Notification delivery tick reaped stranded email claims: {}", reaped);
     }
     if (inApp.picked() > 0) {
       log.info("Notification delivery tick (in_app): {}", inApp);
+    }
+    if (whatsapp.picked() > 0) {
+      log.info("Notification delivery tick (whatsapp): {}", whatsapp);
     }
     if (email.picked() > 0) {
       log.info("Notification delivery tick (email): {}", email);

@@ -25,6 +25,7 @@ import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
@@ -193,8 +194,10 @@ class OrderLookupByNumberIT {
                 new CustomerRepositoryFactoryImpl(),
                 new NotificationPreferenceRepositoryFactoryImpl(),
                 new OrgRepositoryFactoryImpl(),
+                new OrgWhatsAppConfigRepositoryFactoryImpl(),
                 new LoggingEmailSender(),
                 magicLink,
+                new com.loai.inventory.service.whatsapp.LoggingWhatsAppSender(),
                 NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS),
             magicLink,
             com.loai.inventory.api.support.TestWiring.permissiveEmailGate(),

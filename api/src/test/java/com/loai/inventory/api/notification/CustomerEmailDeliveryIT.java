@@ -219,6 +219,7 @@ class CustomerEmailDeliveryIT {
         new CustomerRepositoryFactoryImpl(),
         new com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl(),
         new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+        new com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl(),
         sender,
         new com.loai.inventory.service.MagicLinkService(
             dsl,
@@ -227,6 +228,7 @@ class CustomerEmailDeliveryIT {
             new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
             "http://localhost:8080",
             java.time.Duration.ofDays(30)),
+        new com.loai.inventory.service.whatsapp.LoggingWhatsAppSender(),
         maxAttempts);
   }
 

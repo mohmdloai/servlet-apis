@@ -21,6 +21,7 @@ import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.generated.enums.ActorType;
 import com.loai.inventory.service.MagicLinkService;
@@ -112,8 +113,10 @@ class NotificationPreferenceIT {
             new CustomerRepositoryFactoryImpl(),
             new NotificationPreferenceRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
+            new OrgWhatsAppConfigRepositoryFactoryImpl(),
             new LoggingEmailSender(),
             magicLink,
+            new com.loai.inventory.service.whatsapp.LoggingWhatsAppSender(),
             NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS);
   }
 

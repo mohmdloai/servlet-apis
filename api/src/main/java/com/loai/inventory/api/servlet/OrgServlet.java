@@ -34,6 +34,7 @@ import com.loai.inventory.api.servlet.handler.ReviewHandler;
 import com.loai.inventory.api.servlet.handler.SalesOrderHandler;
 import com.loai.inventory.api.servlet.handler.StorefrontHandler;
 import com.loai.inventory.api.servlet.handler.StorefrontPageHandler;
+import com.loai.inventory.api.servlet.handler.WhatsAppHandler;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import jakarta.servlet.http.HttpServlet;
@@ -84,6 +85,7 @@ public class OrgServlet extends HttpServlet {
                         "pages", new StorefrontPageHandler(config.storefrontPageService, mapper)),
                     mapper)),
             Map.entry("health", new HealthHandler(config.orgHealthService, mapper)),
+            Map.entry("whatsapp", new WhatsAppHandler(config.orgWhatsAppService, mapper)),
             Map.entry("reports", new ReportsHandler(config.reportService, mapper)),
             Map.entry("products", new ProductHandler(config.productService, mapper)),
             Map.entry("categories", new CategoryHandler(config.categoryService, mapper)),

@@ -4,6 +4,7 @@ import static com.loai.inventory.repository.generated.Tables.NOTIFICATION;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY_EMAIL;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY_IN_APP;
+import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY_WHATSAPP;
 
 import com.loai.inventory.domain.model.DeliveryStatus;
 import com.loai.inventory.domain.model.InAppFeedItem;
@@ -101,6 +102,24 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .set(NOTIFICATION_DELIVERY_EMAIL.TO_ADDRESS, toAddress)
         .set(NOTIFICATION_DELIVERY_EMAIL.SUBJECT, subject)
         .set(NOTIFICATION_DELIVERY_EMAIL.RENDERED_HTML, renderedHtml)
+        .execute();
+  }
+
+  @Override
+  public void insertWhatsAppDelivery(
+      UUID deliveryId,
+      String toNumber,
+      String templateName,
+      String templateLanguage,
+      String templateParamsJson) {
+    dsl.insertInto(NOTIFICATION_DELIVERY_WHATSAPP)
+        .set(NOTIFICATION_DELIVERY_WHATSAPP.DELIVERY_ID, deliveryId)
+        .set(NOTIFICATION_DELIVERY_WHATSAPP.TO_NUMBER, toNumber)
+        .set(NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_NAME, templateName)
+        .set(NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_LANGUAGE, templateLanguage)
+        .set(
+            NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_PARAMS,
+            templateParamsJson == null ? null : JSONB.valueOf(templateParamsJson))
         .execute();
   }
 
@@ -218,6 +237,48 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
                     r.get(NOTIFICATION_DELIVERY_EMAIL.TO_ADDRESS),
                     r.get(NOTIFICATION_DELIVERY_EMAIL.SUBJECT),
                     r.get(NOTIFICATION_DELIVERY_EMAIL.RENDERED_HTML)));
+  }
+
+  @Override
+  public Optional<WhatsAppDeliveryContent> findWhatsAppDeliveryContent(UUID deliveryId) {
+    return dsl.select(
+            NOTIFICATION_DELIVERY_WHATSAPP.TO_NUMBER,
+            NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_NAME,
+            NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_LANGUAGE,
+            NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_PARAMS)
+        .from(NOTIFICATION_DELIVERY_WHATSAPP)
+        .where(NOTIFICATION_DELIVERY_WHATSAPP.DELIVERY_ID.eq(deliveryId))
+        .fetchOptional()
+        .map(
+            r ->
+                new WhatsAppDeliveryContent(
+                    r.get(NOTIFICATION_DELIVERY_WHATSAPP.TO_NUMBER),
+                    r.get(NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_NAME),
+                    r.get(NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_LANGUAGE),
+                    r.get(NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_PARAMS) == null
+                        ? null
+                        : r.get(NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_PARAMS).data()));
+  }
+
+  @Override
+  public void markWhatsAppProviderMessageId(UUID deliveryId, String providerMessageId) {
+    if (providerMessageId == null) {
+      return; // the dev sender returns none; a null column honestly says "no provider id"
+    }
+    dsl.update(NOTIFICATION_DELIVERY_WHATSAPP)
+        .set(NOTIFICATION_DELIVERY_WHATSAPP.PROVIDER_MESSAGE_ID, providerMessageId)
+        .where(NOTIFICATION_DELIVERY_WHATSAPP.DELIVERY_ID.eq(deliveryId))
+        .execute();
+  }
+
+  @Override
+  public Optional<UUID> findOrgIdForDelivery(UUID deliveryId) {
+    return dsl.select(NOTIFICATION.ORG_ID)
+        .from(NOTIFICATION_DELIVERY)
+        .join(NOTIFICATION)
+        .on(NOTIFICATION.ID.eq(NOTIFICATION_DELIVERY.NOTIFICATION_ID))
+        .where(NOTIFICATION_DELIVERY.ID.eq(deliveryId))
+        .fetchOptional(NOTIFICATION.ORG_ID);
   }
 
   @Override

@@ -7,6 +7,7 @@ import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.NotificationService;
@@ -14,6 +15,7 @@ import com.loai.inventory.service.email.EmailGate;
 import com.loai.inventory.service.email.EmailSender;
 import com.loai.inventory.service.email.LoggingEmailSender;
 import com.loai.inventory.service.email.MxResolver;
+import com.loai.inventory.service.whatsapp.LoggingWhatsAppSender;
 import java.time.Duration;
 import java.util.Set;
 import org.jooq.DSLContext;
@@ -67,8 +69,10 @@ public final class TestWiring {
         new CustomerRepositoryFactoryImpl(),
         new NotificationPreferenceRepositoryFactoryImpl(),
         new OrgRepositoryFactoryImpl(),
+        new OrgWhatsAppConfigRepositoryFactoryImpl(),
         sender,
         magicLinkService(dsl),
+        new LoggingWhatsAppSender(),
         NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS);
   }
 }

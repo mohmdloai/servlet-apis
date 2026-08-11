@@ -37,6 +37,18 @@ public interface NotificationRepository {
    */
   void insertEmailDelivery(UUID deliveryId, String toAddress, String subject, String renderedHtml);
 
+  /**
+   * The WhatsApp subtype row (V82). Stores the template INVOCATION rather than a rendered body:
+   * Meta accepts a pre-approved template name plus ordered parameters, so the prose on {@code
+   * notification.body} cannot be replayed here.
+   */
+  void insertWhatsAppDelivery(
+      UUID deliveryId,
+      String toNumber,
+      String templateName,
+      String templateLanguage,
+      String templateParamsJson);
+
   // Worker (delivery sweeper)
   List<UUID> findPendingDeliveryIds(NotificationChannel channel, int limit);
 
@@ -96,6 +108,23 @@ public interface NotificationRepository {
 
   /** Email fields captured at produce time — what the sweeper hands to the {@code EmailSender}. */
   record EmailDeliveryContent(String toAddress, String subject, String renderedHtml) {}
+
+  /** The frozen WhatsApp invocation for a claimed delivery. */
+  Optional<WhatsAppDeliveryContent> findWhatsAppDeliveryContent(UUID deliveryId);
+
+  record WhatsAppDeliveryContent(
+      String toNumber, String templateName, String templateLanguage, String templateParamsJson) {}
+
+  /** Record the provider's message id on a sent WhatsApp delivery (null when it returned none). */
+  void markWhatsAppProviderMessageId(UUID deliveryId, String providerMessageId);
+
+  /**
+   * The org that owns a delivery, via its parent notification. The WhatsApp sweeper needs it to
+   * resolve which merchant's credentials to send as — the sending identity is per-org (per-merchant
+   * WABA), unlike email's single process-wide SMTP account, and a delivery id is all the sweeper
+   * carries.
+   */
+  Optional<UUID> findOrgIdForDelivery(UUID deliveryId);
 
   /**
    * True once every delivery of the notification is in a terminal state (SENT/DELIVERED/FAILED).

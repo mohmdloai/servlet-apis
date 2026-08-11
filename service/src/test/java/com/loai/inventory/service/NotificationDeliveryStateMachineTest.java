@@ -61,7 +61,7 @@ class NotificationDeliveryStateMachineTest {
 
   private NotificationService service(EmailSender sender, int maxAttempts) {
     return new NotificationService(
-        dsl, repoFactory, null, null, null, null, sender, null, maxAttempts);
+        dsl, repoFactory, null, null, null, null, null, sender, null, null, maxAttempts);
   }
 
   private static NotificationDelivery pending(int attempts) {
