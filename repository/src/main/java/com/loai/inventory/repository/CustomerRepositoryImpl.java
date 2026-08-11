@@ -3,6 +3,7 @@ package com.loai.inventory.repository;
 import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.common.text.Phone;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.repository.generated.tables.records.CustomerRecord;
@@ -128,7 +129,10 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
             .set(CUSTOMER.ORG_ID, customer.getOrgId())
             .set(CUSTOMER.EMAIL, customer.getEmail())
             .set(CUSTOMER.NAME, customer.getName())
+            // Derived here rather than taken from the caller, so no write path can persist a phone
+            // without its dialable twin — the same reflex as deriving it in the checkout upsert.
             .set(CUSTOMER.PHONE, customer.getPhone())
+            .set(CUSTOMER.PHONE_E164, Phone.toE164(customer.getPhone()))
             .set(CUSTOMER.ADDRESS, customer.getAddress())
             .returning()
             .fetchOne();
@@ -150,7 +154,9 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
         dsl.update(CUSTOMER)
             .set(CUSTOMER.EMAIL, customer.getEmail())
             .set(CUSTOMER.NAME, customer.getName())
+            // Re-derived on every update, so an edited phone can never keep the old dialable twin.
             .set(CUSTOMER.PHONE, customer.getPhone())
+            .set(CUSTOMER.PHONE_E164, Phone.toE164(customer.getPhone()))
             .set(CUSTOMER.ADDRESS, customer.getAddress())
             .set(CUSTOMER.UPDATED_AT, OffsetDateTime.now())
             .where(CUSTOMER.ORG_ID.eq(customer.getOrgId()).and(CUSTOMER.ID.eq(customer.getId())))
@@ -206,6 +212,7 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
             r.getCreatedAt(),
             r.getUpdatedAt());
     c.setEmailVerifiedAt(r.getEmailVerifiedAt());
+    c.setPhoneE164(r.getPhoneE164());
     return c;
   }
 }

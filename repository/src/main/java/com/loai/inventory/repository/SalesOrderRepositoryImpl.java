@@ -6,6 +6,7 @@ import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 
+import com.loai.inventory.common.text.Phone;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrderStatus;
@@ -263,17 +264,7 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
     return dsl.selectFrom(CUSTOMER)
         .where(CUSTOMER.ORG_ID.eq(orgId).and(CUSTOMER.ID.eq(customerId)))
         .fetchOptional()
-        .map(
-            r ->
-                new Customer(
-                    r.getId(),
-                    r.getOrgId(),
-                    r.getEmail(),
-                    r.getName(),
-                    r.getPhone(),
-                    r.getAddress(),
-                    r.getCreatedAt(),
-                    r.getUpdatedAt()));
+        .map(SalesOrderRepositoryImpl::toCustomer);
   }
 
   @Override
@@ -282,12 +273,26 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
     CustomerRecord record =
         dsl.insertInto(CUSTOMER)
             .columns(
-                CUSTOMER.ORG_ID, CUSTOMER.EMAIL, CUSTOMER.NAME, CUSTOMER.PHONE, CUSTOMER.ADDRESS)
-            .values(orgId, email, name, phone, address)
+                CUSTOMER.ORG_ID,
+                CUSTOMER.EMAIL,
+                CUSTOMER.NAME,
+                CUSTOMER.PHONE,
+                CUSTOMER.PHONE_E164,
+                CUSTOMER.ADDRESS)
+            .values(orgId, email, name, phone, Phone.toE164(phone), address)
             .onConflict(CUSTOMER.ORG_ID, CUSTOMER.EMAIL)
             .doUpdate()
             .set(CUSTOMER.NAME, DSL.coalesce(excluded(CUSTOMER.NAME), CUSTOMER.NAME))
             .set(CUSTOMER.PHONE, DSL.coalesce(excluded(CUSTOMER.PHONE), CUSTOMER.PHONE))
+            // The E.164 twin follows `phone`'s fate exactly — it cannot use the same COALESCE.
+            // COALESCE would keep the OLD e164 whenever the incoming phone is present but
+            // unparseable, leaving the pair describing two different people: `phone` the number
+            // just typed, `phone_e164` the previous one, which is the number a message would
+            // actually be sent to. So: phone replaced ⇒ e164 replaced, null and all.
+            .set(
+                CUSTOMER.PHONE_E164,
+                DSL.when(excluded(CUSTOMER.PHONE).isNotNull(), excluded(CUSTOMER.PHONE_E164))
+                    .otherwise(CUSTOMER.PHONE_E164))
             .set(CUSTOMER.ADDRESS, DSL.coalesce(excluded(CUSTOMER.ADDRESS), CUSTOMER.ADDRESS))
             .set(CUSTOMER.UPDATED_AT, DSL.currentOffsetDateTime())
             .returning()
@@ -295,15 +300,26 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
     if (record == null) {
       throw new IllegalStateException("upsertCustomerByEmail returned no row");
     }
-    return new Customer(
-        record.getId(),
-        record.getOrgId(),
-        record.getEmail(),
-        record.getName(),
-        record.getPhone(),
-        record.getAddress(),
-        record.getCreatedAt(),
-        record.getUpdatedAt());
+    return toCustomer(record);
+  }
+
+  /**
+   * Row → domain, carrying the derived {@code phone_e164} the constructor does not take (it is set
+   * from the record, never recomputed here — the column is the source of truth once written).
+   */
+  private static Customer toCustomer(CustomerRecord record) {
+    Customer customer =
+        new Customer(
+            record.getId(),
+            record.getOrgId(),
+            record.getEmail(),
+            record.getName(),
+            record.getPhone(),
+            record.getAddress(),
+            record.getCreatedAt(),
+            record.getUpdatedAt());
+    customer.setPhoneE164(record.getPhoneE164());
+    return customer;
   }
 
   @Override

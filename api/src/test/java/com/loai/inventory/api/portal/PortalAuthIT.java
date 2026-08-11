@@ -455,6 +455,31 @@ class PortalAuthIT {
     assertThrows(NotFoundException.class, () -> portalService.me(orgId(slugB), custA));
   }
 
+  /**
+   * The profile edit re-derives {@code phone_e164} (V79). This is the one surface where a shopper
+   * changes their own number, so a stale twin here would send their order updates to whoever holds
+   * the previous one.
+   */
+  @Test
+  void profileUpdate_reDerivesTheDialableTwin_andClearsItWhenTheNewNumberIsUnusable() {
+    String slug = createOrg();
+    UUID cust = createCustomer(slug, "nadia@acme.test");
+
+    Customer set =
+        portalService.updateProfile(
+            orgId(slug),
+            cust,
+            new CustomerPortalService.ProfileUpdate("Nadia", "0101 234 5678", null));
+    assertEquals("0101 234 5678", set.getPhone(), "what she typed is kept verbatim");
+    assertEquals("+201012345678", set.getPhoneE164());
+
+    Customer cleared =
+        portalService.updateProfile(
+            orgId(slug), cust, new CustomerPortalService.ProfileUpdate(null, "no phone", null));
+    assertEquals("no phone", cleared.getPhone());
+    assertNull(cleared.getPhoneE164(), "the old number must not survive the edit");
+  }
+
   // helpers
 
   private CustomerAuthService.SessionResult login(String slug, String email) {

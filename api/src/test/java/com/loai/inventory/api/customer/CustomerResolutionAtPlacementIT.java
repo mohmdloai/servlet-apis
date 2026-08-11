@@ -11,6 +11,7 @@ import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.USER_ORG_ROLE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.loai.inventory.common.exception.InsufficientStockException;
@@ -329,6 +330,130 @@ class CustomerResolutionAtPlacementIT {
     assertEquals("Nadia Updated", customerName(cid), "non-null incoming name overwrites");
     assertEquals("0100", customerPhone(cid), "null incoming phone preserves existing");
     assertEquals("12 Nile St", customerAddress(cid), "previously-null address is filled");
+  }
+
+  // phone_e164 (V79) — the canonical twin every phone-based channel will dial
+
+  @Test
+  void checkout_writesTheDialableTwinBesideWhatTheShopperTyped() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("staff@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 0);
+
+    Placed placed =
+        service.placeOnlineOrder(
+            org,
+            new CustomerInput("Nadia", "nadia@acme.test", "0101 234 5678", null),
+            List.of(new OrderLineInput(product, 1)),
+            UUID.randomUUID().toString(),
+            null,
+            actor(staff));
+
+    UUID cid = placed.order().getCustomerId();
+    // `phone` keeps exactly what was typed — it is what a support agent reads back on a call.
+    assertEquals("0101 234 5678", customerPhone(cid));
+    assertEquals("+201012345678", customerPhoneE164(cid));
+  }
+
+  @Test
+  void anUnparseablePhoneStillPlacesTheOrder_andLeavesTheTwinNull() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("staff@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 0);
+
+    // Fail-open: a phone we cannot dial is an unreachable channel, never a refused sale.
+    Placed placed =
+        service.placeOnlineOrder(
+            org,
+            new CustomerInput("Nadia", "nadia@acme.test", "call the shop", null),
+            List.of(new OrderLineInput(product, 1)),
+            UUID.randomUUID().toString(),
+            null,
+            actor(staff));
+
+    UUID cid = placed.order().getCustomerId();
+    assertEquals("call the shop", customerPhone(cid));
+    assertNull(customerPhoneE164(cid), "unreachable, not an error");
+  }
+
+  @Test
+  void replacingAGoodPhoneWithAnUnparseableOne_clearsTheTwinRatherThanKeepingTheOldNumber() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("staff@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 0);
+
+    service.placeOnlineOrder(
+        org,
+        new CustomerInput("Nadia", "nadia@acme.test", "01012345678", null),
+        List.of(new OrderLineInput(product, 1)),
+        UUID.randomUUID().toString(),
+        null,
+        actor(staff));
+    Placed second =
+        service.placeOnlineOrder(
+            org,
+            new CustomerInput("Nadia", "nadia@acme.test", "0000", null),
+            List.of(new OrderLineInput(product, 1)),
+            UUID.randomUUID().toString(),
+            null,
+            actor(staff));
+
+    UUID cid = second.order().getCustomerId();
+    assertEquals("0000", customerPhone(cid));
+    // The upsert's COALESCE would have kept the OLD +2010… here, leaving the pair describing two
+    // different people — and messages would go to a number this customer no longer gave us.
+    assertNull(customerPhoneE164(cid), "the twin follows the phone's fate, null and all");
+  }
+
+  @Test
+  void aNullIncomingPhonePreservesBothTheTypedValueAndItsTwin() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("staff@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 0);
+
+    service.placeOnlineOrder(
+        org,
+        new CustomerInput("Nadia", "nadia@acme.test", "01012345678", null),
+        List.of(new OrderLineInput(product, 1)),
+        UUID.randomUUID().toString(),
+        null,
+        actor(staff));
+    Placed second =
+        service.placeOnlineOrder(
+            org,
+            new CustomerInput("Nadia", "nadia@acme.test", null, "12 Nile St"),
+            List.of(new OrderLineInput(product, 1)),
+            UUID.randomUUID().toString(),
+            null,
+            actor(staff));
+
+    UUID cid = second.order().getCustomerId();
+    assertEquals("01012345678", customerPhone(cid), "null incoming phone preserves existing");
+    assertEquals("+201012345678", customerPhoneE164(cid), "and so preserves its twin");
+  }
+
+  @Test
+  void arabicIndicDigitsCanonicalizeToTheSameDialableNumber() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("staff@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 10, 0);
+
+    Placed placed =
+        service.placeOnlineOrder(
+            org,
+            new CustomerInput("نادية", "nadia@acme.test", "٠١٠١٢٣٤٥٦٧٨", null),
+            List.of(new OrderLineInput(product, 1)),
+            UUID.randomUUID().toString(),
+            null,
+            actor(staff));
+
+    // A number typed on an Arabic keyboard must reach the same person as its ASCII twin.
+    assertEquals("+201012345678", customerPhoneE164(placed.order().getCustomerId()));
   }
 
   /** Email is normalized (trim + lowercase) before the conflict check, so variants merge. */
@@ -659,6 +784,13 @@ class CustomerResolutionAtPlacementIT {
         .from(CUSTOMER)
         .where(CUSTOMER.ID.eq(id))
         .fetchOne(CUSTOMER.PHONE);
+  }
+
+  private String customerPhoneE164(UUID id) {
+    return dsl.select(CUSTOMER.PHONE_E164)
+        .from(CUSTOMER)
+        .where(CUSTOMER.ID.eq(id))
+        .fetchOne(CUSTOMER.PHONE_E164);
   }
 
   private String customerAddress(UUID id) {

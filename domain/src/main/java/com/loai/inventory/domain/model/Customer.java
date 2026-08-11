@@ -9,6 +9,18 @@ public class Customer {
   private String email;
   private String name;
   private String phone;
+
+  /**
+   * The canonical E.164 rendering of {@link #phone} (V79), or null when what the customer typed
+   * could not be understood as a dialable number — which is a suppressed channel, not an error.
+   *
+   * <p><b>Derived, never independently set.</b> Every write site computes it from {@code phone} via
+   * {@code Phone.toE164}; there is no API that edits it on its own, because the two drifting apart
+   * would mean the number a support agent reads back and the number a message is sent to are
+   * different. {@code phone} stays exactly what was typed.
+   */
+  private String phoneE164;
+
   private String address;
   private OffsetDateTime emailVerifiedAt;
   private OffsetDateTime createdAt;
@@ -73,6 +85,14 @@ public class Customer {
 
   public void setPhone(String phone) {
     this.phone = phone;
+  }
+
+  public String getPhoneE164() {
+    return phoneE164;
+  }
+
+  public void setPhoneE164(String phoneE164) {
+    this.phoneE164 = phoneE164;
   }
 
   public String getAddress() {
