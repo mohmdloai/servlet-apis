@@ -7,6 +7,7 @@ import com.loai.inventory.api.job.UnverifiedAccountPurgeJob;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.DataSourceFactory;
 import com.loai.inventory.common.RedisFactory;
+import com.loai.inventory.common.crypto.SecretBox;
 import com.loai.inventory.common.security.JwtUtil;
 import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.storage.ObjectStorageFactory;
@@ -33,6 +34,7 @@ import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.domain.repository.OrgMilestoneRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgTimelineRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgWhatsAppConfigRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
@@ -77,6 +79,7 @@ import com.loai.inventory.repository.OrgHealthRepositoryImpl;
 import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgTimelineRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
@@ -118,6 +121,7 @@ import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderExpiryService;
 import com.loai.inventory.service.OrgHealthService;
 import com.loai.inventory.service.OrgService;
+import com.loai.inventory.service.OrgWhatsAppService;
 import com.loai.inventory.service.PaymentDisputeService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentTransactionService;
@@ -160,6 +164,8 @@ import com.loai.inventory.service.platform.PlatformOverviewService;
 import com.loai.inventory.service.platform.PlatformQueueService;
 import com.loai.inventory.service.platform.PlatformSearchService;
 import com.loai.inventory.service.platform.UserAdminService;
+import com.loai.inventory.service.whatsapp.WhatsAppSender;
+import com.loai.inventory.service.whatsapp.WhatsAppSenderFactory;
 import com.zaxxer.hikari.HikariDataSource;
 import java.time.Duration;
 import java.time.Instant;
@@ -298,6 +304,15 @@ public class AppConfig {
   public final CollectionService collectionService;
   public final CouponService couponService;
   public final NotificationService notificationService;
+
+  /**
+   * Platform key sealing per-merchant WhatsApp tokens; disabled when WHATSAPP_TOKEN_KEY is unset.
+   */
+  public final SecretBox whatsAppSecretBox;
+
+  public final OrgWhatsAppConfigRepositoryFactory orgWhatsAppConfigRepositoryFactory;
+
+  public final OrgWhatsAppService orgWhatsAppService;
   public final MagicLinkService magicLinkService;
   public final CustomerOtpStore customerOtpStore;
   public final CustomerSessionStore customerSessionStore;
@@ -534,6 +549,16 @@ public class AppConfig {
             parseLong(
                 System.getenv("EMAIL_MAX_ATTEMPTS"),
                 NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS);
+    // Per-merchant WhatsApp (slice B). The SecretBox key is a PLATFORM secret; the tokens it seals
+    // are per-tenant. With no key configured the factory returns LoggingWhatsAppSender, so the
+    // whole pipeline still runs in dev/CI — the same property EmailSenderFactory has.
+    OrgWhatsAppConfigRepositoryFactory orgWhatsAppConfigRepositoryFactory =
+        new OrgWhatsAppConfigRepositoryFactoryImpl();
+    this.whatsAppSecretBox = SecretBox.fromBase64Key(System.getenv("WHATSAPP_TOKEN_KEY"));
+    WhatsAppSender whatsAppSender = WhatsAppSenderFactory.build(whatsAppSecretBox);
+    this.orgWhatsAppConfigRepositoryFactory = orgWhatsAppConfigRepositoryFactory;
+    this.orgWhatsAppService =
+        new OrgWhatsAppService(dsl, orgWhatsAppConfigRepositoryFactory, whatsAppSecretBox);
     this.notificationService =
         new NotificationService(
             dsl,
@@ -542,8 +567,10 @@ public class AppConfig {
             customerRepositoryFactory,
             notificationPreferenceRepositoryFactory,
             orgRepositoryFactory,
+            orgWhatsAppConfigRepositoryFactory,
             emailSender,
             magicLinkService,
+            whatsAppSender,
             emailMaxAttempts);
     // Portal auth service — the OTP code is sent SYNCHRONOUSLY through the EmailSender (not the
     // NotificationService pipeline): a login code must not be suppressible by a customer's email

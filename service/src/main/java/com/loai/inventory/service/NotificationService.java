@@ -1,6 +1,7 @@
 package com.loai.inventory.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.common.Pagination;
 import com.loai.inventory.common.exception.NotFoundException;
@@ -18,6 +19,7 @@ import com.loai.inventory.domain.model.NotificationStatus;
 import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.OrgWhatsAppConfig;
 import com.loai.inventory.domain.model.RecipientType;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
@@ -26,12 +28,18 @@ import com.loai.inventory.domain.repository.NotificationPreferenceRepositoryFact
 import com.loai.inventory.domain.repository.NotificationRepository;
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgWhatsAppConfigRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.service.email.EmailMessage;
 import com.loai.inventory.service.email.EmailSender;
+import com.loai.inventory.service.whatsapp.CloudApiWhatsAppSender;
+import com.loai.inventory.service.whatsapp.WhatsAppMessage;
+import com.loai.inventory.service.whatsapp.WhatsAppSender;
+import com.loai.inventory.service.whatsapp.WhatsAppTemplates;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -81,8 +89,10 @@ public class NotificationService {
   private final CustomerRepositoryFactory customerRepoFactory;
   private final NotificationPreferenceRepositoryFactory preferenceRepoFactory;
   private final OrgRepositoryFactory orgRepoFactory;
+  private final OrgWhatsAppConfigRepositoryFactory whatsAppConfigRepoFactory;
   private final EmailSender emailSender;
   private final MagicLinkService magicLinkService;
+  private final WhatsAppSender whatsAppSender;
   private final int emailMaxAttempts;
   private final ObjectMapper payloadMapper = new ObjectMapper();
 
@@ -93,8 +103,10 @@ public class NotificationService {
       CustomerRepositoryFactory customerRepoFactory,
       NotificationPreferenceRepositoryFactory preferenceRepoFactory,
       OrgRepositoryFactory orgRepoFactory,
+      OrgWhatsAppConfigRepositoryFactory whatsAppConfigRepoFactory,
       EmailSender emailSender,
       MagicLinkService magicLinkService,
+      WhatsAppSender whatsAppSender,
       int emailMaxAttempts) {
     this.rootDsl = rootDsl;
     this.notificationRepoFactory = notificationRepoFactory;
@@ -102,8 +114,10 @@ public class NotificationService {
     this.customerRepoFactory = customerRepoFactory;
     this.preferenceRepoFactory = preferenceRepoFactory;
     this.orgRepoFactory = orgRepoFactory;
+    this.whatsAppConfigRepoFactory = whatsAppConfigRepoFactory;
     this.emailSender = emailSender;
     this.magicLinkService = magicLinkService;
+    this.whatsAppSender = whatsAppSender;
     this.emailMaxAttempts = emailMaxAttempts > 0 ? emailMaxAttempts : DEFAULT_EMAIL_MAX_ATTEMPTS;
   }
 
@@ -191,7 +205,8 @@ public class NotificationService {
     Notification saved = repo.insertNotification(n);
 
     int created = 0;
-    for (NotificationChannel channel : channelsFor(recipient)) {
+    for (NotificationChannel channel :
+        channelsFor(txDsl, orgId, recipient, type, payload, locale)) {
       // Opt-out resolution: a preference row can suppress this channel. Absence = enabled.
       if (!isChannelEnabled(txDsl, orgId, recipient, type.name(), channel)) {
         continue;
@@ -219,6 +234,19 @@ public class NotificationService {
       NotificationDelivery savedDelivery = repo.insertDelivery(d);
       switch (channel) {
         case IN_APP -> repo.insertInAppDelivery(savedDelivery.getId(), linkTarget);
+        case WHATSAPP -> {
+          // Freeze the template INVOCATION now, exactly as the email leg freezes its rendered
+          // body: the sweeper transmits later, and what was sent must be reconstructable from the
+          // row rather than re-derived from a payload that may since have changed meaning.
+          WhatsAppTemplates.Spec spec =
+              whatsAppSpecFor(txDsl, orgId, recipient, type, payload, locale);
+          repo.insertWhatsAppDelivery(
+              savedDelivery.getId(),
+              customerPhoneE164(txDsl, orgId, recipient.customerId()),
+              spec.name(),
+              spec.language(),
+              serializeParams(spec.params()));
+        }
         case EMAIL -> {
           // Freeze the send target + rendered content now; the sweeper transmits it later. Every
           // customer email carries a one-click unsubscribe link (minted in this same txn).
@@ -259,15 +287,102 @@ public class NotificationService {
   }
 
   /**
-   * USER → in_app; CUSTOMER → in_app + email (slice P5): the portal gives customers a logged-in
-   * feed, so the durable in-app row is the reliable channel and email stays the offline reach.
-   * Either leg can still be suppressed per-preference.
+   * USER → in_app; CUSTOMER → in_app + email, plus WhatsApp when the org and the customer both
+   * support it (slice B). The portal gives customers a logged-in feed, so the durable in-app row is
+   * the reliable channel; email is the offline reach; WhatsApp is the one people actually read.
+   * Every leg can still be suppressed per-preference.
+   *
+   * <p><b>This method is the whole channel seam.</b> It used to be a constant two-line switch;
+   * WhatsApp is the first channel whose availability is a per-org, per-customer, per-type question,
+   * and the answer is computed here so nothing downstream — preferences, the sweeper, the
+   * fully-suppressed finalization path — has to know that.
+   *
+   * <p><b>WhatsApp is additive, not a replacement for email.</b> A shopper with both gets both.
+   * That is the conservative default: preferences already let either side be turned off, nobody
+   * silently loses a message, and the opposite policy (WhatsApp wins, email as fallback) is a
+   * one-line change right here if the duplication turns out to annoy people more than a missed
+   * message would.
+   *
+   * <p>Three conditions, all cheap, all failing to <em>absence</em> rather than error — the D3
+   * precedent that a channel with nowhere to go is suppressed, never a failed business event.
    */
-  private List<NotificationChannel> channelsFor(NotificationRecipient recipient) {
-    return switch (recipient.type()) {
-      case USER -> List.of(NotificationChannel.IN_APP);
-      case CUSTOMER -> List.of(NotificationChannel.IN_APP, NotificationChannel.EMAIL);
-    };
+  private List<NotificationChannel> channelsFor(
+      DSLContext txDsl,
+      UUID orgId,
+      NotificationRecipient recipient,
+      NotificationType type,
+      Map<String, Object> payload,
+      String locale) {
+    if (recipient.type() == RecipientType.USER) {
+      return List.of(NotificationChannel.IN_APP);
+    }
+    List<NotificationChannel> channels =
+        new ArrayList<>(List.of(NotificationChannel.IN_APP, NotificationChannel.EMAIL));
+    if (whatsAppSpecFor(txDsl, orgId, recipient, type, payload, locale) != null) {
+      channels.add(NotificationChannel.WHATSAPP);
+    }
+    return channels;
+  }
+
+  /**
+   * The WhatsApp invocation for this notification, or null when the channel does not apply.
+   *
+   * <p>Null for any of: the org has no ACTIVE {@code org_whatsapp_config}; the customer has no
+   * {@code phone_e164} (V79 — an unparseable number is exactly this, unreachable); or the event has
+   * no approved utility template ({@code WhatsAppTemplates.specFor} returns null for the two types
+   * Meta would classify as marketing). Computed twice per notification — once to decide the channel
+   * list, once to write the row — which is a couple of primary-key reads at human cadence, and much
+   * easier to follow than threading a half-resolved state between the two.
+   */
+  private WhatsAppTemplates.Spec whatsAppSpecFor(
+      DSLContext txDsl,
+      UUID orgId,
+      NotificationRecipient recipient,
+      NotificationType type,
+      Map<String, Object> payload,
+      String locale) {
+    try {
+      WhatsAppTemplates.Spec spec = WhatsAppTemplates.specFor(type, payload, locale);
+      if (spec == null) {
+        return null;
+      }
+      boolean orgConnected =
+          whatsAppConfigRepoFactory
+              .create(txDsl)
+              .findByOrgId(orgId)
+              .map(OrgWhatsAppConfig::isActive)
+              .orElse(false);
+      if (!orgConnected) {
+        return null;
+      }
+      return customerRepoFactory
+              .create(txDsl)
+              .findById(orgId, recipient.customerId())
+              .map(Customer::getPhoneE164)
+              .filter(n -> n != null && !n.isBlank())
+              .isPresent()
+          ? spec
+          : null;
+    } catch (RuntimeException e) {
+      // Must not throw: notify() runs inside the caller's business transaction, so a failure to
+      // answer "is WhatsApp available?" cannot be allowed to roll back an order.
+      log.warn("Could not resolve the WhatsApp channel for org {} — skipping it", orgId, e);
+      return null;
+    }
+  }
+
+  /** The customer's dialable number, or null — the send target for the WhatsApp leg. */
+  private String customerPhoneE164(DSLContext txDsl, UUID orgId, UUID customerId) {
+    try {
+      return customerRepoFactory
+          .create(txDsl)
+          .findById(orgId, customerId)
+          .map(Customer::getPhoneE164)
+          .orElse(null);
+    } catch (RuntimeException e) {
+      log.warn("Could not read phone_e164 for customer {}", customerId, e);
+      return null;
+    }
   }
 
   /**
@@ -522,12 +637,11 @@ public class NotificationService {
    */
   private DeliveryOutcome dispatchOneEmail(UUID deliveryId) {
     // 1. Claim — short transaction, no provider call inside it.
-    ClaimedEmail claimed;
-    try {
-      claimed = claimEmail(deliveryId);
-    } catch (MissingEmailContent e) {
+    EmailClaim claim = claimEmail(deliveryId);
+    if (claim.failedTerminally()) {
       return DeliveryOutcome.FAILED;
     }
+    ClaimedEmail claimed = claim.claimed();
     if (claimed == null) {
       return DeliveryOutcome.SKIPPED; // not PENDING: another tick won it, or it is already terminal
     }
@@ -552,12 +666,24 @@ public class NotificationService {
   }
 
   /**
-   * Thrown out of the claim transaction when the subtype row is missing — a terminal producer bug.
+   * Email's twin of {@link WhatsAppClaim} — and for the same reason: a thrown signal rolls back.
    */
-  private static final class MissingEmailContent extends RuntimeException {}
+  private record EmailClaim(ClaimedEmail claimed, boolean failedTerminally) {
+    static EmailClaim nothing() {
+      return new EmailClaim(null, false);
+    }
 
-  /** Claim + read content in one short transaction. Null = not claimable. */
-  private ClaimedEmail claimEmail(UUID deliveryId) {
+    static EmailClaim failed() {
+      return new EmailClaim(null, true);
+    }
+
+    static EmailClaim of(ClaimedEmail c) {
+      return new EmailClaim(c, false);
+    }
+  }
+
+  /** Claim + read content in one short transaction. */
+  private EmailClaim claimEmail(UUID deliveryId) {
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
@@ -565,7 +691,7 @@ public class NotificationService {
           OffsetDateTime now = now();
           NotificationDelivery d = repo.claimForSend(deliveryId, now).orElse(null);
           if (d == null) {
-            return null;
+            return EmailClaim.nothing();
           }
           NotificationRepository.EmailDeliveryContent content =
               repo.findEmailDeliveryContent(deliveryId).orElse(null);
@@ -574,9 +700,12 @@ public class NotificationService {
             // can never send. Committing the FAILED write means it leaves the queue for good.
             repo.markDeliveryFailed(deliveryId, "missing email subtype row", now);
             finalizeIfTerminal(repo, d.getNotificationId(), now);
-            throw new MissingEmailContent();
+            // Returned, not thrown: throwing rolled this very write back, so the row went back to
+            // PENDING and was re-claimed every tick forever. The unit test could not see it — it
+            // stubs transactionResult, so nothing ever rolled back there.
+            return EmailClaim.failed();
           }
-          return new ClaimedEmail(d, content);
+          return EmailClaim.of(new ClaimedEmail(d, content));
         });
   }
 
@@ -601,6 +730,181 @@ public class NotificationService {
           repo.markDeliveryRetry(deliveryId, truncateError(failure.getMessage()), now);
           return DeliveryOutcome.RETRIED;
         });
+  }
+
+  // Worker: drain pending WhatsApp deliveries
+
+  /**
+   * Drain PENDING WhatsApp deliveries. Deliberately the <b>same</b> claim → send → settle lease the
+   * email leg uses (D4): the provider call happens outside any transaction and outside the row's
+   * lock, so a slow or hung Meta endpoint pins neither a pooled connection nor a peer delivery, and
+   * {@link #reapStrandedEmail} — which is channel-agnostic, it keys on {@code status = SENDING} —
+   * already returns anything stranded mid-send.
+   *
+   * <p>At-least-once, like email. A crash after Meta accepted the message but before the settle
+   * commits re-sends it; WhatsApp has no idempotency key on this endpoint, so the shopper could see
+   * a duplicate. That is the same window email has always had, and it is the honest trade against
+   * the alternative (marking sent before sending, which loses messages instead).
+   */
+  public DeliverySummary dispatchPendingWhatsApp(int batchLimit) {
+    NotificationRepository reader = notificationRepoFactory.create(rootDsl);
+    List<UUID> ids = reader.findPendingDeliveryIds(NotificationChannel.WHATSAPP, batchLimit);
+    int sent = 0;
+    int retried = 0;
+    int failed = 0;
+    int skipped = 0;
+    for (UUID id : ids) {
+      DeliveryOutcome outcome;
+      try {
+        outcome = dispatchOneWhatsApp(id);
+      } catch (RuntimeException e) {
+        outcome = DeliveryOutcome.RETRIED;
+        log.warn("whatsapp delivery {} errored during dispatch (will retry)", id, e);
+      }
+      switch (outcome) {
+        case SENT -> sent++;
+        case RETRIED -> retried++;
+        case FAILED -> failed++;
+        case SKIPPED -> skipped++;
+      }
+    }
+    return new DeliverySummary(ids.size(), sent, retried, failed, skipped);
+  }
+
+  /** The claimed row plus everything the provider call needs — content and sending identity. */
+  private record ClaimedWhatsApp(
+      NotificationDelivery delivery,
+      NotificationRepository.WhatsAppDeliveryContent content,
+      OrgWhatsAppConfig config) {}
+
+  private DeliveryOutcome dispatchOneWhatsApp(UUID deliveryId) {
+    // 1. Claim — short transaction, no provider call inside it.
+    WhatsAppClaim claim = claimWhatsApp(deliveryId);
+    if (claim.failedTerminally()) {
+      return DeliveryOutcome.FAILED;
+    }
+    ClaimedWhatsApp claimed = claim.claimed();
+    if (claimed == null) {
+      return DeliveryOutcome.SKIPPED;
+    }
+
+    // 2. Send — NO transaction, NO connection, NO row lock.
+    RuntimeException failure = null;
+    String providerMessageId = null;
+    try {
+      providerMessageId =
+          whatsAppSender.send(
+              claimed.config(),
+              new WhatsAppMessage(
+                  claimed.content().toNumber(),
+                  claimed.content().templateName(),
+                  claimed.content().templateLanguage(),
+                  deserializeParams(claimed.content().templateParamsJson())));
+    } catch (RuntimeException e) {
+      failure = e;
+    }
+
+    // 3. Settle — short transaction. The row is SENDING, so this is its only writer.
+    return settleWhatsApp(claimed.delivery(), providerMessageId, failure);
+  }
+
+  /**
+   * The outcome of a claim: a claimed row to send, nothing to do, or a failure already committed.
+   *
+   * <p>A record rather than a thrown exception <b>on purpose</b>. Signalling "this can never be
+   * sent" by throwing out of {@code transactionResult} rolls the transaction back — including the
+   * {@code markDeliveryFailed} written moments earlier — so the row returns to PENDING and is
+   * re-claimed on every tick, forever, silently. The failure has to be committed, which means it
+   * has to be returned rather than thrown.
+   */
+  private record WhatsAppClaim(ClaimedWhatsApp claimed, boolean failedTerminally) {
+    static WhatsAppClaim nothing() {
+      return new WhatsAppClaim(null, false);
+    }
+
+    static WhatsAppClaim failed() {
+      return new WhatsAppClaim(null, true);
+    }
+
+    static WhatsAppClaim of(ClaimedWhatsApp c) {
+      return new WhatsAppClaim(c, false);
+    }
+  }
+
+  private WhatsAppClaim claimWhatsApp(UUID deliveryId) {
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          NotificationRepository repo = notificationRepoFactory.create(txDsl);
+          OffsetDateTime now = now();
+          NotificationDelivery d = repo.claimForSend(deliveryId, now).orElse(null);
+          if (d == null) {
+            return WhatsAppClaim.nothing();
+          }
+          NotificationRepository.WhatsAppDeliveryContent content =
+              repo.findWhatsAppDeliveryContent(deliveryId).orElse(null);
+          UUID orgId = repo.findOrgIdForDelivery(deliveryId).orElse(null);
+          OrgWhatsAppConfig config =
+              orgId == null
+                  ? null
+                  : whatsAppConfigRepoFactory.create(txDsl).findByOrgId(orgId).orElse(null);
+          if (content == null || config == null || !config.isActive()) {
+            // Missing subtype row is a producer bug; a config that has since been disconnected or
+            // disabled is a merchant action. Both are terminal for THIS delivery — retrying cannot
+            // conjure credentials, and a message the merchant has stopped paying for should not be
+            // re-attempted five times before anyone notices.
+            repo.markDeliveryFailed(
+                deliveryId,
+                content == null
+                    ? "missing whatsapp subtype row"
+                    : "org has no active WhatsApp configuration",
+                now);
+            finalizeIfTerminal(repo, d.getNotificationId(), now);
+            // Returned, not thrown — see WhatsAppClaim. This commits.
+            return WhatsAppClaim.failed();
+          }
+          return WhatsAppClaim.of(new ClaimedWhatsApp(d, content, config));
+        });
+  }
+
+  private DeliveryOutcome settleWhatsApp(
+      NotificationDelivery claimed, String providerMessageId, RuntimeException failure) {
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          NotificationRepository repo = notificationRepoFactory.create(txDsl);
+          OffsetDateTime now = now();
+          UUID deliveryId = claimed.getId();
+          if (failure == null) {
+            repo.markWhatsAppProviderMessageId(deliveryId, providerMessageId);
+            repo.markDeliverySent(deliveryId, now);
+            finalizeIfTerminal(repo, claimed.getNotificationId(), now);
+            return DeliveryOutcome.SENT;
+          }
+          // A provider rejection of the MESSAGE (unapproved template, not a WhatsApp number,
+          // revoked token) will never succeed on retry — burning four more attempts only delays
+          // the FAILED that tells someone to look.
+          boolean terminal = failure instanceof CloudApiWhatsAppSender.TerminalWhatsAppException;
+          if (terminal || claimed.getAttempts() + 1 >= emailMaxAttempts) {
+            repo.markDeliveryFailed(deliveryId, truncateError(failure.getMessage()), now);
+            finalizeIfTerminal(repo, claimed.getNotificationId(), now);
+            return DeliveryOutcome.FAILED;
+          }
+          repo.markDeliveryRetry(deliveryId, truncateError(failure.getMessage()), now);
+          return DeliveryOutcome.RETRIED;
+        });
+  }
+
+  private List<String> deserializeParams(String json) {
+    if (json == null || json.isBlank()) {
+      return List.of();
+    }
+    try {
+      return payloadMapper.readValue(json, new TypeReference<List<String>>() {});
+    } catch (JsonProcessingException e) {
+      // The row is unusable; let the caller's failure path mark it terminally FAILED.
+      throw new IllegalStateException("cannot read stored whatsapp template params", e);
+    }
   }
 
   /**
@@ -750,6 +1054,18 @@ public class NotificationService {
   }
 
   // helpers
+
+  /** The template's ordered parameters as a JSON array, for the subtype row's audit trail. */
+  private String serializeParams(java.util.List<String> params) {
+    if (params == null || params.isEmpty()) {
+      return null;
+    }
+    try {
+      return payloadMapper.writeValueAsString(params);
+    } catch (JsonProcessingException e) {
+      throw new IllegalArgumentException("cannot serialize whatsapp template params", e);
+    }
+  }
 
   private String serialize(Map<String, Object> payload) {
     if (payload == null || payload.isEmpty()) {
