@@ -1,6 +1,7 @@
 package com.loai.inventory.api.notification;
 
 import static com.loai.inventory.repository.generated.Tables.APP_USER;
+import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.CUSTOMER_MAGIC_TOKEN;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION;
@@ -421,6 +422,49 @@ class OrderLifecycleNotificationIT {
     assertEquals(1, notificationIds(s.orgId(), "ORDER_PAID").size());
   }
 
+  // Slice L — the language the shopper actually reads
+
+  @Test
+  void anArabicStore_notifiesInArabic_endToEnd() {
+    Seed s = seedPaidOrder("500.00", 1, "ar");
+
+    shipAll(s, "بوسطة", "EG-1");
+
+    UUID shipped = notificationIds(s.orgId(), "ORDER_SHIPPED").get(0);
+    String body = notificationBody(shipped);
+    assertTrue(containsArabic(body), "the feed row is Arabic: " + body);
+    assertTrue(body.contains(s.orderNumber()), "and still names the order: " + body);
+
+    notificationService.dispatchPendingEmail(100);
+    EmailMessage msg = lastEmail();
+    assertTrue(containsArabic(msg.subject()), "the email subject is Arabic: " + msg.subject());
+    // Without dir=rtl the order number mid-sentence renders in the wrong place.
+    assertTrue(msg.html().contains("dir=\"rtl\""), "the email declares its direction");
+    // The email and the page its only button opens must agree — an Arabic message linking to an
+    // English page is the half-translated experience this slice exists to end.
+    assertTrue(msg.html().contains("/ar/"), "the magic link lands on the Arabic page");
+  }
+
+  @Test
+  void theCustomersOwnLocaleWins_overTheStoreDefault() {
+    // An English-speaking shopper at an Arabic store: their setting decides, not the storefront's.
+    Seed s = seedPaidOrder("500.00", 1, "ar");
+    dsl.update(CUSTOMER).set(CUSTOMER.LOCALE, "en").where(CUSTOMER.ID.eq(s.customerId())).execute();
+
+    shipAll(s, null, null);
+
+    String body = notificationBody(notificationIds(s.orgId(), "ORDER_SHIPPED").get(0));
+    assertFalse(containsArabic(body), "the customer's own language wins: " + body);
+    assertTrue(body.contains("is on its way"), body);
+
+    notificationService.dispatchPendingEmail(100);
+    assertTrue(lastEmail().html().contains("/en/"), "and the link follows the same language");
+  }
+
+  private static boolean containsArabic(String s) {
+    return s != null && s.codePoints().anyMatch(c -> c >= 0x0600 && c <= 0x06FF);
+  }
+
   // preferences — the new types route through the same opt-out resolution
 
   @Test
@@ -465,7 +509,11 @@ class OrderLifecycleNotificationIT {
 
   /** Org + staff + product/stock + a placed (PENDING_PAYMENT, stock-reserved) ONLINE order. */
   private Seed seedPlacedOrder(String unitTotal, int lineCount) {
-    UUID orgId = createOrg("acme");
+    return seedPlacedOrder(unitTotal, lineCount, "en");
+  }
+
+  private Seed seedPlacedOrder(String unitTotal, int lineCount, String orgLocale) {
+    UUID orgId = createOrg("acme", orgLocale);
     UUID staff = createUser("staff@acme.test");
     ActorContext actor = ActorContext.user(staff.toString());
 
@@ -499,7 +547,11 @@ class OrderLifecycleNotificationIT {
   }
 
   private Seed seedPaidOrder(String unitTotal, int lineCount) {
-    Seed s = seedPlacedOrder(unitTotal, lineCount);
+    return seedPaidOrder(unitTotal, lineCount, "en");
+  }
+
+  private Seed seedPaidOrder(String unitTotal, int lineCount, String orgLocale) {
+    Seed s = seedPlacedOrder(unitTotal, lineCount, orgLocale);
     BigDecimal total = new BigDecimal(unitTotal).multiply(BigDecimal.valueOf(lineCount));
     verify(s, total.toPlainString(), s.orderNumber(), "MATCHED");
     return s;
@@ -606,12 +658,23 @@ class OrderLifecycleNotificationIT {
     return emailSender.captured.get(emailSender.captured.size() - 1);
   }
 
+  /**
+   * An <b>English</b> org. Explicit on purpose: {@code org.default_locale} defaults to {@code 'ar'}
+   * (V52), so since slice L a seed that leaves it unset produces Arabic notifications. The
+   * assertions below are about notification mechanics, not language, so they pin the locale rather
+   * than restating every template in Arabic — the Arabic path has its own coverage.
+   */
   private UUID createOrg(String slug) {
+    return createOrg(slug, "en");
+  }
+
+  private UUID createOrg(String slug, String defaultLocale) {
     UUID id = UUID.randomUUID();
     dsl.insertInto(ORG)
         .set(ORG.ID, id)
         .set(ORG.NAME, slug)
         .set(ORG.SLUG, slug + "-" + id)
+        .set(ORG.DEFAULT_LOCALE, defaultLocale)
         .execute();
     return id;
   }

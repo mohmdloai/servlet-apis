@@ -10,6 +10,18 @@ public interface CustomerRepository {
   Optional<Customer> findById(UUID orgId, UUID id);
 
   /**
+   * Learn this customer's language <b>only if we do not already know it</b> (slice L) — returns
+   * true when a value was written.
+   *
+   * <p>Deliberately its own narrow verb rather than a field on the general {@code update}: the
+   * caller is a checkout, and a checkout must not be able to touch anything else on the identity
+   * row (V80's lesson). Fill-once for the same reason the upsert is: a checkout locale is implicit,
+   * from whichever link the shopper opened, while {@code PATCH /api/portal/me} is explicit and
+   * overwrites.
+   */
+  boolean fillLocaleIfAbsent(UUID orgId, UUID id, String locale);
+
+  /**
    * Resolve the single {@code customer} for {@code (orgId, email)} — the portal-login identity bind
    * ({@code customer} is unique per {@code (org_id, email)}). Empty when no such customer exists
    * (an unknown email simply never receives a code — no signup mints a customer here).

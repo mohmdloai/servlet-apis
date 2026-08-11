@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.text.Locales;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Customer;
@@ -554,6 +555,13 @@ public class CustomerPortalService {
                         input.notes(),
                         input.couponCode(),
                         PORTAL_ACTOR);
+                // Learn the shopper's language from the page they checked out on, but only if we
+                // do not already know it (slice L). Inside the placement txn, so a rolled-back
+                // order teaches us nothing; a narrow verb, so a checkout still cannot touch any
+                // other identity field (V80).
+                customerRepositoryFactory
+                    .create(txDsl)
+                    .fillLocaleIfAbsent(orgId, customerId, resolvedLocale);
                 // Save-to-book rides the placement txn: a shortage rolls it back with the order,
                 // and an idempotent replay (created=false) never re-adds the row.
                 if (input.saveAddress() && p.created()) {
@@ -598,7 +606,12 @@ public class CustomerPortalService {
   }
 
   /** The patch body — any {@code null} field is left unchanged (merge). Email is not accepted. */
-  public record ProfileUpdate(String name, String phone, String address) {}
+  public record ProfileUpdate(String name, String phone, String address, String locale) {
+    /** Locale-less convenience — pre-slice-L callers. */
+    public ProfileUpdate(String name, String phone, String address) {
+      this(name, phone, address, null);
+    }
+  }
 
   public Customer me(UUID orgId, UUID customerId) {
     return customerRepositoryFactory
@@ -624,6 +637,17 @@ public class CustomerPortalService {
           }
           if (update.address() != null) {
             existing.setAddress(Text.normalizeText(update.address()));
+          }
+          if (update.locale() != null) {
+            // The one EXPLICIT locale signal in the system, so unlike the checkout's fill-once it
+            // overwrites. An unsupported tag is rejected rather than silently ignored — the
+            // customer asked for something specific.
+            String normalized = Locales.normalize(update.locale());
+            if (normalized == null) {
+              throw new ValidationException(
+                  "locale must be one of " + Locales.SUPPORTED + ": " + update.locale());
+            }
+            existing.setLocale(normalized);
           }
           // update() rewrites email too — but we pass the existing email untouched, so it is a
           // no-op

@@ -636,6 +636,7 @@ class CouponCheckoutIT {
         UUID.randomUUID().toString(),
         null,
         couponCode,
+        null,
         actor);
   }
 

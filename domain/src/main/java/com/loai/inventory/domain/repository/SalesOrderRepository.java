@@ -120,9 +120,16 @@ public interface SalesOrderRepository {
    * Persist the customer at {@code (org_id, email)}. New row on first sight; otherwise updates
    * name/phone/address using {@code COALESCE(EXCLUDED.x, customer.x)} so a partial payload doesn't
    * erase prior values.
+   *
+   * <p>{@code locale} is the deliberate exception: it is <b>fill-once</b> ({@code
+   * COALESCE(customer.locale, EXCLUDED.locale)} — the stored value wins). A checkout locale is an
+   * implicit signal, from whichever link the shopper happened to open, while the portal profile is
+   * an explicit setting; letting one English checkout permanently flip an Arabic-speaking
+   * customer's language would be the same class of mistake as the delivery contact overwriting
+   * their identity (V80).
    */
   Customer upsertCustomerByEmail(
-      UUID orgId, String email, String name, String phone, String address);
+      UUID orgId, String email, String name, String phone, String address, String locale);
 
   /** Read a customer for response mapping (e.g. on idempotent replay of a prior order). */
   Optional<Customer> findCustomerById(UUID orgId, UUID customerId);

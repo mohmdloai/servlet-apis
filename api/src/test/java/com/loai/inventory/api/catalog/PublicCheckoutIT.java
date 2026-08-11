@@ -22,6 +22,7 @@ import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
+import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
@@ -157,6 +158,7 @@ class PublicCheckoutIT {
             dsl,
             new CustomerMagicTokenRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
+            new CustomerRepositoryFactoryImpl(),
             "http://localhost:8080",
             Duration.ofDays(30));
     PaymentService paymentService =

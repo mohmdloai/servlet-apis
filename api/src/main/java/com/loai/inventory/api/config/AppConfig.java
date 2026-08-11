@@ -526,6 +526,7 @@ public class AppConfig {
             dsl,
             customerMagicTokenRepositoryFactory,
             orgRepositoryFactory,
+            customerRepositoryFactory,
             publicBaseUrl,
             Duration.ofDays(magicTtlDays));
     int emailMaxAttempts =
@@ -540,6 +541,7 @@ public class AppConfig {
             userRepositoryFactory,
             customerRepositoryFactory,
             notificationPreferenceRepositoryFactory,
+            orgRepositoryFactory,
             emailSender,
             magicLinkService,
             emailMaxAttempts);

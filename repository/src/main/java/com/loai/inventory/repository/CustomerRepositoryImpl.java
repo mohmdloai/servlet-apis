@@ -134,6 +134,7 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
             .set(CUSTOMER.PHONE, customer.getPhone())
             .set(CUSTOMER.PHONE_E164, Phone.toE164(customer.getPhone()))
             .set(CUSTOMER.ADDRESS, customer.getAddress())
+            .set(CUSTOMER.LOCALE, customer.getLocale())
             .returning()
             .fetchOne();
     if (record == null) {
@@ -158,6 +159,7 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
             .set(CUSTOMER.PHONE, customer.getPhone())
             .set(CUSTOMER.PHONE_E164, Phone.toE164(customer.getPhone()))
             .set(CUSTOMER.ADDRESS, customer.getAddress())
+            .set(CUSTOMER.LOCALE, customer.getLocale())
             .set(CUSTOMER.UPDATED_AT, OffsetDateTime.now())
             .where(CUSTOMER.ORG_ID.eq(customer.getOrgId()).and(CUSTOMER.ID.eq(customer.getId())))
             .returning()
@@ -168,6 +170,20 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
 
     log.debug("Updated customer id={}", record.getId());
     return toCustomer(record);
+  }
+
+  @Override
+  public boolean fillLocaleIfAbsent(UUID orgId, UUID id, String locale) {
+    if (locale == null || locale.isBlank()) {
+      return false;
+    }
+    // The IS NULL predicate is the guarantee, in SQL rather than in a read-then-write the next
+    // concurrent checkout could race.
+    return dsl.update(CUSTOMER)
+            .set(CUSTOMER.LOCALE, locale)
+            .where(CUSTOMER.ORG_ID.eq(orgId).and(CUSTOMER.ID.eq(id)).and(CUSTOMER.LOCALE.isNull()))
+            .execute()
+        > 0;
   }
 
   @Override
@@ -213,6 +229,7 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
             r.getUpdatedAt());
     c.setEmailVerifiedAt(r.getEmailVerifiedAt());
     c.setPhoneE164(r.getPhoneE164());
+    c.setLocale(r.getLocale());
     return c;
   }
 }

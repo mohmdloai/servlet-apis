@@ -155,6 +155,7 @@ class InStoreSaleIT {
             dsl,
             new com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
             "http://localhost:8080",
             java.time.Duration.ofDays(30));
     service =
@@ -173,6 +174,7 @@ class InStoreSaleIT {
                 new com.loai.inventory.repository.UserRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
                 new com.loai.inventory.service.email.LoggingEmailSender(),
                 magicLink,
                 com.loai.inventory.service.NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS),

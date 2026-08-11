@@ -1,10 +1,13 @@
 package com.loai.inventory.service;
 
+import com.loai.inventory.common.text.Locales;
+import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.CustomerMagicToken;
 import com.loai.inventory.domain.model.MagicTokenPurpose;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.repository.CustomerMagicTokenRepository;
 import com.loai.inventory.domain.repository.CustomerMagicTokenRepositoryFactory;
+import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.service.auth.RefreshTokenStore;
 import java.security.SecureRandom;
@@ -32,12 +35,10 @@ public class MagicLinkService {
   private static final Base64.Encoder URL_ENCODER = Base64.getUrlEncoder().withoutPadding();
   private static final int TOKEN_BYTES = 32; // 256 bits
 
-  /** Storefront locale to fall back to when an org has no {@code default_locale} set. */
-  private static final String DEFAULT_LOCALE = "en";
-
   private final DSLContext rootDsl;
   private final CustomerMagicTokenRepositoryFactory tokenRepoFactory;
   private final OrgRepositoryFactory orgRepositoryFactory;
+  private final CustomerRepositoryFactory customerRepositoryFactory;
   private final String publicBaseUrl;
   private final Duration ttl;
 
@@ -45,13 +46,42 @@ public class MagicLinkService {
       DSLContext rootDsl,
       CustomerMagicTokenRepositoryFactory tokenRepoFactory,
       OrgRepositoryFactory orgRepositoryFactory,
+      CustomerRepositoryFactory customerRepositoryFactory,
       String publicBaseUrl,
       Duration ttl) {
     this.rootDsl = rootDsl;
     this.tokenRepoFactory = tokenRepoFactory;
     this.orgRepositoryFactory = orgRepositoryFactory;
+    this.customerRepositoryFactory = customerRepositoryFactory;
     this.publicBaseUrl = stripTrailingSlash(publicBaseUrl);
     this.ttl = ttl;
+  }
+
+  /**
+   * The locale segment for a link emailed to {@code customerId}: their own {@code locale} when we
+   * have learned one, else the org's default (slice L).
+   *
+   * <p>Without this the email and the page it opens disagree — an Arabic message whose only button
+   * lands the shopper on an English page, which is the half-translated experience this slice exists
+   * to end. Total and non-throwing for the same reason the notification producer is: these links
+   * are minted inside business transactions.
+   */
+  private String linkLocale(DSLContext txDsl, UUID orgId, UUID customerId, Org org) {
+    String customerLocale = null;
+    if (customerId != null) {
+      try {
+        customerLocale =
+            customerRepositoryFactory
+                .create(txDsl)
+                .findById(orgId, customerId)
+                .map(Customer::getLocale)
+                .orElse(null);
+      } catch (RuntimeException e) {
+        log.warn(
+            "Could not read the locale for customer {} — using the org default", customerId, e);
+      }
+    }
+    return Locales.resolve(customerLocale, org.getDefaultLocale());
   }
 
   /**
@@ -103,10 +133,7 @@ public class MagicLinkService {
             .create(txDsl)
             .findById(orgId)
             .orElseThrow(() -> new IllegalStateException("org not found for magic link: " + orgId));
-    String locale =
-        (org.getDefaultLocale() != null && !org.getDefaultLocale().isBlank())
-            ? org.getDefaultLocale()
-            : DEFAULT_LOCALE;
+    String locale = linkLocale(txDsl, orgId, customerId, org);
     String relative = "/" + locale + "/" + org.getSlug() + "/orders/" + rawToken;
     return new OrderViewLink(publicBaseUrl + relative, relative);
   }
@@ -156,10 +183,7 @@ public class MagicLinkService {
             .create(txDsl)
             .findById(orgId)
             .orElseThrow(() -> new IllegalStateException("org not found for magic link: " + orgId));
-    String locale =
-        (org.getDefaultLocale() != null && !org.getDefaultLocale().isBlank())
-            ? org.getDefaultLocale()
-            : DEFAULT_LOCALE;
+    String locale = linkLocale(txDsl, orgId, customerId, org);
     return publicBaseUrl + "/" + locale + "/" + org.getSlug() + "/unsubscribe/" + rawToken;
   }
 

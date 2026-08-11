@@ -81,11 +81,13 @@ class NotificationDeliveryIT {
             new UserRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
             new com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
             new com.loai.inventory.service.email.LoggingEmailSender(),
             new com.loai.inventory.service.MagicLinkService(
                 dsl,
                 new com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl(),
                 new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+                new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
                 "http://localhost:8080",
                 java.time.Duration.ofDays(30)),
             NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS);

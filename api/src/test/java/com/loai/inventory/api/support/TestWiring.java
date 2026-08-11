@@ -50,6 +50,7 @@ public final class TestWiring {
         dsl,
         new CustomerMagicTokenRepositoryFactoryImpl(),
         new OrgRepositoryFactoryImpl(),
+        new CustomerRepositoryFactoryImpl(),
         "http://localhost:8080",
         Duration.ofDays(30));
   }
@@ -65,6 +66,7 @@ public final class TestWiring {
         new UserRepositoryFactoryImpl(),
         new CustomerRepositoryFactoryImpl(),
         new NotificationPreferenceRepositoryFactoryImpl(),
+        new OrgRepositoryFactoryImpl(),
         sender,
         magicLinkService(dsl),
         NotificationService.DEFAULT_EMAIL_MAX_ATTEMPTS);
