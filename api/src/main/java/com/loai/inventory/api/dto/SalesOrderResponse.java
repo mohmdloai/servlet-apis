@@ -32,6 +32,26 @@ public class SalesOrderResponse {
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
   private String notes;
+
+  /**
+   * Where this parcel goes (V80) — the order's own frozen delivery contact. All three omitted when
+   * absent (an IN_STORE sale, or an order placed before V80).
+   *
+   * <p><b>This is the answer to "where do I ship it?" and it has to be here.</b> Until V80 the
+   * delivery contact was merged onto the {@code customer} row, so a merchant packing an order read
+   * it off the CRM record — which only worked because that merge overwrote the buyer's own details,
+   * the very defect V80 removes. With the merge gone, the CRM row correctly shows the buyer, and
+   * this is the only place the ship-to exists before an invoice is issued at delivery.
+   *
+   * <p>Staff plane only — {@code forCustomerView} withholds all three, exactly like {@code notes}:
+   * an anonymous magic link may be forwarded, and a home address is not something to hand whoever
+   * ends up holding that URL. The shopper typed it and sees it on their own portal order page.
+   */
+  private String deliveryRecipient;
+
+  private String deliveryPhone;
+  private String deliveryAddress;
+
   private List<SalesOrderLineResponse> lines;
 
   private SalesOrderResponse() {}
@@ -74,6 +94,11 @@ public class SalesOrderResponse {
     r.updatedAt = order.getUpdatedAt();
     // notes is staff-facing — omit it from the customer view (Jackson drops nulls).
     r.notes = includeInternal ? order.getNotes() : null;
+    // Same rule for the delivery contact: the packing desk needs it, a forwarded magic link does
+    // not get a home address.
+    r.deliveryRecipient = includeInternal ? order.getDeliveryRecipient() : null;
+    r.deliveryPhone = includeInternal ? order.getDeliveryPhone() : null;
+    r.deliveryAddress = includeInternal ? order.getDeliveryAddress() : null;
     r.lines = lines.stream().map(SalesOrderLineResponse::from).toList();
     return r;
   }
@@ -84,6 +109,18 @@ public class SalesOrderResponse {
 
   public UUID getOrgId() {
     return orgId;
+  }
+
+  public String getDeliveryRecipient() {
+    return deliveryRecipient;
+  }
+
+  public String getDeliveryPhone() {
+    return deliveryPhone;
+  }
+
+  public String getDeliveryAddress() {
+    return deliveryAddress;
   }
 
   public UUID getCustomerId() {

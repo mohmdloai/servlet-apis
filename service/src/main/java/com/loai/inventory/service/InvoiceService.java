@@ -164,10 +164,17 @@ public final class InvoiceService {
             shippingToBill(invoiceRepo, orgId, order),
             discountToBill(invoiceRepo, orgId, order, subtotal),
             order.getCurrency(),
-            invoiceCustomerName(customer),
+            invoiceCustomerName(order, customer),
             customer == null ? null : customer.getEmail(),
-            customer == null ? null : customer.getPhone(),
-            customer == null ? null : customer.getAddress(),
+            // Contact-of-record for the parcel: the ORDER's frozen delivery contact (V80) when it
+            // has one, else the customer row. The fallback is what keeps every pre-V80 invoice
+            // rendering exactly as it did — those orders carry no snapshot, because the delivery
+            // contact used to be merged destructively onto the customer and cannot be recovered
+            // per-order. Email stays the customer's: that is the billing identity and the address
+            // the order-view link was sent to, and it is not part of the delivery block.
+            firstNonBlank(order.getDeliveryPhone(), customer == null ? null : customer.getPhone()),
+            firstNonBlank(
+                order.getDeliveryAddress(), customer == null ? null : customer.getAddress()),
             now);
 
     int year = now.getYear();
@@ -350,7 +357,18 @@ public final class InvoiceService {
     return !live.isEmpty() && live.stream().allMatch(SalesInvoice::isPaid);
   }
 
-  private static String invoiceCustomerName(Customer customer) {
+  /**
+   * The name on the invoice's frozen contact block. The order's {@code delivery_recipient} (V80)
+   * wins when present, so the block stays <em>internally coherent</em> — a name printed above a
+   * phone and address that belong to someone else is worse than either choice alone. That also
+   * makes this byte-identical to the pre-V80 rendering: back then the recipient had been merged
+   * onto the customer row, so this method read the same string by a longer route.
+   */
+  private static String invoiceCustomerName(SalesOrder order, Customer customer) {
+    String recipient = order == null ? null : order.getDeliveryRecipient();
+    if (recipient != null && !recipient.isBlank()) {
+      return recipient;
+    }
     if (customer == null) {
       return "Walk-in customer";
     }
@@ -361,5 +379,10 @@ public final class InvoiceService {
       return customer.getEmail();
     }
     return "Customer " + customer.getId();
+  }
+
+  /** First present, non-blank value — the order's frozen snapshot, else the customer row. */
+  private static String firstNonBlank(String preferred, String fallback) {
+    return preferred != null && !preferred.isBlank() ? preferred : fallback;
   }
 }

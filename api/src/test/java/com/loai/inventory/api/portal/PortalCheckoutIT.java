@@ -11,12 +11,14 @@ import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.config.ObjectMapperProvider;
 import com.loai.inventory.api.dto.PublicOrderResponse;
+import com.loai.inventory.api.dto.SalesOrderResponse;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.CustomerAddress;
@@ -238,8 +240,11 @@ class PortalCheckoutIT {
     assertEquals(1, history.total());
     assertEquals(r.order().getOrderNumber(), history.items().get(0).order().getOrderNumber());
 
-    // The typed delivery contact is frozen onto the CRM row (the codebase's checkout snapshot).
-    assertEquals("12 Nile St, Cairo", customerAddressOf(cust));
+    // The typed delivery contact is frozen onto the ORDER (V80) — per-order data on the order.
+    // It used to be merged onto the CRM row, which is what let a gift rewrite the buyer's identity.
+    assertEquals("12 Nile St, Cairo", orderDeliveryAddressOf(r.order().getId()));
+    assertNull(
+        customerAddressOf(cust), "the buyer's own profile is untouched by a delivery address");
   }
 
   @Test
@@ -262,6 +267,64 @@ class PortalCheckoutIT {
         1,
         dsl.fetchCount(SALES_ORDER, SALES_ORDER.CUSTOMER_ID.eq(cust)),
         "exactly one order, attributed by id");
+  }
+
+  /**
+   * Shipping to someone else must not rewrite who <em>you</em> are. The delivery contact is
+   * per-order data; {@code customer.phone} is the identity a notification channel dials, so a gift
+   * order that overwrote it would send this shopper's future order updates to the recipient — a
+   * third party — and silence the buyer, until they happened to check out to their own address
+   * again. Same for their name.
+   */
+  @Test
+  void shippingToADifferentRecipientLeavesTheBuyersOwnIdentityAlone() {
+    UUID org = createOrg("acme", "pay");
+    UUID cust = createCustomer(org, "nadia@example.com");
+    UUID product = createProduct(org, "P", new BigDecimal("10.00"));
+    publishListing(org, product, "widget", "Widget", new BigDecimal("12.00"));
+    createInventory(org, product, 5);
+    // Nadia's own contact details, as she set them on her profile.
+    dsl.update(CUSTOMER)
+        .set(CUSTOMER.NAME, "Nadia")
+        .set(CUSTOMER.PHONE, "01012345678")
+        .set(CUSTOMER.PHONE_E164, "+201012345678")
+        .where(CUSTOMER.ID.eq(cust))
+        .execute();
+
+    // A gift to her mother: different recipient, different phone, different address.
+    CheckoutResult r =
+        portal.checkout(
+            org,
+            cust,
+            new CheckoutInput(
+                List.of(new CheckoutLine("widget", 1)),
+                null,
+                null,
+                new AddressInput(null, "Mona", "01198765432", "3 Gift St, Giza", false),
+                false),
+            key());
+
+    assertEquals("Nadia", customerNameOf(cust), "the buyer is still Nadia");
+    assertEquals(
+        "+201012345678",
+        customerPhoneE164Of(cust),
+        "her order updates must keep going to her, not to the gift recipient");
+    // And the recipient's details are not lost — they are on the order, where a courier reads them.
+    assertEquals("3 Gift St, Giza", orderDeliveryAddressOf(r.order().getId()));
+    assertEquals("01198765432", orderDeliveryPhoneOf(r.order().getId()));
+
+    // Staff can still answer "where do I ship it?" — that used to work only because the merge had
+    // corrupted the CRM row, so the ship-to has to be on the order's own staff-plane read.
+    SalesOrderResponse staffView = SalesOrderResponse.from(r.order(), List.of());
+    assertEquals("Mona", staffView.getDeliveryRecipient());
+    assertEquals("3 Gift St, Giza", staffView.getDeliveryAddress());
+    assertEquals("01198765432", staffView.getDeliveryPhone());
+
+    // A forwarded magic link does not hand out a home address.
+    SalesOrderResponse anonView = SalesOrderResponse.forCustomerView(r.order(), List.of());
+    assertNull(anonView.getDeliveryAddress());
+    assertNull(anonView.getDeliveryPhone());
+    assertNull(anonView.getDeliveryRecipient());
   }
 
   // ── AC 2: saved address vs typed address ─────────────────────────────────────
@@ -287,7 +350,10 @@ class PortalCheckoutIT {
                 List.of(new CheckoutLine("widget", 1)), null, home.getId(), null, false),
             key());
     assertTrue(r.created());
-    assertEquals("9 Saved St, Giza", customerAddressOf(cust), "the saved snapshot was used");
+    assertEquals(
+        "9 Saved St, Giza",
+        orderDeliveryAddressOf(r.order().getId()),
+        "the saved book row's snapshot was copied onto the order");
 
     // The other customer cannot consume Nadia's book row — the same opaque 404 as P4.
     assertThrows(
@@ -510,6 +576,34 @@ class PortalCheckoutIT {
 
   private String customerAddressOf(UUID cust) {
     return dsl.select(CUSTOMER.ADDRESS)
+        .from(CUSTOMER)
+        .where(CUSTOMER.ID.eq(cust))
+        .fetchOne(0, String.class);
+  }
+
+  private String orderDeliveryAddressOf(UUID orderId) {
+    return dsl.select(SALES_ORDER.DELIVERY_ADDRESS)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ID.eq(orderId))
+        .fetchOne(0, String.class);
+  }
+
+  private String orderDeliveryPhoneOf(UUID orderId) {
+    return dsl.select(SALES_ORDER.DELIVERY_PHONE)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ID.eq(orderId))
+        .fetchOne(0, String.class);
+  }
+
+  private String customerPhoneE164Of(UUID cust) {
+    return dsl.select(CUSTOMER.PHONE_E164)
+        .from(CUSTOMER)
+        .where(CUSTOMER.ID.eq(cust))
+        .fetchOne(0, String.class);
+  }
+
+  private String customerNameOf(UUID cust) {
+    return dsl.select(CUSTOMER.NAME)
         .from(CUSTOMER)
         .where(CUSTOMER.ID.eq(cust))
         .fetchOne(0, String.class);
