@@ -39,6 +39,25 @@ public class SalesOrder {
   private String notes;
 
   /**
+   * The delivery contact for <em>this order</em>, frozen at placement (V80): who receives it, the
+   * number a courier calls, and where it goes.
+   *
+   * <p><b>Deliberately not the customer's own contact details.</b> A shopper sending a gift is
+   * still themselves — {@code customer.phone} is the identity a notification channel dials (V79),
+   * and before this snapshot existed the delivery contact was merged onto that row, so a gift order
+   * redirected the buyer's own order updates to the recipient. One field cannot be both.
+   *
+   * <p>A copy, never a reference: the address-book row it came from may later be edited or deleted,
+   * and this must not move with it — the same freezing rule as {@code sales_order_line.unitPrice}
+   * and the invoice's contact block. All three are null for an IN_STORE sale (nothing is delivered)
+   * and for every order placed before V80.
+   */
+  private String deliveryRecipient;
+
+  private String deliveryPhone;
+  private String deliveryAddress;
+
+  /**
    * The coupon this order redeemed (roadmap item 9) — the id for the redemption count and FK
    * integrity, plus a FROZEN {@code couponCode} snapshot for display. Both null on an order placed
    * without a code, which is every order before V72 — nothing downstream may require them.
@@ -483,6 +502,29 @@ public class SalesOrder {
 
   public String getNotes() {
     return notes;
+  }
+
+  public String getDeliveryRecipient() {
+    return deliveryRecipient;
+  }
+
+  public String getDeliveryPhone() {
+    return deliveryPhone;
+  }
+
+  public String getDeliveryAddress() {
+    return deliveryAddress;
+  }
+
+  /**
+   * Freeze the delivery contact onto the order. Called once, at placement, before insert; there is
+   * no re-address flow (changing where a parcel goes after it is placed is a different feature with
+   * its own money and stock questions).
+   */
+  public void setDeliveryContact(String recipient, String phone, String address) {
+    this.deliveryRecipient = recipient;
+    this.deliveryPhone = phone;
+    this.deliveryAddress = address;
   }
 
   public UUID getCouponId() {

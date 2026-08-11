@@ -351,6 +351,10 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
         // Roadmap item 9: the redeemed coupon + its frozen display code (both null without one).
         .set(SALES_ORDER.COUPON_ID, order.getCouponId())
         .set(SALES_ORDER.COUPON_CODE, order.getCouponCode())
+        // V80: the per-order delivery contact, frozen here and never updated afterwards.
+        .set(SALES_ORDER.DELIVERY_RECIPIENT, order.getDeliveryRecipient())
+        .set(SALES_ORDER.DELIVERY_PHONE, order.getDeliveryPhone())
+        .set(SALES_ORDER.DELIVERY_ADDRESS, order.getDeliveryAddress())
         .execute();
 
     if (!lines.isEmpty()) {
@@ -423,6 +427,8 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
     // rather than widening the already 22-parameter rehydrate signature.
     order.setCouponId(r.getCouponId());
     order.setCouponCode(r.getCouponCode());
+    order.setDeliveryContact(
+        r.getDeliveryRecipient(), r.getDeliveryPhone(), r.getDeliveryAddress());
     return order;
   }
 

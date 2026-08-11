@@ -154,10 +154,13 @@ public class SalesOrderService {
       UUID productId, int quantity, BigDecimal unitPriceOverride, String descriptionOverride) {}
 
   /**
-   * Delivery contact for a known-customer (portal) placement — slice P6, {@code
-   * stories/portal_checkout.md}. Frozen onto the customer CRM row exactly as the anonymous form's
-   * upsert would (coalesce semantics: a null field leaves the stored value untouched). The identity
-   * itself is never taken from here — the customer is the session.
+   * Where this parcel goes — slice P6, {@code stories/portal_checkout.md}. Frozen onto the
+   * <b>order</b> at placement (V80, {@code sales_order.delivery_*}), never onto the customer: it is
+   * per-order data, and the recipient may be someone other than the buyer.
+   *
+   * <p>The identity is never taken from here — the customer is the session. Until V80 this
+   * <em>was</em> merged onto the CRM row, which meant shipping a gift rewrote the buyer's own name
+   * and phone; see {@code resolveKnownCustomer}.
    */
   public record DeliveryInput(String recipient, String phone, String address) {}
 
@@ -276,7 +279,8 @@ public class SalesOrderService {
         placeReservedInTx(
             txDsl,
             orgId,
-            repo -> resolveKnownCustomer(repo, orgId, customerId, delivery),
+            repo -> resolveKnownCustomer(repo, orgId, customerId),
+            delivery,
             resolved,
             idempotencyKey,
             notes,
@@ -306,6 +310,12 @@ public class SalesOrderService {
                 DSL.using(cfg),
                 orgId,
                 repo -> resolveCustomer(repo, orgId, customer, true),
+                // On the anonymous form the single contact block IS both the buyer's identity and
+                // the delivery contact — there is no separate address input — so the order's
+                // snapshot is that same block. The portal path supplies a distinct one.
+                customer == null
+                    ? null
+                    : new DeliveryInput(customer.name(), customer.phone(), customer.address()),
                 lines,
                 idempotencyKey,
                 notes,
@@ -318,6 +328,7 @@ public class SalesOrderService {
       DSLContext txDsl,
       UUID orgId,
       CustomerResolver customerResolver,
+      DeliveryInput delivery,
       List<ResolvedLine> lines,
       String idempotencyKey,
       String notes,
@@ -374,6 +385,17 @@ public class SalesOrderService {
                         now);
                 OffsetDateTime expires = now.plus(Duration.ofMinutes(org.getOrderTtlMinutes()));
                 b.order().markPendingPayment(now, expires);
+                // V80: freeze WHERE THIS PARCEL GOES onto the order, before the insert. This used
+                // to be merged onto the customer row and read back off it by InvoiceService, which
+                // meant a gift order overwrote the buyer's own name and phone — and since V79 that
+                // phone is the identity a notification channel dials.
+                if (delivery != null) {
+                  b.order()
+                      .setDeliveryContact(
+                          Text.normalizeText(delivery.recipient()),
+                          Text.normalizeNumeric(delivery.phone()),
+                          Text.normalizeText(delivery.address()));
+                }
                 repo.insert(b.order(), b.lines());
                 return b;
               });
@@ -908,25 +930,24 @@ public class SalesOrderService {
 
   /**
    * Resolve a portal placement's customer by the session's {@code (orgId, customerId)} — identity
-   * is fixed, no body email is ever read (slice P6). The delivery contact is then frozen onto the
-   * CRM row through the same coalesce upsert the anonymous form uses, keyed by the loaded row's own
-   * verified email — a null delivery field leaves the stored value untouched.
+   * is fixed, no body email is ever read (slice P6). A pure read: nothing about the customer is
+   * written here.
+   *
+   * <p><b>It used to freeze the delivery contact onto this row</b>, through the same coalesce
+   * upsert the anonymous form uses, because {@code sales_order} had nowhere to put it and {@link
+   * InvoiceService} read the invoice's contact block off the customer. The cost was that shipping
+   * to anyone else rewrote who <em>you</em> are: a gift to your mother renamed your CRM record to
+   * hers and replaced your phone with hers. Inert while that phone was a CRM field; since V79 it is
+   * the identity a notification channel dials, so it silently redirected the buyer's own order
+   * updates to a third party.
+   *
+   * <p>V80 gives the order its own {@code delivery_recipient/phone/address}, which is where a
+   * per-order fact belongs — and it is written at placement, not here. The address book already
+   * stores the reusable copy, so nothing is lost.
    */
-  private Customer resolveKnownCustomer(
-      SalesOrderRepository repo, UUID orgId, UUID customerId, DeliveryInput delivery) {
-    Customer existing =
-        repo.findCustomerById(orgId, customerId)
-            .orElseThrow(() -> new NotFoundException("Customer", customerId));
-    if (delivery == null || existing.getEmail() == null) {
-      // No contact to freeze (or a CRM row without an email — nothing to key the upsert on).
-      return existing;
-    }
-    return repo.upsertCustomerByEmail(
-        orgId,
-        existing.getEmail(),
-        Text.normalizeText(delivery.recipient()),
-        Text.normalizeNumeric(delivery.phone()),
-        Text.normalizeText(delivery.address()));
+  private Customer resolveKnownCustomer(SalesOrderRepository repo, UUID orgId, UUID customerId) {
+    return repo.findCustomerById(orgId, customerId)
+        .orElseThrow(() -> new NotFoundException("Customer", customerId));
   }
 
   // Validation
