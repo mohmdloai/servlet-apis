@@ -2,6 +2,7 @@ package com.loai.inventory.service;
 
 import com.loai.inventory.domain.model.NotificationType;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Renders a notification's channel-agnostic {@code title}/{@code body} from its {@link
@@ -63,12 +64,79 @@ final class NotificationTemplates {
                 + " was delivered. Tell other shoppers how it went — rate the items you received.",
             "Review your items");
       }
+      case ORDER_SHIPPED -> {
+        String orderNumber = str(payload, "order_number");
+        StringBuilder body =
+            new StringBuilder("Your order ").append(orderNumber).append(" is on its way.");
+        // Carrier and tracking are optional on `fulfillment` — name them only when the merchant
+        // actually recorded them. A sentence ending in "with " or a bare "tracking: null" is worse
+        // than no sentence, and the shopper still gets the fact that matters (it shipped).
+        opt(payload, "carrier")
+            .ifPresent(carrier -> body.append(" It was handed to ").append(carrier).append("."));
+        opt(payload, "tracking_number")
+            .ifPresent(tracking -> body.append(" Tracking number: ").append(tracking).append("."));
+        yield new Rendered(
+            "Order " + orderNumber + " has shipped", body.toString(), "Track your order");
+      }
+      case ORDER_CANCELLED -> {
+        String orderNumber = str(payload, "order_number");
+        StringBuilder body =
+            new StringBuilder("Your order ").append(orderNumber).append(" has been cancelled.");
+        // A cancel records a refund OBLIGATION; the merchant executes the real transfer separately
+        // (refund.md's two-step lifecycle). So this says a refund is on its way — never that money
+        // has already been sent — and an order with no prepayment gets no money sentence at all.
+        opt(payload, "refund_total")
+            .ifPresent(
+                total ->
+                    body.append(" A refund of ")
+                        .append(total)
+                        .append(" ")
+                        .append(str(payload, "currency"))
+                        .append(" is being processed back to you."));
+        yield new Rendered(
+            "Order " + orderNumber + " was cancelled", body.toString(), CTA_VIEW_ORDER);
+      }
+      case PAYMENT_NEEDS_ATTENTION -> {
+        String orderNumber = str(payload, "order_number");
+        String amount = str(payload, "amount");
+        String outstanding = str(payload, "outstanding");
+        String currency = str(payload, "currency");
+        yield new Rendered(
+            "Order " + orderNumber + " still needs " + outstanding + " " + currency,
+            "We received your payment of "
+                + amount
+                + " "
+                + currency
+                + " for order "
+                + orderNumber
+                + ", but it doesn't cover the total yet. "
+                + outstanding
+                + " "
+                + currency
+                + " is still outstanding — your items stay reserved until it's paid.",
+            "Complete your payment");
+      }
     };
   }
 
   private static String str(Map<String, Object> payload, String key) {
     Object v = payload == null ? null : payload.get(key);
     return v == null ? "" : v.toString();
+  }
+
+  /**
+   * A payload value that may legitimately be absent, as a present-and-non-blank {@link Optional} —
+   * the read for every field a template mentions only conditionally. {@link #str} deliberately
+   * collapses missing to {@code ""}, which is right for a required field (it can't render "null"
+   * mid-sentence) but useless for deciding whether to write the sentence at all.
+   */
+  private static Optional<String> opt(Map<String, Object> payload, String key) {
+    Object v = payload == null ? null : payload.get(key);
+    if (v == null) {
+      return Optional.empty();
+    }
+    String s = v.toString().strip();
+    return s.isEmpty() ? Optional.empty() : Optional.of(s);
   }
 
   /**

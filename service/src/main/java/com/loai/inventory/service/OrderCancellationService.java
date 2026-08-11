@@ -7,6 +7,8 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.FulfillmentStatus;
+import com.loai.inventory.domain.model.NotificationRecipient;
+import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentProvider;
@@ -22,7 +24,9 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -85,6 +89,8 @@ public final class OrderCancellationService {
   private final FulfillmentRepositoryFactory fulfillmentRepoFactory;
   private final ReservationService reservationService;
   private final RefundService refundService;
+  private final NotificationService notificationService;
+  private final MagicLinkService magicLinkService;
 
   public OrderCancellationService(
       DSLContext rootDsl,
@@ -92,13 +98,17 @@ public final class OrderCancellationService {
       PaymentRepositoryFactory paymentRepoFactory,
       FulfillmentRepositoryFactory fulfillmentRepoFactory,
       ReservationService reservationService,
-      RefundService refundService) {
+      RefundService refundService,
+      NotificationService notificationService,
+      MagicLinkService magicLinkService) {
     this.rootDsl = rootDsl;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.paymentRepoFactory = paymentRepoFactory;
     this.fulfillmentRepoFactory = fulfillmentRepoFactory;
     this.reservationService = reservationService;
     this.refundService = refundService;
+    this.notificationService = notificationService;
+    this.magicLinkService = magicLinkService;
   }
 
   /**
@@ -249,6 +259,14 @@ public final class OrderCancellationService {
           // the true figure is derivable as SUM(payments) − SUM(EXECUTED refunds) if ever needed.
           orderRepo.updateCancelledState(order);
 
+          // ORDER_CANCELLED — raised last, once the cancel is fully assembled, so the message can
+          // state the refund total and so an above-threshold cancel refused at the approval gate
+          // above rolls back and stays silent (the gate throws before any refund is created).
+          // Silent when the order has no customer, mirroring the other order events.
+          if (order.getCustomerId() != null) {
+            notifyCancelled(txDsl, orgId, order, pendingRefundTotal, now);
+          }
+
           log.info(
               "Cancelled order {} ({}): released {} reservation(s), {} PENDING refund(s) totalling {}",
               orderId,
@@ -258,5 +276,42 @@ public final class OrderCancellationService {
               pendingRefundTotal);
           return new CancelResult(order, released.released(), refunds, pendingRefundTotal);
         });
+  }
+
+  /**
+   * ORDER_CANCELLED producer ({@code stories/order_lifecycle_notifications.md}). Runs inside the
+   * cancel txn, so the notification exists iff the cancel commits.
+   *
+   * <p>The money copy is the careful part. This service creates refunds <b>PENDING</b> — it records
+   * an obligation and moves nothing ({@code refund.md}'s two-step lifecycle) — so the payload
+   * carries the total only to let the template say a refund <em>is being processed</em>. A cancel
+   * with no prepayment to return (the common pre-PAID case) passes a zero total, which is omitted
+   * entirely rather than rendered as "a refund of 0.00": the shopper who never paid should not be
+   * told about a refund at all.
+   */
+  private void notifyCancelled(
+      DSLContext txDsl,
+      UUID orgId,
+      SalesOrder order,
+      BigDecimal pendingRefundTotal,
+      OffsetDateTime now) {
+    MagicLinkService.OrderViewLink viewLink =
+        magicLinkService.issueOrderViewLink(
+            txDsl, orgId, order.getCustomerId(), order.getId(), now);
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("order_number", order.getOrderNumber());
+    if (pendingRefundTotal != null && pendingRefundTotal.signum() > 0) {
+      payload.put("refund_total", pendingRefundTotal);
+      payload.put("currency", order.getCurrency());
+    }
+    notificationService.notify(
+        txDsl,
+        orgId,
+        NotificationRecipient.customer(order.getCustomerId()),
+        NotificationType.ORDER_CANCELLED,
+        payload,
+        "sales_order",
+        order.getId(),
+        viewLink.absolute());
   }
 }

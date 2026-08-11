@@ -34,5 +34,56 @@ public enum NotificationType {
    * carries {@code order_number}; the email deep-links to the branded order-view page so the
    * shopper can rate each delivered line.
    */
-  REVIEW_REQUESTED
+  REVIEW_REQUESTED,
+
+  /**
+   * A shipment left the warehouse — the first of the three types that close the PAID→FULFILLED
+   * silence ({@code stories/order_lifecycle_notifications.md}). Customer recipient (feed + email);
+   * raised inside the {@code FulfillmentService.ship} txn on the {@code PENDING → SHIPPED} edge, so
+   * a rolled-back shipment sends nothing. Fires <b>once per fulfillment, not once per order</b>: a
+   * split order really does put two boxes on the road and the shopper is owed both. Payload carries
+   * {@code order_number} plus {@code carrier}/{@code tracking_number} when the merchant recorded
+   * them — the template names them only when present, never "carrier: null".
+   *
+   * <p>Deliberately <b>not</b> {@code OUT_FOR_DELIVERY}: there is exactly one transition here, and
+   * {@code stories/rider_self_delivery.md} reserves that name for the rider-pickup edge (it also
+   * declined a distinct status, "reuse SHIPPED"). Two names for one edge would be two words for one
+   * fact.
+   */
+  ORDER_SHIPPED,
+
+  /**
+   * The order was cancelled by the merchant ({@code OrderCancellationService}). Customer recipient
+   * (feed + email); raised inside the cancel txn <em>after</em> the refund obligations are created,
+   * so the notification exists iff the whole cancel commits — an above-threshold cancel denied at
+   * the approval gate rolls back and stays silent. Payload carries {@code order_number} and, when
+   * the cancel created PENDING refunds, {@code refund_total}/{@code currency}.
+   *
+   * <p>The money copy is deliberately careful: a cancel records a refund <b>obligation</b>, it does
+   * not move money (two-step lifecycle, {@code refund.md}), so the template says a refund is on its
+   * way and never that it has been sent. An order that had no prepayment gets the plain cancel
+   * notice with no money sentence at all.
+   *
+   * <p>Order <b>expiry</b> is a different event and is not this type — the TTL sweeper stays silent
+   * for now (owner decision, {@code stories/order_lifecycle_notifications.md} §Out).
+   */
+  ORDER_CANCELLED,
+
+  /**
+   * A payment arrived but did not cover the order — the UNDERPAID branch of {@code
+   * PaymentService.reconcileAndCreate}. Customer recipient (feed + email); raised inside the
+   * reconcile txn beside the partial {@code Payment}, so the acknowledgement and the money record
+   * commit together. Payload carries {@code order_number}, the {@code amount} just received, the
+   * {@code outstanding} remainder and {@code currency}.
+   *
+   * <p>This is the one case where the shopper has genuinely paid real money and, until now, heard
+   * nothing at all — the order sits {@code PENDING_PAYMENT} and looks to them exactly like a failed
+   * transfer. Fires <b>per recorded partial</b>: a second top-up that still falls short raises it
+   * again with the new, smaller remainder, which is the useful thing to say.
+   *
+   * <p>Deliberately silent on OVERPAID (that order is PAID — {@link #ORDER_PAID} covers it, and the
+   * excess-refund conversation is the admin's) and on a DISPUTED payment (a merchant-initiated
+   * flag, not news the shopper can act on).
+   */
+  PAYMENT_NEEDS_ATTENTION
 }

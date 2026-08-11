@@ -766,7 +766,9 @@ public class AppConfig {
             paymentRepositoryFactory,
             fulfillmentRepositoryFactory,
             reservationService,
-            refundService);
+            refundService,
+            notificationService,
+            magicLinkService);
     this.documentRenderService =
         new DocumentRenderService(
             orgService,

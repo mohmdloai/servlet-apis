@@ -14,6 +14,8 @@ import com.loai.inventory.domain.model.FulfillmentResolution;
 import com.loai.inventory.domain.model.FulfillmentStatus;
 import com.loai.inventory.domain.model.Inventory;
 import com.loai.inventory.domain.model.InventoryReservation;
+import com.loai.inventory.domain.model.NotificationRecipient;
+import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
@@ -427,6 +429,15 @@ public final class FulfillmentService {
             orderRepo.updatePaymentState(order);
           }
 
+          // ORDER_SHIPPED — the first of the three events that close the PAID→FULFILLED silence
+          // (stories/order_lifecycle_notifications.md). Inside the ship txn, so a rolled-back
+          // shipment sends nothing. Once per FULFILLMENT, not per order: a split order really does
+          // put a second box on the road, and the shopper is owed that news too. Silent when the
+          // order has no customer (PHONE orders may carry none) — there is nobody to tell.
+          if (order.getCustomerId() != null) {
+            notifyShipped(txDsl, orgId, order, fulfillment, now);
+          }
+
           log.info(
               "Shipped fulfillment id={} orgId={} order={} products={} reservationsConsumed={} orderStatus={}",
               fulfillment.getId(),
@@ -437,6 +448,44 @@ public final class FulfillmentService {
               order.getStatus());
           return new FulfillmentView(fulfillment, lines);
         });
+  }
+
+  /**
+   * ORDER_SHIPPED producer: the shopper's "it's on the way" message, raised inside the ship txn
+   * after the fulfillment and order rows are persisted, so the notification exists iff the shipment
+   * commits. A fresh order-view magic link is minted per message, exactly as placement and
+   * ORDER_PAID do — the link is the shopper's whole self-serve surface, and reconstructing an
+   * earlier token is impossible by design (they are stored hashed).
+   *
+   * <p>{@code carrier} and {@code tracking_number} are optional columns on {@code fulfillment}, so
+   * they go into the payload only when the merchant recorded them; the template writes a sentence
+   * per present field rather than rendering an empty one. Caller has already excluded the
+   * customer-less order.
+   */
+  private void notifyShipped(
+      DSLContext txDsl, UUID orgId, SalesOrder order, Fulfillment fulfillment, OffsetDateTime now) {
+    MagicLinkService.OrderViewLink viewLink =
+        magicLinkService.issueOrderViewLink(
+            txDsl, orgId, order.getCustomerId(), order.getId(), now);
+    // LinkedHashMap, not Map.of: the two optional fields are frequently null and Map.of rejects a
+    // null value outright.
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("order_number", order.getOrderNumber());
+    if (fulfillment.getCarrier() != null && !fulfillment.getCarrier().isBlank()) {
+      payload.put("carrier", fulfillment.getCarrier());
+    }
+    if (fulfillment.getTrackingNumber() != null && !fulfillment.getTrackingNumber().isBlank()) {
+      payload.put("tracking_number", fulfillment.getTrackingNumber());
+    }
+    notificationService.notify(
+        txDsl,
+        orgId,
+        NotificationRecipient.customer(order.getCustomerId()),
+        NotificationType.ORDER_SHIPPED,
+        payload,
+        "sales_order",
+        order.getId(),
+        viewLink.absolute());
   }
 
   /**
