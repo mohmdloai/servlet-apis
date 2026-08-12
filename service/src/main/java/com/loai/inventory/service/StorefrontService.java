@@ -11,6 +11,7 @@ import com.loai.inventory.domain.model.CategoryTranslation;
 import com.loai.inventory.domain.model.ListingSort;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.OrgWhatsAppConfig;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
 import com.loai.inventory.domain.model.ProductListingTranslation;
@@ -26,6 +27,7 @@ import com.loai.inventory.domain.repository.ListingReviewRepository;
 import com.loai.inventory.domain.repository.ListingReviewRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgWhatsAppConfigRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductListingRepository;
 import com.loai.inventory.domain.repository.ProductListingRepository.CheckoutLineResolution;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
@@ -62,6 +64,7 @@ public class StorefrontService {
   private final StorefrontBannerRepositoryFactory bannerRepoFactory;
   private final ListingReviewRepositoryFactory reviewRepoFactory;
   private final CollectionRepositoryFactory collectionRepoFactory;
+  private final OrgWhatsAppConfigRepositoryFactory whatsAppConfigRepoFactory;
   private final ObjectStorage storage;
   private final SalesOrderService salesOrderService;
   private final OgImageSource ogImageSource;
@@ -75,6 +78,7 @@ public class StorefrontService {
       StorefrontBannerRepositoryFactory bannerRepoFactory,
       ListingReviewRepositoryFactory reviewRepoFactory,
       CollectionRepositoryFactory collectionRepoFactory,
+      OrgWhatsAppConfigRepositoryFactory whatsAppConfigRepoFactory,
       ObjectStorage storage,
       SalesOrderService salesOrderService,
       OgImageSource ogImageSource) {
@@ -86,6 +90,7 @@ public class StorefrontService {
     this.bannerRepoFactory = bannerRepoFactory;
     this.reviewRepoFactory = reviewRepoFactory;
     this.collectionRepoFactory = collectionRepoFactory;
+    this.whatsAppConfigRepoFactory = whatsAppConfigRepoFactory;
     this.storage = storage;
     this.salesOrderService = salesOrderService;
     this.ogImageSource = ogImageSource;
@@ -220,7 +225,18 @@ public class StorefrontService {
       // shipping honestly before placement. Not sensitive: both amounts render on every order
       // summary anyway.
       java.math.BigDecimal taxRate,
-      java.math.BigDecimal shippingFee) {}
+      java.math.BigDecimal shippingFee,
+      /**
+       * Whether this store has a live WhatsApp channel (slice B) — an ACTIVE {@code
+       * org_whatsapp_config}. The portal's notification settings need it: without it that screen
+       * cannot tell a store that never connected from one that did, and would have to offer a
+       * WhatsApp opt-out to every shopper — a switch that, for most stores, turns off a channel
+       * that could never send.
+       *
+       * <p>Not a leak: it says only <em>that</em> a channel exists, never the number, the WABA id
+       * or anything sealed. A shopper learns the same fact the first time a message arrives.
+       */
+      boolean whatsappEnabled) {}
 
   /** v1 constants: both locales ship live; single-currency platform. */
   private static final List<String> SUPPORTED_LOCALES = List.of("ar", "en");
@@ -266,7 +282,15 @@ public class StorefrontService {
         org.getMetaDescription(),
         ogImageVersion,
         org.getTaxRate(),
-        org.getShippingFee());
+        org.getShippingFee(),
+        // One PK lookup on a table most orgs have no row in. Deliberately read here rather than
+        // joined into resolveOrg: every other public read calls that too, and none of them needs
+        // this.
+        whatsAppConfigRepoFactory
+            .create(rootDsl)
+            .findByOrgId(org.getId())
+            .map(OrgWhatsAppConfig::isActive)
+            .orElse(false));
   }
 
   /**

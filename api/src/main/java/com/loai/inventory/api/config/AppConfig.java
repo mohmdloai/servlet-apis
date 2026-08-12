@@ -741,6 +741,7 @@ public class AppConfig {
             storefrontBannerRepositoryFactory,
             listingReviewRepositoryFactory,
             collectionRepositoryFactory,
+            orgWhatsAppConfigRepositoryFactory,
             objectStorage,
             salesOrderService,
             new PresignedOgImageSource(objectStorage));

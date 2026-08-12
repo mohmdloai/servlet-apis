@@ -95,6 +95,7 @@ class PublicBannersIT {
             new StorefrontBannerRepositoryFactoryImpl(),
             new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl(),
             storage,
             null,
             null);
