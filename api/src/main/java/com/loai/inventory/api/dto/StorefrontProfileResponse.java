@@ -25,6 +25,15 @@ public class StorefrontProfileResponse {
   private java.math.BigDecimal taxRate;
   private java.math.BigDecimal shippingFee;
 
+  /**
+   * Whether this store has a live WhatsApp channel (slice B). A <b>primitive</b>, so it is always
+   * on the wire: Jackson omits nulls, and a boxed Boolean would make absence mean "no WhatsApp",
+   * which is indistinguishable from an older backend that never sent the field. The portal branches
+   * on it to decide whether a WhatsApp opt-out is even a real setting — same both-states-explicit
+   * reflex as {@code email_verified} on the admin user DTO.
+   */
+  private boolean whatsappEnabled;
+
   private StorefrontProfileResponse() {}
 
   public static StorefrontProfileResponse from(StorefrontProfileView v) {
@@ -43,6 +52,7 @@ public class StorefrontProfileResponse {
     r.ogImageVersion = v.ogImageVersion();
     r.taxRate = v.taxRate();
     r.shippingFee = v.shippingFee();
+    r.whatsappEnabled = v.whatsappEnabled();
     return r;
   }
 
@@ -88,6 +98,10 @@ public class StorefrontProfileResponse {
 
   public java.math.BigDecimal getShippingFee() {
     return shippingFee;
+  }
+
+  public boolean isWhatsappEnabled() {
+    return whatsappEnabled;
   }
 
   public String getMetaTitle() {

@@ -1,6 +1,7 @@
 package com.loai.inventory.api.catalog;
 
 import static com.loai.inventory.repository.generated.Tables.ORG;
+import static com.loai.inventory.repository.generated.Tables.ORG_WHATSAPP_CONFIG;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -86,6 +87,7 @@ class StorefrontProfileIT {
             new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
             new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl(),
             storage,
             null,
             null);
@@ -135,6 +137,55 @@ class StorefrontProfileIT {
         }) {
       assertFalse(json.contains(forbidden), "leaked: " + forbidden + " in " + json);
     }
+  }
+
+  @Test
+  void whatsappEnabled_isFalseUntilTheStoreConnects_andTrueOnlyWhileActive() {
+    UUID id = insertOrg("acme", "Acme Store", true);
+
+    // A store that never connected. False, not absent — the portal has to be able to tell "no
+    // WhatsApp" from "an older backend that never sent the field".
+    assertFalse(storefront.profile("acme").whatsappEnabled());
+
+    dsl.insertInto(ORG_WHATSAPP_CONFIG)
+        .set(ORG_WHATSAPP_CONFIG.ORG_ID, id)
+        .set(ORG_WHATSAPP_CONFIG.WABA_ID, "WABA-1")
+        .set(ORG_WHATSAPP_CONFIG.PHONE_NUMBER_ID, "PHONE-1")
+        .set(ORG_WHATSAPP_CONFIG.ACCESS_TOKEN_ENCRYPTED, "sealed")
+        .set(ORG_WHATSAPP_CONFIG.STATUS, "ACTIVE")
+        .execute();
+    assertTrue(storefront.profile("acme").whatsappEnabled());
+
+    // Paused is not connected, as far as a shopper's settings screen is concerned: nothing will
+    // send, so offering an opt-out for it would be a switch that does nothing.
+    dsl.update(ORG_WHATSAPP_CONFIG)
+        .set(ORG_WHATSAPP_CONFIG.STATUS, "DISABLED")
+        .where(ORG_WHATSAPP_CONFIG.ORG_ID.eq(id))
+        .execute();
+    assertFalse(storefront.profile("acme").whatsappEnabled());
+  }
+
+  @Test
+  void theProfileNeverLeaksTheCredential() throws Exception {
+    UUID id = insertOrg("acme", "Acme Store", true);
+    dsl.insertInto(ORG_WHATSAPP_CONFIG)
+        .set(ORG_WHATSAPP_CONFIG.ORG_ID, id)
+        .set(ORG_WHATSAPP_CONFIG.WABA_ID, "WABA-SECRET")
+        .set(ORG_WHATSAPP_CONFIG.PHONE_NUMBER_ID, "PHONE-SECRET")
+        .set(ORG_WHATSAPP_CONFIG.DISPLAY_PHONE_NUMBER, "+201012345678")
+        .set(ORG_WHATSAPP_CONFIG.ACCESS_TOKEN_ENCRYPTED, "sealed-token")
+        .set(ORG_WHATSAPP_CONFIG.STATUS, "ACTIVE")
+        .execute();
+
+    // This is an ANONYMOUS, publicly cached read. It may say that a channel exists and nothing
+    // more — not the number, not the WABA id, and certainly not the sealed token.
+    String json =
+        JSON.writeValueAsString(StorefrontProfileResponse.from(storefront.profile("acme")));
+    assertTrue(json.contains("\"whatsapp_enabled\":true"), json);
+    assertFalse(json.contains("WABA-SECRET"), json);
+    assertFalse(json.contains("PHONE-SECRET"), json);
+    assertFalse(json.contains("sealed-token"), json);
+    assertFalse(json.contains("+201012345678"), json);
   }
 
   @Test

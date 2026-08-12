@@ -32,6 +32,7 @@ import com.loai.inventory.repository.CollectionRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.service.CollectionService;
 import com.loai.inventory.service.CollectionService.CollectionView;
@@ -141,6 +142,7 @@ class CollectionsIT {
             new com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl(),
             new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             new CollectionRepositoryFactoryImpl(),
+            new OrgWhatsAppConfigRepositoryFactoryImpl(),
             storage,
             null,
             null);

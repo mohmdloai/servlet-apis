@@ -225,6 +225,7 @@ class VariantCommerceIT {
             new StorefrontBannerRepositoryFactoryImpl(),
             new ListingReviewRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl(),
             storage,
             salesOrders,
             null);
