@@ -520,6 +520,20 @@ public class OrgService {
     }
   }
 
+  /**
+   * Slugs that cannot be an org's, because {@code /api/public/*} already spends them on routes.
+   *
+   * <p>{@code orders} and {@code unsubscribe} have their own servlet mappings ({@code
+   * /api/public/orders/*}, {@code /api/public/unsubscribe/*}) and {@code storefronts} is matched
+   * ahead of org resolution on {@code PublicStorefrontServlet}. All three pass the slug pattern, so
+   * before this guard a merchant could claim one and end up with a **silently unreachable
+   * storefront** — longest-match routing would answer every request for it, with no error anywhere
+   * to explain why. Found while adding the third name ({@code stories/storefront_crawl_feeds.md});
+   * the first two were claimable for as long as those mappings have existed.
+   */
+  private static final java.util.Set<String> RESERVED_SLUGS =
+      java.util.Set.of("orders", "unsubscribe", "storefronts");
+
   /** Shared slug validation, reused by the platform-admin provisioning path. */
   public static void validateSlug(String slug) {
     if (slug == null || slug.isBlank()) {
@@ -528,6 +542,10 @@ public class OrgService {
     if (!SLUG_PATTERN.matcher(slug).matches()) {
       throw new ValidationException(
           "slug must be 3-64 chars, lowercase alphanumeric or hyphen, no leading/trailing hyphen");
+    }
+    if (RESERVED_SLUGS.contains(slug)) {
+      throw new ValidationException(
+          "slug is reserved and cannot be used: " + String.join(", ", RESERVED_SLUGS));
     }
   }
 }

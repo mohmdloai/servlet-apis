@@ -17,12 +17,14 @@ import com.loai.inventory.api.dto.PublicCheckoutRequest;
 import com.loai.inventory.api.dto.PublicCollectionResponse;
 import com.loai.inventory.api.dto.PublicCommentResponse;
 import com.loai.inventory.api.dto.PublicCouponResponse;
+import com.loai.inventory.api.dto.PublicCrawlFeedResponse;
 import com.loai.inventory.api.dto.PublicListingResponse;
 import com.loai.inventory.api.dto.PublicListingsPageResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
 import com.loai.inventory.api.dto.PublicPageResponse;
 import com.loai.inventory.api.dto.PublicPageSummaryResponse;
 import com.loai.inventory.api.dto.PublicReviewResponse;
+import com.loai.inventory.api.dto.PublicStorefrontRefResponse;
 import com.loai.inventory.api.dto.StorefrontProfileResponse;
 import com.loai.inventory.api.dto.ValidateCouponRequest;
 import com.loai.inventory.common.exception.AppException;
@@ -62,6 +64,14 @@ import java.util.List;
  *   <li>{@code GET /api/public/{orgSlug}/collections} — the collections rail (roadmap item 8): only
  *       collections holding ≥1 PUBLISHED listing, {@code {slug, name}} locale-resolved; {@code
  *       max-age=300}
+ *   <li>{@code GET /api/public/storefronts} — the cross-org store index a sitemap index is built
+ *       from: active orgs holding >= 1 PUBLISHED listing, {@code slug ASC}, paged, each with its
+ *       catalog timestamp; {@code max-age=3600}. Matched ahead of org resolution, so {@code
+ *       storefronts} is a reserved slug (OrgService refuses it)
+ *   <li>{@code GET /api/public/{orgSlug}/crawl-feed} — that store's indexable URL set with an
+ *       honest {@code updated_at} per entity; {@code max-age=1800}
+ *   <li>{@code GET /api/public/{orgSlug}/listings/{slug}/image} — the stable per-listing image
+ *       stream (bytes, never a redirect); {@code max-age=3600}
  *   <li>{@code GET /api/public/{orgSlug}/og-image} — the stable social-share image stream (bytes,
  *       og key → logo fallback → 404, C2); {@code max-age=3600}
  *   <li>{@code GET /api/public/{orgSlug}/availability?slugs=a,b,c} — batch in-stock (B2); {@code
@@ -89,6 +99,8 @@ public class PublicStorefrontServlet extends HttpServlet {
   // A whole hour: the point of the stable og-image route is a URL a social crawler's cache can hold
   // well past the ~900s presign TTL of the bytes it streams (slice C2, epic §6).
   private static final String CACHE_OG_IMAGE = "public, max-age=3600";
+  private static final String CACHE_STORE_INDEX = "public, max-age=3600";
+  private static final String CACHE_CRAWL_FEED = "public, max-age=1800";
   private static final String CACHE_NONE = "no-store";
   // Text pages change rarely — the same slow cadence as the profile; the list/detail split (this
   // list carries no bodies) is why the footer renders links without fetching page bodies (slice
@@ -150,6 +162,31 @@ public class PublicStorefrontServlet extends HttpServlet {
       if (parts.length == 0) {
         throw new ValidationException("Expected /api/public/{orgSlug}/...");
       }
+
+      // The cross-org store index (stories/storefront_crawl_feeds.md) — matched HERE, ahead of org
+      // resolution, because every other route on this servlet reads parts[0] as a slug. That makes
+      // `storefronts` a reserved slug, alongside `orders` and `unsubscribe` (which the
+      // more-specific
+      // servlet mappings already reserve); OrgService refuses all three so a merchant cannot claim
+      // one and end up with a silently unreachable store.
+      if ("storefronts".equals(parts[0])) {
+        if (parts.length != 1) {
+          throw new ValidationException("Unknown route");
+        }
+        StorefrontService.StorefrontIndex index =
+            service.indexableStores(intParam(req, "page", 0), intParam(req, "size", 20));
+        writeJson(
+            resp,
+            200,
+            new PageResponse<>(
+                index.data().stream().map(PublicStorefrontRefResponse::from).toList(),
+                index.total(),
+                index.page(),
+                index.size()),
+            CACHE_STORE_INDEX);
+        return;
+      }
+
       String orgSlug = parts[0];
 
       // Bare /{orgSlug} → storefront profile (B1).
@@ -202,6 +239,16 @@ public class PublicStorefrontServlet extends HttpServlet {
                   .map(PublicBannerResponse::from)
                   .toList();
           writeJson(resp, 200, data, CACHE_LISTINGS);
+        }
+        case "crawl-feed" -> {
+          if (parts.length != 2) {
+            throw new ValidationException("Unknown route");
+          }
+          writeJson(
+              resp,
+              200,
+              PublicCrawlFeedResponse.from(service.crawlFeed(orgSlug)),
+              CACHE_CRAWL_FEED);
         }
         case "og-image" -> {
           if (parts.length != 2) {
@@ -312,6 +359,14 @@ public class PublicStorefrontServlet extends HttpServlet {
           PublicListingResponse.from(
               service.getListing(orgSlug, parts[2], req.getParameter("locale"))),
           CACHE_LISTINGS);
+    } else if (parts.length == 4 && "image".equals(parts[3])) {
+      // The stable per-listing image (stories/storefront_crawl_feeds.md). Streams BYTES, never a
+      // redirect: every catalog image URL is a ~900s presigned GET, and a third-party cache (a
+      // social scraper, an image index) holds a preview far longer than that — a 302 gets its
+      // target cached by some scrapers, the same bug one hop later. This is the URL that JSON-LD's
+      // Product.image and a product link's share card can name.
+      StorefrontService.OgImage img = service.listingImage(orgSlug, parts[2]);
+      writeBytes(resp, img.bytes(), img.contentType(), CACHE_OG_IMAGE);
     } else if (parts.length == 4 && "reviews".equals(parts[3])) {
       // Slice R1: the listing's APPROVED reviews. The slug resolves through the same
       // PUBLISHED-only resolution as the listing read (inside the service), so reviews on a
