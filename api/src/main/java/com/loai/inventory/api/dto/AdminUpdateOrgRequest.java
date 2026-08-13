@@ -23,6 +23,12 @@ public class AdminUpdateOrgRequest {
   private String metaDescription;
   private String ogImageObjectKey;
 
+  /**
+   * V83 merchant opt-out from search discovery. {@code null} = leave unchanged (merge-PUT); {@code
+   * false} = the store can transact but must not be found via organic search.
+   */
+  private Boolean discoverable;
+
   // Commerce money config (V68, roadmap item 5). Merge semantics: null = leave unchanged.
   private BigDecimal taxRate;
   private BigDecimal shippingFee;
@@ -105,6 +111,14 @@ public class AdminUpdateOrgRequest {
 
   public void setOgImageObjectKey(String ogImageObjectKey) {
     this.ogImageObjectKey = ogImageObjectKey;
+  }
+
+  public Boolean getDiscoverable() {
+    return discoverable;
+  }
+
+  public void setDiscoverable(Boolean discoverable) {
+    this.discoverable = discoverable;
   }
 
   public BigDecimal getTaxRate() {

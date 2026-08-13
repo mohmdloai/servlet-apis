@@ -53,6 +53,7 @@ import com.loai.inventory.domain.repository.ReportRepository;
 import com.loai.inventory.domain.repository.SalesInvoiceRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.domain.repository.StorefrontBannerRepositoryFactory;
+import com.loai.inventory.domain.repository.StorefrontCrawlRepositoryFactory;
 import com.loai.inventory.domain.repository.StorefrontPageRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
@@ -98,6 +99,7 @@ import com.loai.inventory.repository.ReportRepositoryImpl;
 import com.loai.inventory.repository.SalesInvoiceRepositoryFactoryImpl;
 import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl;
+import com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl;
 import com.loai.inventory.repository.StorefrontPageRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
@@ -237,6 +239,7 @@ public class AppConfig {
   public final ImpersonationEventRepository impersonationEventRepository;
   public final CategoryRepositoryFactory categoryRepositoryFactory;
   public final CollectionRepositoryFactory collectionRepositoryFactory;
+  public final StorefrontCrawlRepositoryFactory storefrontCrawlRepositoryFactory;
   public final CouponRepositoryFactory couponRepositoryFactory;
   public final NotificationRepositoryFactory notificationRepositoryFactory;
   public final NotificationPreferenceRepositoryFactory notificationPreferenceRepositoryFactory;
@@ -392,6 +395,7 @@ public class AppConfig {
     this.impersonationEventRepository = new ImpersonationEventRepositoryImpl(dsl);
     this.categoryRepositoryFactory = new CategoryRepositoryFactoryImpl();
     this.collectionRepositoryFactory = new CollectionRepositoryFactoryImpl();
+    this.storefrontCrawlRepositoryFactory = new StorefrontCrawlRepositoryFactoryImpl();
     this.couponRepositoryFactory = new CouponRepositoryFactoryImpl();
     this.notificationRepositoryFactory = new NotificationRepositoryFactoryImpl();
     this.notificationPreferenceRepositoryFactory =
@@ -742,6 +746,7 @@ public class AppConfig {
             listingReviewRepositoryFactory,
             collectionRepositoryFactory,
             orgWhatsAppConfigRepositoryFactory,
+            storefrontCrawlRepositoryFactory,
             objectStorage,
             salesOrderService,
             new PresignedOgImageSource(objectStorage));

@@ -34,6 +34,9 @@ public class StorefrontProfileResponse {
    */
   private boolean whatsappEnabled;
 
+  /** V83: false = the storefront must noindex every page of this store. Always on the wire. */
+  private boolean discoverable;
+
   private StorefrontProfileResponse() {}
 
   public static StorefrontProfileResponse from(StorefrontProfileView v) {
@@ -53,6 +56,7 @@ public class StorefrontProfileResponse {
     r.taxRate = v.taxRate();
     r.shippingFee = v.shippingFee();
     r.whatsappEnabled = v.whatsappEnabled();
+    r.discoverable = v.discoverable();
     return r;
   }
 
@@ -102,6 +106,10 @@ public class StorefrontProfileResponse {
 
   public boolean isWhatsappEnabled() {
     return whatsappEnabled;
+  }
+
+  public boolean isDiscoverable() {
+    return discoverable;
   }
 
   public String getMetaTitle() {

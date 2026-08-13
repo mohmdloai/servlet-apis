@@ -503,7 +503,7 @@ class PlatformOrgServiceIT {
         null,
         null,
         null,
-        new com.loai.inventory.service.OrgService.SeoMetadata("Title", "Desc", ogKey));
+        new com.loai.inventory.service.OrgService.SeoMetadata("Title", "Desc", ogKey, null));
 
     assertEquals(
         "Title",
@@ -527,7 +527,7 @@ class PlatformOrgServiceIT {
         null,
         null,
         null,
-        new com.loai.inventory.service.OrgService.SeoMetadata("", null, null));
+        new com.loai.inventory.service.OrgService.SeoMetadata("", null, null, null));
     org.junit.jupiter.api.Assertions.assertNull(
         dsl.select(DSL.field("meta_title"))
             .from("org")
@@ -556,7 +556,7 @@ class PlatformOrgServiceIT {
                 null,
                 null,
                 null,
-                new com.loai.inventory.service.OrgService.SeoMetadata(tooLong, null, null)));
+                new com.loai.inventory.service.OrgService.SeoMetadata(tooLong, null, null, null)));
   }
 
   @Test
@@ -574,7 +574,7 @@ class PlatformOrgServiceIT {
                 null,
                 null,
                 null,
-                new com.loai.inventory.service.OrgService.SeoMetadata(null, null, foreign)));
+                new com.loai.inventory.service.OrgService.SeoMetadata(null, null, foreign, null)));
   }
 
   private SecurityContext admin() {

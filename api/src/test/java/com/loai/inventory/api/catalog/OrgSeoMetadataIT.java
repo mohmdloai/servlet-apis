@@ -82,6 +82,7 @@ class OrgSeoMetadataIT {
             new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl(),
             storage,
             null,
             null);
@@ -193,7 +194,7 @@ class OrgSeoMetadataIT {
   }
 
   private static OrgService.SeoMetadata seo(String title, String desc, String ogKey) {
-    return new OrgService.SeoMetadata(title, desc, ogKey);
+    return new OrgService.SeoMetadata(title, desc, ogKey, null);
   }
 
   private UUID insertOrg(String slug) {

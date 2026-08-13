@@ -143,6 +143,7 @@ class CollectionsIT {
             new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             new CollectionRepositoryFactoryImpl(),
             new OrgWhatsAppConfigRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl(),
             storage,
             null,
             null);

@@ -90,6 +90,7 @@ class StorefrontAvailabilityIT {
             new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl(),
             storage,
             null,
             null);

@@ -182,7 +182,14 @@ public class OrgService {
    * over the frontend's ~60/~160 display-truncation guidance — the server rule, not the display
    * guide. See {@code stories/storefront_seo_metadata.md} (C2).
    */
-  public record SeoMetadata(String metaTitle, String metaDescription, String ogImageObjectKey) {}
+  /**
+   * The Sharing & SEO surface (C2 + the V83 opt-out). {@code discoverable} is a {@code Boolean} on
+   * purpose — {@code null} = leave unchanged, the merge-PUT convention every other field here
+   * follows; {@code false} pulls the store out of the crawl surface (store index, sitemap, page
+   * indexing) while the direct link keeps working.
+   */
+  public record SeoMetadata(
+      String metaTitle, String metaDescription, String ogImageObjectKey, Boolean discoverable) {}
 
   /**
    * Server-side length caps for the SEO text fields (generous over frontend display truncation).
@@ -372,6 +379,7 @@ public class OrgService {
     if (s.metaDescription() != null)
       org.setMetaDescription(Text.normalizeText(s.metaDescription()));
     if (s.ogImageObjectKey() != null) org.setOgImageObjectKey(blankToNull(s.ogImageObjectKey()));
+    if (s.discoverable() != null) org.setDiscoverable(s.discoverable());
   }
 
   /**
@@ -520,6 +528,20 @@ public class OrgService {
     }
   }
 
+  /**
+   * Slugs that cannot be an org's, because {@code /api/public/*} already spends them on routes.
+   *
+   * <p>{@code orders} and {@code unsubscribe} have their own servlet mappings ({@code
+   * /api/public/orders/*}, {@code /api/public/unsubscribe/*}) and {@code storefronts} is matched
+   * ahead of org resolution on {@code PublicStorefrontServlet}. All three pass the slug pattern, so
+   * before this guard a merchant could claim one and end up with a **silently unreachable
+   * storefront** — longest-match routing would answer every request for it, with no error anywhere
+   * to explain why. Found while adding the third name ({@code stories/storefront_crawl_feeds.md});
+   * the first two were claimable for as long as those mappings have existed.
+   */
+  private static final java.util.Set<String> RESERVED_SLUGS =
+      java.util.Set.of("orders", "unsubscribe", "storefronts");
+
   /** Shared slug validation, reused by the platform-admin provisioning path. */
   public static void validateSlug(String slug) {
     if (slug == null || slug.isBlank()) {
@@ -528,6 +550,10 @@ public class OrgService {
     if (!SLUG_PATTERN.matcher(slug).matches()) {
       throw new ValidationException(
           "slug must be 3-64 chars, lowercase alphanumeric or hyphen, no leading/trailing hyphen");
+    }
+    if (RESERVED_SLUGS.contains(slug)) {
+      throw new ValidationException(
+          "slug is reserved and cannot be used: " + String.join(", ", RESERVED_SLUGS));
     }
   }
 }

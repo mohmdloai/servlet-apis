@@ -86,6 +86,15 @@ public class RateLimitFilter implements Filter {
   // what does it give?" — i.e. an enumeration surface. Strict and its own bucket, so a scraper
   // hunting codes exhausts 10/min rather than riding the generous public-read budget.
   static final int DEFAULT_PUBLIC_COUPON_LIMIT = 10;
+
+  /**
+   * The crawl feeds' budget. Generous on purpose: sitemap regeneration arrives from ONE IP (the
+   * storefront's Next container over the compose network), so on the shared pub-read bucket a burst
+   * of store-sitemap builds would spend an allowance that belongs to real shoppers behind the same
+   * proxy.
+   */
+  static final int DEFAULT_PUBLIC_SITEMAP_LIMIT = 600;
+
   static final int DEFAULT_AUTH_REGISTER_LIMIT = 3;
   static final int DEFAULT_AUTH_FORGOT_LIMIT = 5;
 
@@ -100,6 +109,7 @@ public class RateLimitFilter implements Filter {
   private int portalCommentLimit = DEFAULT_PORTAL_COMMENT_LIMIT;
   private int paymentClaimLimit = DEFAULT_PAYMENT_CLAIM_LIMIT;
   private int publicCouponLimit = DEFAULT_PUBLIC_COUPON_LIMIT;
+  private int publicSitemapLimit = DEFAULT_PUBLIC_SITEMAP_LIMIT;
   private int authRegisterLimit = DEFAULT_AUTH_REGISTER_LIMIT;
   private int authForgotLimit = DEFAULT_AUTH_FORGOT_LIMIT;
   private boolean trustProxy;
@@ -140,6 +150,7 @@ public class RateLimitFilter implements Filter {
     this.portalCommentLimit = envIntOrDefault("PORTAL_COMMENT_LIMIT", DEFAULT_PORTAL_COMMENT_LIMIT);
     this.paymentClaimLimit = envIntOrDefault("PAYMENT_CLAIM_LIMIT", DEFAULT_PAYMENT_CLAIM_LIMIT);
     this.publicCouponLimit = envIntOrDefault("PUBLIC_COUPON_LIMIT", DEFAULT_PUBLIC_COUPON_LIMIT);
+    this.publicSitemapLimit = envIntOrDefault("PUBLIC_SITEMAP_LIMIT", DEFAULT_PUBLIC_SITEMAP_LIMIT);
     this.authRegisterLimit = envIntOrDefault("AUTH_REGISTER_LIMIT", DEFAULT_AUTH_REGISTER_LIMIT);
     this.authForgotLimit = envIntOrDefault("AUTH_FORGOT_LIMIT", DEFAULT_AUTH_FORGOT_LIMIT);
     this.trustProxy = Boolean.parseBoolean(System.getenv("TRUST_PROXY"));
@@ -201,6 +212,16 @@ public class RateLimitFilter implements Filter {
       // allowance.
       keyPrefix = "rl:pub-coupon:";
       limit = publicCouponLimit;
+    } else if ("GET".equals(req.getMethod())
+        && (path.equals("/api/public/storefronts") || path.endsWith("/crawl-feed"))) {
+      // The crawl feeds (stories/storefront_crawl_feeds.md) — matched AHEAD of the /api/public/
+      // catch-all, the rl:pub-coupon precedent, because match ORDER is the whole mechanism here.
+      // Unlike the coupon branch this widens rather than tightens: see
+      // DEFAULT_PUBLIC_SITEMAP_LIMIT.
+      // The per-listing image route deliberately stays on pub-read — shoppers and scrapers fetch it
+      // alike, at shopper cadence.
+      keyPrefix = "rl:pub-sitemap:";
+      limit = publicSitemapLimit;
     } else if (path.startsWith("/api/portal/")) {
       keyPrefix = "rl:portal-read:";
       limit = publicReadLimit;

@@ -32,8 +32,11 @@ import com.loai.inventory.domain.repository.ProductListingRepository;
 import com.loai.inventory.domain.repository.ProductListingRepository.CheckoutLineResolution;
 import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.StorefrontBannerRepositoryFactory;
+import com.loai.inventory.domain.repository.StorefrontCrawlRepository;
+import com.loai.inventory.domain.repository.StorefrontCrawlRepositoryFactory;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -65,6 +68,7 @@ public class StorefrontService {
   private final ListingReviewRepositoryFactory reviewRepoFactory;
   private final CollectionRepositoryFactory collectionRepoFactory;
   private final OrgWhatsAppConfigRepositoryFactory whatsAppConfigRepoFactory;
+  private final StorefrontCrawlRepositoryFactory crawlRepoFactory;
   private final ObjectStorage storage;
   private final SalesOrderService salesOrderService;
   private final OgImageSource ogImageSource;
@@ -79,6 +83,7 @@ public class StorefrontService {
       ListingReviewRepositoryFactory reviewRepoFactory,
       CollectionRepositoryFactory collectionRepoFactory,
       OrgWhatsAppConfigRepositoryFactory whatsAppConfigRepoFactory,
+      StorefrontCrawlRepositoryFactory crawlRepoFactory,
       ObjectStorage storage,
       SalesOrderService salesOrderService,
       OgImageSource ogImageSource) {
@@ -91,6 +96,7 @@ public class StorefrontService {
     this.reviewRepoFactory = reviewRepoFactory;
     this.collectionRepoFactory = collectionRepoFactory;
     this.whatsAppConfigRepoFactory = whatsAppConfigRepoFactory;
+    this.crawlRepoFactory = crawlRepoFactory;
     this.storage = storage;
     this.salesOrderService = salesOrderService;
     this.ogImageSource = ogImageSource;
@@ -236,7 +242,15 @@ public class StorefrontService {
        * <p>Not a leak: it says only <em>that</em> a channel exists, never the number, the WABA id
        * or anything sealed. A shopper learns the same fact the first time a message arrives.
        */
-      boolean whatsappEnabled) {}
+      boolean whatsappEnabled,
+      /**
+       * The V83 merchant opt-out from search discovery. {@code false} = the storefront app must
+       * render every page of this store {@code noindex} — the third enforcement point, and the one
+       * that stops an externally-linked hidden store from entering the index anyway (the store
+       * index omits it and its crawl feed 404s, but a crawler can still *reach* it by direct link).
+       * Always on the wire (a primitive): absence must never be readable as either answer.
+       */
+      boolean discoverable) {}
 
   /** v1 constants: both locales ship live; single-currency platform. */
   private static final List<String> SUPPORTED_LOCALES = List.of("ar", "en");
@@ -290,7 +304,8 @@ public class StorefrontService {
             .create(rootDsl)
             .findByOrgId(org.getId())
             .map(OrgWhatsAppConfig::isActive)
-            .orElse(false));
+            .orElse(false),
+        org.isDiscoverable());
   }
 
   /**
@@ -337,6 +352,107 @@ public class StorefrontService {
         .fetch(key)
         .map(f -> new OgImage(f.bytes(), f.contentType()))
         .orElseThrow(() -> new NotFoundException("Storefront image unavailable"));
+  }
+
+  // crawl feeds (stories/storefront_crawl_feeds.md)
+
+  /**
+   * The cap on listings in one {@link #crawlFeed}. With two locales that is 10 000 sitemap URLs,
+   * comfortably inside the sitemap protocol's 50 000-per-file limit. Above it the feed reports
+   * {@code truncated} with an honest {@code totalListings} rather than presenting a partial catalog
+   * as complete — a deferred limit that announces itself is the difference between a known
+   * constraint and a bug. No store is near it.
+   */
+  public static final int CRAWL_LISTING_CAP = 5_000;
+
+  /** One page of the public store index. */
+  public record StorefrontIndex(
+      List<StorefrontCrawlRepository.StoreRef> data, long total, int page, int size) {}
+
+  /**
+   * The stores a crawler may index: active orgs holding at least one PUBLISHED listing, {@code slug
+   * ASC}. Cross-org by definition — this is the one read on the public surface that is not scoped
+   * to a single tenant, and the deliberate disclosure it carries (the platform's merchant list
+   * becomes publicly readable) is the unavoidable cost of wanting those stores in a search index.
+   * It exposes only what is already public: a slug and a catalog timestamp.
+   */
+  public StorefrontIndex indexableStores(int page, int size) {
+    int offset = Pagination.offset(page, size);
+    StorefrontCrawlRepository repo = crawlRepoFactory.create(rootDsl);
+    return new StorefrontIndex(
+        repo.findIndexableStores(offset, size), repo.countIndexableStores(), page, size);
+  }
+
+  /** One store's indexable URL set — everything a sitemap needs and nothing else. */
+  public record CrawlFeed(
+      List<StorefrontCrawlRepository.CrawlEntry> listings,
+      List<StorefrontCrawlRepository.CrawlEntry> categories,
+      List<StorefrontCrawlRepository.CrawlEntry> collections,
+      List<StorefrontCrawlRepository.CrawlEntry> pages,
+      boolean hasFeatured,
+      long totalListings,
+      boolean truncated) {}
+
+  /**
+   * Every URL of {@code orgSlug} worth indexing, with an honest {@code updated_at} per entity.
+   * Categories and collections are filtered to those holding a PUBLISHED listing (the {@code
+   * collections} rail's rule — an empty shelf is never advertised); {@code hasFeatured} is a
+   * boolean rather than a count because the only question the client has is whether {@code
+   * /featured} belongs in the sitemap at all.
+   */
+  public CrawlFeed crawlFeed(String orgSlug) {
+    Org org = resolveOrg(orgSlug);
+    // The V83 opt-out's second enforcement point: a hidden store's sitemap does not exist. The
+    // same opaque 404 as an unknown slug — "hidden" vs "absent" is nobody's business. The catalog
+    // reads, og-image and listing-image all still serve: the direct link (and its chat unfurl)
+    // keeps working; only the crawl surface goes dark.
+    if (!org.isDiscoverable()) {
+      throw new NotFoundException("Storefront not found: " + orgSlug);
+    }
+    UUID orgId = org.getId();
+    StorefrontCrawlRepository repo = crawlRepoFactory.create(rootDsl);
+    long total = repo.countPublishedListings(orgId);
+    return new CrawlFeed(
+        repo.publishedListings(orgId, CRAWL_LISTING_CAP),
+        repo.nonEmptyCategories(orgId),
+        repo.nonEmptyCollections(orgId),
+        repo.pages(orgId),
+        repo.hasFeatured(orgId),
+        total,
+        total > CRAWL_LISTING_CAP);
+  }
+
+  /**
+   * Stream a listing's <b>primary</b> image (lowest {@code sort_order}) at a URL that never expires
+   * — the {@link #ogImage} pattern applied per listing.
+   *
+   * <p><b>Why this exists.</b> Every catalog image URL we serve is a ~900s presigned GET, and a
+   * third-party cache (a social scraper, a search engine's image index) holds a preview far longer
+   * than that. Story 31 hit exactly this wall for {@code og:image} and had to fall back to the
+   * <i>store</i> og image on product pages; structured data ({@code Product.image}) hits it too. So
+   * the bytes are streamed, never redirected — a 302 gets its <i>target</i> cached by some
+   * scrapers, which is the same bug one hop later.
+   *
+   * <p>PUBLISHED-only resolution, so a DRAFT or ARCHIVED listing's image is unreachable by
+   * construction. Unknown listing, no image, or a storage failure are all the same opaque 404 (a
+   * missing preview beats a hanging crawler).
+   */
+  public OgImage listingImage(String orgSlug, String listingSlug) {
+    Org org = resolveOrg(orgSlug);
+    ProductListing listing =
+        listingRepoFactory
+            .create(rootDsl)
+            .findBySlugAndStatus(org.getId(), listingSlug, ListingStatus.PUBLISHED)
+            .orElseThrow(() -> new NotFoundException("Listing not found: " + listingSlug));
+    String key =
+        listingRepoFactory.create(rootDsl).findImages(listing.getId()).stream()
+            .min(Comparator.comparingInt(ProductListingImage::getSortOrder))
+            .map(ProductListingImage::getObjectKey)
+            .orElseThrow(() -> new NotFoundException("No listing image"));
+    return ogImageSource
+        .fetch(key)
+        .map(f -> new OgImage(f.bytes(), f.contentType()))
+        .orElseThrow(() -> new NotFoundException("Listing image unavailable"));
   }
 
   // banners (C1)

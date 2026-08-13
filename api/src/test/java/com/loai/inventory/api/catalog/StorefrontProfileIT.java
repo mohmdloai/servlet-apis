@@ -88,6 +88,7 @@ class StorefrontProfileIT {
             new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl(),
             storage,
             null,
             null);
@@ -326,7 +327,8 @@ class StorefrontProfileIT {
         null,
         null,
         null,
-        new OrgService.SeoMetadata("Acme — Fair Prices", "Everyday essentials, delivered.", null));
+        new OrgService.SeoMetadata(
+            "Acme — Fair Prices", "Everyday essentials, delivered.", null, null));
     // Attach a share (og) image key directly (presigning is offline in this IT).
     String ogKey = id + "/og/share.png";
     dsl.update(ORG).set(ORG.OG_IMAGE_OBJECT_KEY, ogKey).where(ORG.ID.eq(id)).execute();
