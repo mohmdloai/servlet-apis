@@ -94,6 +94,7 @@ public final class OrgRepositoryImpl implements OrgRepository {
         dsl.update(ORG)
             .set(ORG.NAME, org.getName())
             .set(ORG.ACTIVE, org.isActive())
+            .set(ORG.DISCOVERABLE, org.isDiscoverable())
             .set(ORG.REFUND_APPROVAL_THRESHOLD, org.getRefundApprovalThreshold())
             .set(ORG.ORDER_TTL_MINUTES, org.getOrderTtlMinutes())
             .set(ORG.LEGAL_NAME, org.getLegalName())
@@ -197,6 +198,7 @@ public final class OrgRepositoryImpl implements OrgRepository {
             r.getUpdatedAt());
     // V43's columns, read back for the first time: the nullness of suspended_at is what tells a
     // pending tenant from a suspended one, and the reason an ADMIN typed was write-only until now.
+    org.setDiscoverable(r.getDiscoverable());
     org.setSuspendedAt(r.getSuspendedAt());
     org.setSuspendedReason(r.getSuspendedReason());
     org.setLegalName(r.getLegalName());

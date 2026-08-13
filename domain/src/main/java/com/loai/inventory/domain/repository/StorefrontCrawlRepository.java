@@ -52,10 +52,12 @@ public interface StorefrontCrawlRepository {
   record CrawlEntry(String key, OffsetDateTime updatedAt) {}
 
   /**
-   * Active orgs holding at least one PUBLISHED listing, {@code slug ASC}, paged. The published
-   * predicate is the {@code collections} rail's rule verbatim — an empty shelf is never advertised,
-   * and an empty store in a search index is the same lie with a worse audience. A set, not a queue,
-   * so a stable alphabetical order is what lets a diff of two fetches mean something.
+   * Active, <b>discoverable</b> orgs holding at least one PUBLISHED listing, {@code slug ASC},
+   * paged. The published predicate is the {@code collections} rail's rule verbatim — an empty shelf
+   * is never advertised, and an empty store in a search index is the same lie with a worse
+   * audience. {@code discoverable} (V83) is the merchant opt-out: a pre-launch or invite-only store
+   * can transact without being found. A set, not a queue, so a stable alphabetical order is what
+   * lets a diff of two fetches mean something.
    */
   List<StoreRef> findIndexableStores(int offset, int limit);
 

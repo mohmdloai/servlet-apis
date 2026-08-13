@@ -194,7 +194,7 @@ class OrgSeoMetadataIT {
   }
 
   private static OrgService.SeoMetadata seo(String title, String desc, String ogKey) {
-    return new OrgService.SeoMetadata(title, desc, ogKey);
+    return new OrgService.SeoMetadata(title, desc, ogKey, null);
   }
 
   private UUID insertOrg(String slug) {

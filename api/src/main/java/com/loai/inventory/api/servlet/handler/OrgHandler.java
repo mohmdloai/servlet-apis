@@ -112,7 +112,10 @@ public class OrgHandler {
             body.getDefaultLocale());
     OrgService.SeoMetadata seo =
         new OrgService.SeoMetadata(
-            body.getMetaTitle(), body.getMetaDescription(), body.getOgImageObjectKey());
+            body.getMetaTitle(),
+            body.getMetaDescription(),
+            body.getOgImageObjectKey(),
+            body.getDiscoverable());
     OrgService.StoreConfig storeConfig =
         new OrgService.StoreConfig(body.getTaxRate(), body.getShippingFee());
     Org updated =

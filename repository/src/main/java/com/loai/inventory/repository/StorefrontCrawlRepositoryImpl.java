@@ -41,7 +41,7 @@ public final class StorefrontCrawlRepositoryImpl implements StorefrontCrawlRepos
         .from(ORG)
         .join(PRODUCT_LISTING)
         .on(PRODUCT_LISTING.ORG_ID.eq(ORG.ID).and(PRODUCT_LISTING.STATUS.eq(PUBLISHED)))
-        .where(ORG.ACTIVE.isTrue())
+        .where(ORG.ACTIVE.isTrue().and(ORG.DISCOVERABLE.isTrue()))
         .groupBy(ORG.ID, ORG.SLUG)
         .orderBy(ORG.SLUG.asc())
         .limit(limit)
@@ -58,7 +58,7 @@ public final class StorefrontCrawlRepositoryImpl implements StorefrontCrawlRepos
             .from(ORG)
             .join(PRODUCT_LISTING)
             .on(PRODUCT_LISTING.ORG_ID.eq(ORG.ID).and(PRODUCT_LISTING.STATUS.eq(PUBLISHED)))
-            .where(ORG.ACTIVE.isTrue()));
+            .where(ORG.ACTIVE.isTrue().and(ORG.DISCOVERABLE.isTrue())));
   }
 
   @Override

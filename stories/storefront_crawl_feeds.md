@@ -19,10 +19,13 @@
 3. A product's own photo has a **stable, non-expiring URL** so it can be named in structured data
    and in a product link's share card (`GET /api/public/{orgSlug}/listings/{listingSlug}/image`).
 
-**No migration.** Every column these reads need already exists — `product_listing.updated_at` (V40),
-`category.updated_at` (V39), `collection.updated_at` (V71), `storefront_page.updated_at` (V56),
-`product_listing_image.object_key` (V40). Index work, if any, is measured on `perfdb` per V73's rule
-and captured in `tools/seed/results/` — never assumed.
+**One migration — V83** adds the merchant opt-out `org.discoverable BOOLEAN NOT NULL DEFAULT TRUE`
+(owner decision: pre-launch sellers need a window where a store can transact but not be found;
+B2B/invite-only sellers and franchise terms sometimes need it permanently). Everything else these
+reads need already exists — `product_listing.updated_at` (V40), `category.updated_at` (V39),
+`collection.updated_at` (V71), `storefront_page.updated_at` (V56),
+`product_listing_image.object_key` (V40). Index work, if any, is measured on `perfdb` per V73's
+rule and captured in `tools/seed/results/` — never assumed.
 
 ## Design
 
@@ -32,7 +35,8 @@ and captured in `tools/seed/results/` — never assumed.
 `slug ASC` — a set, not a queue, so the queue-vs-ledger convention has nothing to say here and a
 stable order is what lets a diff of two fetches mean something.
 
-**Membership rule:** `org.active = true` **AND** at least one PUBLISHED `product_listing`. That is
+**Membership rule:** `org.active = true` **AND** `org.discoverable = true` **AND** at least one
+PUBLISHED `product_listing`. The published half is
 the `GET /api/public/{orgSlug}/collections` rule verbatim — a collection holding no published
 listing is never advertised, because an empty shelf in a rail is a lie. An empty store in a search
 index is the same lie with a worse audience, and it spends the crawler's budget to reach a page that
@@ -120,7 +124,32 @@ product's own photo.
 v1 serves the primary image only. A `?i={n}` for secondary images is a trivial extension when
 structured data or a gallery unfurl wants it; it is not needed to ship either consumer.
 
-### 4 · Rate limiting — `rl:pub-sitemap`
+### 4 · The merchant opt-out — `org.discoverable` (V83)
+
+`active` answers "can this store transact?"; `discoverable` answers the different question "does
+this store want to be *found*?". **Opt-out, not opt-in** — an existing store's crawl presence must
+not vanish on migration day. OWNER-editable through the existing merge-PUT (`PUT /api/orgs/{orgId}`,
+`discoverable` joins the `SeoMetadata` group: `null` = leave unchanged, the C2 convention); ADMIN
+parity on `PATCH /api/admin/orgs/{orgId}`.
+
+**Three enforcement points, one column:**
+
+1. **The store index omits it** — the `AND` in both the row and count queries, so the envelope's
+   `total` and its rows cannot disagree.
+2. **Its crawl feed 404s** — opaquely, the same 404 as an unknown slug ("hidden" vs "absent" is
+   nobody's business) — so the frontend's per-store sitemap ceases to exist with no frontend code
+   aware of the reason.
+3. **The public profile carries `discoverable`** (a primitive — always on the wire, since absence
+   must never be readable as either answer), and the storefront app renders every page of a hidden
+   store `noindex` (frontend story 112). This third point is the one that matters most: the first
+   two only stop *advertising* the store, but a crawler can still **reach** it through any external
+   link, and only a page-level `noindex` stops that copy entering the index.
+
+What deliberately keeps working for a hidden store: the whole catalog surface, checkout, portal,
+og-image and the listing-image route — a pasted link and its chat unfurl are the direct-link flow,
+which is exactly what a pre-launch or invite-only seller still wants.
+
+### 5 · Rate limiting — `rl:pub-sitemap`
 
 Both crawl reads are anonymous `/api/public/` GETs and would inherit `rl:pub-read` (120/min per IP).
 Sitemap regeneration arrives from **one** IP — the storefront's Next container over the compose
@@ -139,17 +168,17 @@ guard in `OrgService`; `PublicStorefrontServlet` javadoc route table + `CLAUDE.m
 updated.
 
 ### Out
-Any migration. Widening `PublicListingResponse` (its whitelist is pinned by a structural test and
+Widening `PublicListingResponse` (its whitelist is pinned by a structural test and
 its javadoc states timestamps are deliberately omitted — a separate DTO keeps that guarantee rather
 than spending it on a crawler). Sitemap XML generation (that is the frontend's job — this slice
-ships JSON). A merchant opt-out column (epic D2: one nullable column, one toggle, one `AND` here,
-if it is ever wanted). `?i={n}` secondary images. `IndexNow` push.
+ships JSON). `?i={n}` secondary images. `IndexNow` push.
 
 ## Acceptance criteria
 
-1. `GET /api/public/storefronts` lists exactly the active orgs holding ≥ 1 PUBLISHED listing,
-   `slug ASC`, paged; a store with only DRAFT listings is **absent**; a suspended or pending org is
-   **absent**; each row's `catalog_updated_at` equals that org's newest published listing timestamp.
+1. `GET /api/public/storefronts` lists exactly the active, **discoverable** orgs holding ≥ 1
+   PUBLISHED listing, `slug ASC`, paged; a store with only DRAFT listings is **absent**; a
+   suspended or pending org is **absent**; a `discoverable=false` store is **absent**; each row's
+   `catalog_updated_at` equals that org's newest published listing timestamp.
 2. `GET /api/public/{orgSlug}/crawl-feed` returns only published/non-empty entities; `pages` names
    only kinds that exist; `has_featured` is `false` for a store with no featured listings;
    `truncated` is `false` below the cap and `true` (with an honest `total_listings`) above it.
@@ -158,7 +187,9 @@ if it is ever wanted). `?i={n}` secondary images. `IndexNow` push.
    both an opaque **404**; the response body is **never** a redirect and no presigned URL appears in
    any header.
 4. Unknown or inactive `orgSlug` → 404 on both `{orgSlug}` routes, identical to every other public
-   read. Non-GET on any of the three → 405.
+   read; a hidden store's `crawl-feed` is the **same opaque 404** while its profile and catalog
+   still serve — and the profile carries `discoverable: false`. Setting the flag through the
+   merge-PUT follows the null-leaves-unchanged convention. Non-GET on any of the three → 405.
 5. Creating or updating an org with slug `orders`, `unsubscribe`, or `storefronts` → 400 naming the
    reserved word.
 6. The crawl reads bucket on `rl:pub-sitemap`, not `rl:pub-read`; exceeding it → 429.

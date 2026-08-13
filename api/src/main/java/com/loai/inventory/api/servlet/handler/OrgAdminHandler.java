@@ -178,7 +178,10 @@ public class OrgAdminHandler implements AdminResourceHandler {
             body.getDefaultLocale());
     com.loai.inventory.service.OrgService.SeoMetadata seo =
         new com.loai.inventory.service.OrgService.SeoMetadata(
-            body.getMetaTitle(), body.getMetaDescription(), body.getOgImageObjectKey());
+            body.getMetaTitle(),
+            body.getMetaDescription(),
+            body.getOgImageObjectKey(),
+            body.getDiscoverable());
     Org updated =
         platformOrgService.updateOrg(
             ctx,

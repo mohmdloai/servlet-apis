@@ -242,7 +242,15 @@ public class StorefrontService {
        * <p>Not a leak: it says only <em>that</em> a channel exists, never the number, the WABA id
        * or anything sealed. A shopper learns the same fact the first time a message arrives.
        */
-      boolean whatsappEnabled) {}
+      boolean whatsappEnabled,
+      /**
+       * The V83 merchant opt-out from search discovery. {@code false} = the storefront app must
+       * render every page of this store {@code noindex} — the third enforcement point, and the one
+       * that stops an externally-linked hidden store from entering the index anyway (the store
+       * index omits it and its crawl feed 404s, but a crawler can still *reach* it by direct link).
+       * Always on the wire (a primitive): absence must never be readable as either answer.
+       */
+      boolean discoverable) {}
 
   /** v1 constants: both locales ship live; single-currency platform. */
   private static final List<String> SUPPORTED_LOCALES = List.of("ar", "en");
@@ -296,7 +304,8 @@ public class StorefrontService {
             .create(rootDsl)
             .findByOrgId(org.getId())
             .map(OrgWhatsAppConfig::isActive)
-            .orElse(false));
+            .orElse(false),
+        org.isDiscoverable());
   }
 
   /**
@@ -393,6 +402,13 @@ public class StorefrontService {
    */
   public CrawlFeed crawlFeed(String orgSlug) {
     Org org = resolveOrg(orgSlug);
+    // The V83 opt-out's second enforcement point: a hidden store's sitemap does not exist. The
+    // same opaque 404 as an unknown slug — "hidden" vs "absent" is nobody's business. The catalog
+    // reads, og-image and listing-image all still serve: the direct link (and its chat unfurl)
+    // keeps working; only the crawl surface goes dark.
+    if (!org.isDiscoverable()) {
+      throw new NotFoundException("Storefront not found: " + orgSlug);
+    }
     UUID orgId = org.getId();
     StorefrontCrawlRepository repo = crawlRepoFactory.create(rootDsl);
     long total = repo.countPublishedListings(orgId);

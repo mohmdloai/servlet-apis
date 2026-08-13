@@ -182,7 +182,14 @@ public class OrgService {
    * over the frontend's ~60/~160 display-truncation guidance — the server rule, not the display
    * guide. See {@code stories/storefront_seo_metadata.md} (C2).
    */
-  public record SeoMetadata(String metaTitle, String metaDescription, String ogImageObjectKey) {}
+  /**
+   * The Sharing & SEO surface (C2 + the V83 opt-out). {@code discoverable} is a {@code Boolean} on
+   * purpose — {@code null} = leave unchanged, the merge-PUT convention every other field here
+   * follows; {@code false} pulls the store out of the crawl surface (store index, sitemap, page
+   * indexing) while the direct link keeps working.
+   */
+  public record SeoMetadata(
+      String metaTitle, String metaDescription, String ogImageObjectKey, Boolean discoverable) {}
 
   /**
    * Server-side length caps for the SEO text fields (generous over frontend display truncation).
@@ -372,6 +379,7 @@ public class OrgService {
     if (s.metaDescription() != null)
       org.setMetaDescription(Text.normalizeText(s.metaDescription()));
     if (s.ogImageObjectKey() != null) org.setOgImageObjectKey(blankToNull(s.ogImageObjectKey()));
+    if (s.discoverable() != null) org.setDiscoverable(s.discoverable());
   }
 
   /**

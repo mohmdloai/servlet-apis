@@ -9,6 +9,18 @@ public class Org {
   private String name;
   private String slug;
   private boolean active;
+
+  /**
+   * Whether the store wants to be FOUND (V83) — a different question from {@code active}'s "can it
+   * transact?". Platforms always have a window where a merchant is live but not ready for organic
+   * traffic (still setting up branding/inventory/pricing), and some sellers (B2B/wholesale,
+   * franchise terms) never want organic search at all. {@code false} removes the store from the
+   * public store index, 404s its crawl feed, and noindexes its pages — the direct link keeps
+   * working. Default {@code true}: opt-out, so no existing store's crawl presence vanished on
+   * migration day.
+   */
+  private boolean discoverable = true;
+
   private BigDecimal refundApprovalThreshold;
   private int orderTtlMinutes;
   private OffsetDateTime createdAt;
@@ -109,6 +121,14 @@ public class Org {
 
   public void setActive(boolean active) {
     this.active = active;
+  }
+
+  public boolean isDiscoverable() {
+    return discoverable;
+  }
+
+  public void setDiscoverable(boolean discoverable) {
+    this.discoverable = discoverable;
   }
 
   public BigDecimal getRefundApprovalThreshold() {

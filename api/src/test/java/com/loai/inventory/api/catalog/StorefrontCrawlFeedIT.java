@@ -16,6 +16,7 @@ import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.storage.ObjectStorageFactory;
 import com.loai.inventory.domain.model.Category;
 import com.loai.inventory.domain.model.ListingStatus;
+import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
 import com.loai.inventory.domain.repository.ProductListingRepository;
@@ -247,6 +248,45 @@ class StorefrontCrawlFeedIT {
     assertThrows(NotFoundException.class, () -> service.crawlFeed(suspended.slug));
   }
 
+  // the V83 merchant opt-out
+
+  @Test
+  void hiddenStore_isAbsentFromTheIndex_andItsFeedIs404_butItsCatalogStillServes() {
+    Seed hidden = seedWithSlug("hidden-" + UUID.randomUUID(), true, false);
+    published(hidden, "kettle");
+    Seed visible = seed("visible", true);
+    published(visible, "teapot");
+
+    // Enforcement 1: the store index omits it — total counts the same set as the rows.
+    StorefrontService.StorefrontIndex index = service.indexableStores(0, 20);
+    assertEquals(List.of(visible.slug), index.data().stream().map(r -> r.slug()).toList());
+    assertEquals(1, index.total());
+
+    // Enforcement 2: its sitemap source 404s, opaquely — same as an unknown slug.
+    assertThrows(NotFoundException.class, () -> service.crawlFeed(hidden.slug));
+
+    // The direct link keeps working: profile serves and carries the flag the storefront app
+    // noindexes on (enforcement 3), and the catalog read is untouched.
+    assertFalse(service.profile(hidden.slug).discoverable());
+    assertTrue(service.profile(visible.slug).discoverable());
+    assertEquals(1, service.listPublished(hidden.slug, null, 0, 20).total());
+  }
+
+  @Test
+  void discoverable_mergePutSemantics_nullLeavesUnchanged() {
+    Seed s = seedWithSlug("shop-" + UUID.randomUUID(), true);
+    Org org = orgById(s.orgId);
+    assertTrue(org.isDiscoverable(), "born discoverable — opt-OUT, not opt-in");
+
+    // false applies; null leaves it alone; true restores.
+    OrgService.applySeoMetadata(org, new OrgService.SeoMetadata(null, null, null, false));
+    assertFalse(org.isDiscoverable());
+    OrgService.applySeoMetadata(org, new OrgService.SeoMetadata("New title", null, null, null));
+    assertFalse(org.isDiscoverable(), "null = leave unchanged, the merge-PUT convention");
+    OrgService.applySeoMetadata(org, new OrgService.SeoMetadata(null, null, null, true));
+    assertTrue(org.isDiscoverable());
+  }
+
   // the stable listing image
 
   @Test
@@ -311,12 +351,17 @@ class StorefrontCrawlFeedIT {
   }
 
   private Seed seedWithSlug(String slug, boolean active) {
+    return seedWithSlug(slug, active, true);
+  }
+
+  private Seed seedWithSlug(String slug, boolean active, boolean discoverable) {
     UUID orgId = UUID.randomUUID();
     dsl.insertInto(ORG)
         .set(ORG.ID, orgId)
         .set(ORG.NAME, slug)
         .set(ORG.SLUG, slug)
         .set(ORG.ACTIVE, active)
+        .set(ORG.DISCOVERABLE, discoverable)
         .execute();
     return new Seed(orgId, slug, product(orgId, "P1"), product(orgId, "P2"));
   }
@@ -396,6 +441,10 @@ class StorefrontCrawlFeedIT {
 
   private static List<String> keys(List<StorefrontCrawlRepository.CrawlEntry> entries) {
     return entries.stream().map(StorefrontCrawlRepository.CrawlEntry::key).toList();
+  }
+
+  private Org orgById(UUID id) {
+    return new OrgRepositoryFactoryImpl().create(dsl).findById(id).orElseThrow();
   }
 
   private ProductListingRepository listingRepo() {
