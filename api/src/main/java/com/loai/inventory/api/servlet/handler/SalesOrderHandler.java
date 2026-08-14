@@ -49,6 +49,8 @@ import org.slf4j.LoggerFactory;
  *       for the manual money path ({@code stories/lookup_order_by_number.md}). VIEWER. A bare
  *       {@code GET} without the param returns the order worklist page ({@code
  *       ?status=&page=&size=}).
+ *   <li>{@code GET /status-counts} — the worklist tabs' numbers: all eight statuses' live counts
+ *       (zeros included) + the ledger total ({@code stories/order_status_counts.md}). VIEWER.
  *   <li>{@code GET /{id}} — one order + its lines by stable id ({@code
  *       stories/fulfillment_reads.md}). VIEWER.
  *   <li>{@code GET /{id}/payments} — the order's money story: every payment FIFO with its refunds
@@ -104,6 +106,16 @@ public class SalesOrderHandler implements OrgResourceHandler {
       throws IOException {
     try {
       String[] parts = splitPath(remainingPath);
+      // Fixed segment BEFORE the {id} UUID parse (the portal unread-count precedent) and before
+      // the method split, so a non-GET here is a clean 405, not the POST fallthrough's 400.
+      if (parts.length == 1 && "status-counts".equals(parts[0])) {
+        if (!"GET".equals(method)) {
+          writeError(resp, 405, "Method not allowed");
+          return;
+        }
+        doStatusCounts(req, resp, orgId);
+        return;
+      }
       if ("GET".equals(method) && parts.length == 0) {
         doGetOrList(req, resp, orgId);
         return;
@@ -215,6 +227,18 @@ public class SalesOrderHandler implements OrgResourceHandler {
             orgId, orderId, reason, refundMethod, sc.actorId(), isOwnerOrAdmin(sc, orgId));
 
     writeJson(resp, 200, SalesOrderMapper.toCancelResponse(result));
+  }
+
+  /**
+   * {@code GET /sales-orders/status-counts} — the worklist tabs' numbers ({@code
+   * stories/order_status_counts.md}): every status's live count, all eight always present ({@code
+   * 0} included), plus {@code total} = the unfiltered ledger count. VIEWER — a projection of the
+   * worklist the caller can already page, no figure more sensitive than the list itself.
+   */
+  private void doStatusCounts(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(resp, 200, SalesOrderMapper.toStatusCountsResponse(service.statusCounts(orgId)));
   }
 
   /**
