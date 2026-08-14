@@ -275,8 +275,13 @@ public class UserAdminHandler implements AdminResourceHandler {
     switch (method) {
       case "GET" -> {
         AuthzHelper.requireAdmin(req);
+        // `current` is structurally unresolvable here: the refresh cookie is Path=/api/auth and
+        // never rides an /api/admin request — and this list is usually another user's devices
+        // anyway. All-false is the honest state (the DTO's no-guess contract).
         List<SessionResponse> data =
-            authService.listSessions(userId).stream().map(SessionResponse::from).toList();
+            authService.listSessions(userId).stream()
+                .map(s -> SessionResponse.from(s, false))
+                .toList();
         writeJson(resp, 200, data);
       }
       case "DELETE" -> {

@@ -27,6 +27,7 @@ import com.loai.inventory.api.dto.PublicReviewResponse;
 import com.loai.inventory.api.dto.PublicStorefrontRefResponse;
 import com.loai.inventory.api.dto.StorefrontProfileResponse;
 import com.loai.inventory.api.dto.ValidateCouponRequest;
+import com.loai.inventory.api.util.ClientIp;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -528,7 +529,7 @@ public class PublicStorefrontServlet extends HttpServlet {
                 body.getEmail(),
                 body.getCode(),
                 req.getHeader("User-Agent"),
-                req.getRemoteAddr());
+                ClientIp.resolve(req));
         CustomerAuthCookies.writeAccess(
             resp, result.accessToken(), (int) result.expiresIn(), secureCookies);
         CustomerAuthCookies.writeRefresh(

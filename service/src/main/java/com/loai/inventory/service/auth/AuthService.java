@@ -347,6 +347,21 @@ public class AuthService {
     return refreshTokenStore.listSessions(userId);
   }
 
+  /**
+   * The family of a presented, still-active refresh token — the "this device" resolver behind the
+   * session list's {@code current} flag. Empty on a null/blank/unknown/rotated token: no marker
+   * beats a wrong marker on a surface whose buttons end sessions, so the caller renders nothing
+   * rather than guessing.
+   */
+  public java.util.Optional<UUID> sessionFamilyOf(String rawRefreshToken) {
+    if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
+      return java.util.Optional.empty();
+    }
+    return refreshTokenStore
+        .find(RefreshTokenStore.hashToken(rawRefreshToken))
+        .map(RefreshTokenStore.TokenData::familyId);
+  }
+
   /** O(1) count of a user's active session families — for callers that need only the number. */
   public long countSessions(UUID userId) {
     return refreshTokenStore.countSessions(userId);

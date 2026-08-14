@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.AppBootstrap;
 import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
+import com.loai.inventory.api.util.ClientIp;
 import com.loai.inventory.common.security.JwtUtil;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.Environment;
@@ -149,7 +150,7 @@ public class JwtAuthFilter implements Filter {
               impersonationScopeOrg,
               impersonationReadOnly);
       Environment env =
-          new Environment(Instant.now(), req.getRemoteAddr(), req.getHeader("User-Agent"));
+          new Environment(Instant.now(), ClientIp.resolve(req), req.getHeader("User-Agent"));
 
       req.setAttribute(SECURITY_CONTEXT_ATTR, secCtx);
       req.setAttribute(ENVIRONMENT_ATTR, env);

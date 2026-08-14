@@ -105,6 +105,25 @@ class AuthDeviceRevocationIT {
     assertThrows(NotFoundException.class, () -> authService.revokeSession(user, UUID.randomUUID()));
   }
 
+  /**
+   * The session list's "this device" resolver (stories/session_source_ip.md): the presented refresh
+   * token resolves to exactly its own family, and anything unresolvable — absent, never-issued,
+   * rotated away — resolves to nothing, so every row renders {@code current:false} rather than a
+   * guess ("newest is probably yours" is the wrong standard here).
+   */
+  @Test
+  void sessionFamilyOf_resolvesOwnFamily_andRefusesToGuess() {
+    UUID user = UUID.randomUUID();
+    String mine = UUID.randomUUID().toString();
+    UUID myFamily = seedFamily(user, mine);
+    seedFamily(user, UUID.randomUUID().toString());
+
+    assertTrue(authService.sessionFamilyOf(mine).map(myFamily::equals).orElse(false));
+    assertTrue(authService.sessionFamilyOf("never-issued").isEmpty());
+    assertTrue(authService.sessionFamilyOf(null).isEmpty());
+    assertTrue(authService.sessionFamilyOf("  ").isEmpty());
+  }
+
   // D2: reuse of a rotated-away refresh token burns the family
 
   /**

@@ -30,6 +30,7 @@ import com.loai.inventory.api.dto.PublicCheckoutError;
 import com.loai.inventory.api.dto.PublicListingResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
 import com.loai.inventory.api.filter.CustomerAuthFilter;
+import com.loai.inventory.api.util.ClientIp;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.AuthenticationException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -321,7 +322,8 @@ public class PortalServlet extends HttpServlet {
     if (rawRefresh == null) {
       throw new AuthenticationException("Missing refresh token");
     }
-    CustomerAuthService.SessionResult result = authService.refresh(rawRefresh, req.getRemoteAddr());
+    CustomerAuthService.SessionResult result =
+        authService.refresh(rawRefresh, ClientIp.resolve(req));
     writeCookies(resp, result);
     writeJson(resp, 200, Map.of("expires_in", result.expiresIn()));
   }
@@ -365,9 +367,12 @@ public class PortalServlet extends HttpServlet {
 
   private void handleSessions(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     CustomerPrincipal principal = requirePrincipal(req);
+    // customer_refresh is Path=/api/portal/auth, so it rides this request; its family is "this
+    // device". Unresolvable → all rows current:false, never a guess (SessionResponse's contract).
+    UUID currentFamily = authService.sessionFamilyOf(extractRefreshCookie(req)).orElse(null);
     List<PortalSessionResponse> items =
         authService.listSessions(principal.orgId(), principal.customerId()).stream()
-            .map(PortalSessionResponse::from)
+            .map(s -> PortalSessionResponse.from(s, s.familyId().equals(currentFamily)))
             .toList();
     writeJson(resp, 200, items);
   }

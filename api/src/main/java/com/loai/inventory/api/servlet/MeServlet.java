@@ -7,6 +7,7 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.ChangePasswordRequest;
 import com.loai.inventory.api.dto.MeResponse;
+import com.loai.inventory.api.util.ClientIp;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.AuthenticationException;
 import com.loai.inventory.common.exception.AuthorizationException;
@@ -103,7 +104,7 @@ public class MeServlet extends HttpServlet {
     ChangePasswordRequest body =
         mapper.readValue(req.getInputStream(), ChangePasswordRequest.class);
     String deviceInfo = req.getHeader("User-Agent");
-    String sourceIp = req.getRemoteAddr();
+    String sourceIp = ClientIp.resolve(req);
 
     AuthService.LoginResult result =
         authService.changePassword(
