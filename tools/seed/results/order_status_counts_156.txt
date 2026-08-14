@@ -1,0 +1,54 @@
+# Story order_status_counts.md (branch 156_feat/order-status-counts) — the grouped tab-counts read.
+# Captured 2026-08-15 against perfdb, READ-ONLY (Flyway is never pointed here).
+# NO MIGRATION in this slice; this file is the whole measurement record.
+#
+# FINDING: V66's sales_order_org_status_idx (org_id, status, created_at, id) serves the read
+# BY PLAN at every touch — Index Only Scan, Heap Fetches: 0, on both a warmed and a first-touch
+# org. Cold-first ~4.6–5.0 ms (57 buffers read), warm ~1.3 ms (57 shared hits). Orders are
+# UNIFORM across tenants on perfdb (200 orgs x exactly 5000), so "the largest org" has no
+# referent; the two orgs probed below are interchangeable and the second is the cold rerun.
+# VERDICT: no new index. The planner never considered anything else worth beating.
+#
+# The query is the jOOQ output of SalesOrderRepositoryImpl.countByStatus verbatim
+# (same predicate family as count(orgId, null), partitioned by status).
+
+ orders  | orgs 
+---------+------
+ 1000002 |  201
+(1 row)
+
+ orders_in_probed_org 
+----------------------
+                 5000
+(1 row)
+
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=0.42..328.77 rows=7 width=12) (actual time=0.146..1.053 rows=7 loops=1)
+   Group Key: status
+   Buffers: shared hit=57
+   ->  Index Only Scan using sales_order_org_status_idx on sales_order  (cost=0.42..303.75 rows=4990 width=4) (actual time=0.025..0.683 rows=5000 loops=1)
+         Index Cond: (org_id = '06a241af-1d0a-47f7-b5e4-a4713fe68c9c'::uuid)
+         Heap Fetches: 0
+         Buffers: shared hit=57
+ Planning:
+   Buffers: shared hit=16
+ Planning Time: 0.121 ms
+ Execution Time: 1.090 ms
+(11 rows)
+
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=0.42..328.77 rows=7 width=12) (actual time=0.103..0.893 rows=7 loops=1)
+   Group Key: status
+   Buffers: shared hit=57
+   ->  Index Only Scan using sales_order_org_status_idx on sales_order  (cost=0.42..303.75 rows=4990 width=4) (actual time=0.010..0.506 rows=5000 loops=1)
+         Index Cond: (org_id = '059dd55d-4b94-4e30-b303-f438fe2110d0'::uuid)
+         Heap Fetches: 0
+         Buffers: shared hit=57
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.030 ms
+ Execution Time: 0.903 ms
+(11 rows)
+

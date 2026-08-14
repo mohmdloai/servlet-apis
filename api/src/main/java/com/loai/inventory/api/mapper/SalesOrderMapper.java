@@ -2,6 +2,7 @@ package com.loai.inventory.api.mapper;
 
 import com.loai.inventory.api.dto.CancelOrderResponse;
 import com.loai.inventory.api.dto.InStoreSaleResponse;
+import com.loai.inventory.api.dto.OrderStatusCountsResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.dto.SalesOrderResponse;
 import com.loai.inventory.common.exception.ValidationException;
@@ -13,6 +14,7 @@ import com.loai.inventory.service.OrderCancellationService.CancelResult;
 import com.loai.inventory.service.SalesOrderService.CustomerInput;
 import com.loai.inventory.service.SalesOrderService.InStoreSale;
 import com.loai.inventory.service.SalesOrderService.OrderLineInput;
+import com.loai.inventory.service.SalesOrderService.OrderStatusCounts;
 import com.loai.inventory.service.SalesOrderService.PaymentInput;
 import com.loai.inventory.service.SalesOrderService.Placed;
 import java.util.List;
@@ -53,6 +55,10 @@ public final class SalesOrderMapper {
 
   public static SalesOrderResponse toResponse(Placed placed) {
     return SalesOrderResponse.from(placed.order(), placed.lines());
+  }
+
+  public static OrderStatusCountsResponse toStatusCountsResponse(OrderStatusCounts counts) {
+    return new OrderStatusCountsResponse(counts.counts(), counts.total());
   }
 
   /**

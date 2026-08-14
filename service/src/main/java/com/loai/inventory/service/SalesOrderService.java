@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -782,6 +783,27 @@ public class SalesOrderService {
             .map(o -> new Placed(o, linesByOrder.getOrDefault(o.getId(), List.of()), null))
             .toList();
     return new OrderListPage(items, total);
+  }
+
+  /**
+   * The worklist tabs' numbers ({@code GET /sales-orders/status-counts}, {@code
+   * stories/order_status_counts.md}): every {@link OrderStatus} present — {@code 0} included, never
+   * omitted ("nobody here" is data, the funnel's {@code reached: 0} rule) — plus {@code total}, the
+   * unfiltered ledger count (== Σ counts by construction: the same rows partitioned by status).
+   * Read-only on {@code rootDsl}.
+   */
+  public record OrderStatusCounts(Map<OrderStatus, Long> counts, long total) {}
+
+  public OrderStatusCounts statusCounts(UUID orgId) {
+    Map<OrderStatus, Long> raw = repoFactory.create(rootDsl).countByStatus(orgId);
+    Map<OrderStatus, Long> counts = new EnumMap<>(OrderStatus.class);
+    long total = 0;
+    for (OrderStatus status : OrderStatus.values()) {
+      long n = raw.getOrDefault(status, 0L);
+      counts.put(status, n);
+      total += n;
+    }
+    return new OrderStatusCounts(counts, total);
   }
 
   // Shared build

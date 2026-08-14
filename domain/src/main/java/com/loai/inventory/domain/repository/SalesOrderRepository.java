@@ -88,6 +88,14 @@ public interface SalesOrderRepository {
   long count(UUID orgId, OrderStatus status);
 
   /**
+   * Live count of the org's orders per status in one grouped scan ({@code
+   * stories/order_status_counts.md}) — the same org predicate as {@link #count}, so a tab chip
+   * equals that status filter's {@code total} by construction. Statuses with no rows are absent
+   * from the map; the service fills zeros (the wire always carries all eight).
+   */
+  Map<OrderStatus, Long> countByStatus(UUID orgId);
+
+  /**
    * One page of a single customer's orders for the portal "my orders" read ({@code
    * stories/portal_order_reads.md}) — {@code WHERE org_id=? AND customer_id=?}, newest first
    * ({@code placed_at DESC, id DESC}). Strictly {@code (orgId, customerId)}-scoped; never keyed off

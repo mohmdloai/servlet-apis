@@ -170,6 +170,17 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   }
 
   @Override
+  public Map<OrderStatus, Long> countByStatus(UUID orgId) {
+    // The same org predicate as count(orgId, null), partitioned by status — a chip and its tab's
+    // total are the same rows by construction (stories/order_status_counts.md).
+    return dsl.select(SALES_ORDER.STATUS, DSL.count())
+        .from(SALES_ORDER)
+        .where(listConditions(orgId, null))
+        .groupBy(SALES_ORDER.STATUS)
+        .fetchMap(r -> OrderStatus.valueOf(r.value1().name()), r -> r.value2().longValue());
+  }
+
+  @Override
   public List<SalesOrder> findByCustomerId(UUID orgId, UUID customerId, int offset, int limit) {
     return dsl.selectFrom(SALES_ORDER)
         .where(SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.CUSTOMER_ID.eq(customerId)))
