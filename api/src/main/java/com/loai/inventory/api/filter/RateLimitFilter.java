@@ -285,16 +285,9 @@ public class RateLimitFilter implements Filter {
    * the proxy recorded), falling back to {@code getRemoteAddr()} when the header is absent/blank.
    */
   String resolveClientIp(HttpServletRequest req) {
-    if (trustProxy) {
-      String xff = req.getHeader("X-Forwarded-For");
-      if (xff != null && !xff.isBlank()) {
-        String first = xff.split(",", 2)[0].trim();
-        if (!first.isEmpty()) {
-          return first;
-        }
-      }
-    }
-    return req.getRemoteAddr();
+    // Single-sourced with every session/audit recording site (story: session_source_ip) — the
+    // filter keeps its constructor-injected flag so the fixture tests stay env-free.
+    return com.loai.inventory.api.util.ClientIp.resolve(req, trustProxy);
   }
 
   private static int envIntOrDefault(String name, int defaultValue) {

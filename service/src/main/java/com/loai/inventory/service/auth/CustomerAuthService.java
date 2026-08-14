@@ -298,6 +298,16 @@ public class CustomerAuthService {
     return sessionStore.listSessions(orgId, customerId);
   }
 
+  /** The staff plane's {@link AuthService#sessionFamilyOf} mirrored — same no-guess contract. */
+  public java.util.Optional<UUID> sessionFamilyOf(String rawRefreshToken) {
+    if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
+      return java.util.Optional.empty();
+    }
+    return sessionStore
+        .find(CustomerSessionStore.hashRefresh(rawRefreshToken))
+        .map(CustomerSessionStore.TokenData::familyId);
+  }
+
   /**
    * Sign one device out — the staff plane's {@code AuthService#revokeSession} scoped to a customer.
    * {@code revokeFamily} is the ownership check: it returns false unless the family is a member of

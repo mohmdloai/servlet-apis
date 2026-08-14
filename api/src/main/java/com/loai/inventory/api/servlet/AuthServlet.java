@@ -14,6 +14,7 @@ import com.loai.inventory.api.dto.SessionResponse;
 import com.loai.inventory.api.dto.TokenPasswordRequest;
 import com.loai.inventory.api.dto.VerifyEmailRequest;
 import com.loai.inventory.api.filter.JwtAuthFilter;
+import com.loai.inventory.api.util.ClientIp;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Environment;
@@ -134,7 +135,7 @@ public class AuthServlet extends HttpServlet {
     }
 
     String deviceInfo = req.getHeader("User-Agent");
-    String sourceIp = req.getRemoteAddr();
+    String sourceIp = ClientIp.resolve(req);
 
     AuthService.LoginResult result =
         authService.login(body.getEmail(), body.getPassword(), deviceInfo, sourceIp);
@@ -173,7 +174,7 @@ public class AuthServlet extends HttpServlet {
             body.getToken(),
             OffsetDateTime.now(),
             req.getHeader("User-Agent"),
-            req.getRemoteAddr());
+            ClientIp.resolve(req));
     writeSession(resp, result, 200);
   }
 
@@ -213,7 +214,7 @@ public class AuthServlet extends HttpServlet {
             body.getNewPassword(),
             OffsetDateTime.now(),
             req.getHeader("User-Agent"),
-            req.getRemoteAddr());
+            ClientIp.resolve(req));
     writeSession(resp, result, 200);
   }
 
@@ -228,7 +229,7 @@ public class AuthServlet extends HttpServlet {
             body.getNewPassword(),
             OffsetDateTime.now(),
             req.getHeader("User-Agent"),
-            req.getRemoteAddr());
+            ClientIp.resolve(req));
     writeSession(resp, result, 200);
   }
 
@@ -251,7 +252,7 @@ public class AuthServlet extends HttpServlet {
       throw new ValidationException("Refresh token is required");
     }
 
-    String sourceIp = req.getRemoteAddr();
+    String sourceIp = ClientIp.resolve(req);
     AuthService.LoginResult result = authService.refresh(rawRefreshToken, sourceIp);
 
     AuthCookies.writeAccess(resp, result.accessToken(), (int) result.expiresIn(), secureCookies);
@@ -301,8 +302,14 @@ public class AuthServlet extends HttpServlet {
   private void handleListSessions(HttpServletRequest req, HttpServletResponse resp)
       throws IOException {
     SecurityContext secCtx = requireAuth(req);
+    // The refresh cookie (Path=/api/auth) rides this request; its family IS "this device". An
+    // absent/rotated cookie resolves to nothing and every row stays current:false — honest.
+    UUID currentFamily = authService.sessionFamilyOf(extractRefreshToken(req)).orElse(null);
     List<RefreshTokenStore.SessionInfo> sessions = authService.listSessions(secCtx.actorId());
-    List<SessionResponse> items = sessions.stream().map(SessionResponse::from).toList();
+    List<SessionResponse> items =
+        sessions.stream()
+            .map(s -> SessionResponse.from(s, s.familyId().equals(currentFamily)))
+            .toList();
     writeJson(resp, 200, items);
   }
 
