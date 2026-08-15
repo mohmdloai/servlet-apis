@@ -100,6 +100,9 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
             com.loai.inventory.repository.generated.enums.OrderStatus.valueOf(
                 order.getStatus().name()))
         .set(SALES_ORDER.PREPAID_AMOUNT, order.getPrepaidAmount())
+        // markPaid nulls the payment-hold deadline (stories/clear_expiry_on_paid.md); UNDERPAID
+        // and the PAID→FULFILLING flip round-trip the loaded value unchanged.
+        .set(SALES_ORDER.EXPIRES_AT, order.getExpiresAt())
         .set(SALES_ORDER.UPDATED_AT, order.getUpdatedAt())
         .where(SALES_ORDER.ID.eq(order.getId()).and(SALES_ORDER.ORG_ID.eq(order.getOrgId())))
         .execute();

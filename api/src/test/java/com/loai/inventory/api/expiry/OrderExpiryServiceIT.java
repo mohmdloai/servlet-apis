@@ -183,6 +183,11 @@ class OrderExpiryServiceIT extends ExpiryIntegrationTestBase {
             }
 
             @Override
+            public int clearExpiryForOrder(UUID salesOrderId) {
+              return real.clearExpiryForOrder(salesOrderId);
+            }
+
+            @Override
             public List<com.loai.inventory.domain.model.InventoryReservation> findByOrderId(
                 UUID orgId, UUID orderId) {
               return real.findByOrderId(orgId, orderId);

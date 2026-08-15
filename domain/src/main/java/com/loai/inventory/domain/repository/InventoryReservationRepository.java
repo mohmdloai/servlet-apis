@@ -38,6 +38,15 @@ public interface InventoryReservationRepository {
   int markReleased(UUID orgId, Collection<UUID> ids, String reason, OffsetDateTime now);
 
   /**
+   * Null the {@code expires_at} display mirror on {@code orderId}'s ACTIVE reservations ({@code
+   * stories/clear_expiry_on_paid.md}) — called on the PENDING_PAYMENT → PAID flip, in the same
+   * transaction, because a paid order has no payment-hold window and V19's "mirrors
+   * SalesOrder.expires_at while ACTIVE" contract is only as good as this write site. Moves no
+   * stock, flips no status. Returns the number of rows cleared.
+   */
+  int clearExpiryForOrder(UUID salesOrderId);
+
+  /**
    * Bulk-flip the given reservations to {@code CONSUMED}, stamping {@code consumed_at=now}. Filters
    * on {@code status='ACTIVE'} so a concurrently-released row is never consumed. Returns the number
    * of rows actually updated — the caller checks it equals the expected count.

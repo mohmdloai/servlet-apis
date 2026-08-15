@@ -18,6 +18,7 @@ import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.PaymentVerificationStatus;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListFilter;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
+import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
@@ -114,6 +115,7 @@ class PaymentTransactionReadIT {
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
+            new InventoryReservationRepositoryFactoryImpl(),
             com.loai.inventory.api.support.TestWiring.notificationService(dsl),
             com.loai.inventory.api.support.TestWiring.magicLinkService(dsl),
             new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
