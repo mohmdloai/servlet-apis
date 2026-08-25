@@ -15,7 +15,21 @@ public class UpdateCategoryRequest {
    */
   private List<CategoryTranslationDto> translations;
 
+  /**
+   * Org-scoped image key from {@code POST /categories/presign} ({@code stories/category_image.md}).
+   * Create: absent/blank = no image. Update: absent = unchanged, blank = clear, value = replace.
+   */
+  private String imageObjectKey;
+
   public UpdateCategoryRequest() {}
+
+  public String getImageObjectKey() {
+    return imageObjectKey;
+  }
+
+  public void setImageObjectKey(String imageObjectKey) {
+    this.imageObjectKey = imageObjectKey;
+  }
 
   public List<CategoryTranslationDto> getTranslations() {
     return translations;

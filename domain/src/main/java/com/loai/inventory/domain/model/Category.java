@@ -10,6 +10,13 @@ public class Category {
   private UUID parentCategoryId;
   private String name;
   private String slug;
+
+  /**
+   * Object-storage key of the merchant's category image ({@code {orgId}/category/…}); null = no
+   * image, the storefront falls back to its neutral circle. Never a URL — the reads presign it.
+   */
+  private String imageObjectKey;
+
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -70,6 +77,14 @@ public class Category {
 
   public void setSlug(String slug) {
     this.slug = slug;
+  }
+
+  public String getImageObjectKey() {
+    return imageObjectKey;
+  }
+
+  public void setImageObjectKey(String imageObjectKey) {
+    this.imageObjectKey = imageObjectKey;
   }
 
   public OffsetDateTime getCreatedAt() {

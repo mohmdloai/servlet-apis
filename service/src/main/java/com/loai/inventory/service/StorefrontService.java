@@ -178,8 +178,12 @@ public class StorefrontService {
       java.math.BigDecimal price,
       boolean inStock) {}
 
-  /** A node in the public category nav; {@code parentSlug} is null at the root. */
-  public record CategoryNav(String name, String slug, String parentSlug) {}
+  /**
+   * A node in the public category nav; {@code parentSlug} is null at the root. {@code imageUrl} is
+   * a presigned GET for the merchant's category image, null when none ({@code
+   * stories/category_image.md}).
+   */
+  public record CategoryNav(String name, String slug, String parentSlug, String imageUrl) {}
 
   /**
    * A page of public listings. {@code facets} is <b>null</b> unless the caller asked for it
@@ -1524,7 +1528,10 @@ public class StorefrontService {
                 new CategoryNav(
                     resolveCategoryName(translations.get(c.getId()), resolvedLocale, defaultLocale),
                     c.getSlug(),
-                    c.getParentCategoryId() == null ? null : slugById.get(c.getParentCategoryId())))
+                    c.getParentCategoryId() == null ? null : slugById.get(c.getParentCategoryId()),
+                    c.getImageObjectKey() == null
+                        ? null
+                        : storage.presignGet(c.getImageObjectKey())))
         .toList();
   }
 

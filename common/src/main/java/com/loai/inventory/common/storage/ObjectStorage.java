@@ -70,6 +70,15 @@ public final class ObjectStorage implements AutoCloseable {
     return orgId + "/banner/";
   }
 
+  /** Category image keys ({@code stories/category_image.md}) — org-scoped like every image key. */
+  public String newCategoryKey(UUID orgId, String filename) {
+    return orgId + "/category/" + UUID.randomUUID() + "-" + sanitize(filename);
+  }
+
+  public static String categoryKeyPrefix(UUID orgId) {
+    return orgId + "/category/";
+  }
+
   /**
    * A tenant-scoped storefront og-image object key: {@code {orgId}/og/{uuid}-{name}} (customization
    * epic §4, slice C2). The prefix lets the org-update path verify on attach that the key really
