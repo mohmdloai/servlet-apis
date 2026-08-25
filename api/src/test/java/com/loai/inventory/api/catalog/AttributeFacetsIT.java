@@ -145,7 +145,10 @@ class AttributeFacetsIT {
             new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));
     categories =
         new CategoryService(
-            dsl, new CategoryRepositoryFactoryImpl(), new OrgRepositoryFactoryImpl());
+            dsl,
+            new CategoryRepositoryFactoryImpl(),
+            new OrgRepositoryFactoryImpl(),
+            com.loai.inventory.api.support.TestWiring.storage());
     inventory =
         new InventoryService(
             dsl,

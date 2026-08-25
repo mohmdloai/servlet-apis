@@ -89,17 +89,17 @@ class CategoryHandlerAuthTest {
             ORG,
             "");
     assertEquals(403, resp.status);
-    verify(service, never()).create(any(), any(), any(), any(TranslatedNameInput.class));
+    verify(service, never()).create(any(), any(), any(), any(TranslatedNameInput.class), any());
   }
 
   @Test
   void create_allowedForStaff() throws IOException {
     CategoryService service = Mockito.mock(CategoryService.class);
-    when(service.create(any(), any(), any(), any(TranslatedNameInput.class)))
+    when(service.create(any(), any(), any(), any(TranslatedNameInput.class), any()))
         .thenReturn(aCategory());
     // The handler re-reads for the full-language embed (slice L3).
     when(service.getById(any(), any()))
-        .thenReturn(new CategoryService.CategoryView(aCategory(), List.of()));
+        .thenReturn(new CategoryService.CategoryView(aCategory(), List.of(), null));
     Resp resp = new Resp();
     handler(service)
         .handle(
@@ -109,7 +109,7 @@ class CategoryHandlerAuthTest {
             ORG,
             "");
     assertEquals(201, resp.status);
-    verify(service).create(any(), any(), any(), any(TranslatedNameInput.class));
+    verify(service).create(any(), any(), any(), any(TranslatedNameInput.class), any());
   }
 
   @Test

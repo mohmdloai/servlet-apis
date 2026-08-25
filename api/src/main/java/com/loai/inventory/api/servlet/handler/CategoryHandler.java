@@ -6,7 +6,9 @@ import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.CategoryResponse;
 import com.loai.inventory.api.dto.CategoryTranslationDto;
 import com.loai.inventory.api.dto.CreateCategoryRequest;
+import com.loai.inventory.api.dto.ImagePresignResponse;
 import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.dto.PresignImageUploadRequest;
 import com.loai.inventory.api.dto.UpdateCategoryRequest;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
@@ -25,7 +27,11 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Routes under {@code /api/orgs/{orgId}/categories}. VIEWER read, STAFF write, MANAGER delete. */
+/**
+ * Routes under {@code /api/orgs/{orgId}/categories}. VIEWER read, STAFF write, MANAGER delete.
+ * {@code POST /presign} (STAFF) hands out a category-image upload slot ({@code
+ * stories/category_image.md}).
+ */
 public class CategoryHandler implements OrgResourceHandler {
 
   private static final Logger log = LoggerFactory.getLogger(CategoryHandler.class);
@@ -47,6 +53,11 @@ public class CategoryHandler implements OrgResourceHandler {
       String remainingPath)
       throws IOException {
     try {
+      if (isPresignRoute(remainingPath)) {
+        if ("POST".equals(method)) doPresign(req, resp, orgId);
+        else writeError(resp, 405, "Method not allowed");
+        return;
+      }
       UUID categoryId = parseId(remainingPath);
       switch (method) {
         case "GET" -> doGet(req, resp, orgId, categoryId);
@@ -89,7 +100,8 @@ public class CategoryHandler implements OrgResourceHandler {
     TranslatedNameInput content =
         new TranslatedNameInput(toDomainTranslations(body.getTranslations()), body.getName());
     Category created =
-        categoryService.create(orgId, body.getSlug(), body.getParentCategoryId(), content);
+        categoryService.create(
+            orgId, body.getSlug(), body.getParentCategoryId(), content, body.getImageObjectKey());
     // Re-read for the full embed (all languages), mirroring the listing handler.
     writeJson(resp, 201, CategoryResponse.from(categoryService.getById(orgId, created.getId())));
   }
@@ -103,7 +115,13 @@ public class CategoryHandler implements OrgResourceHandler {
     UpdateCategoryRequest body = readBody(req, UpdateCategoryRequest.class);
     TranslatedNameInput content =
         new TranslatedNameInput(toDomainTranslations(body.getTranslations()), body.getName());
-    categoryService.update(orgId, categoryId, body.getSlug(), body.getParentCategoryId(), content);
+    categoryService.update(
+        orgId,
+        categoryId,
+        body.getSlug(),
+        body.getParentCategoryId(),
+        content,
+        body.getImageObjectKey());
     // Re-read for the full embed (all languages), mirroring the listing handler.
     writeJson(resp, 200, CategoryResponse.from(categoryService.getById(orgId, categoryId)));
   }
@@ -124,6 +142,28 @@ public class CategoryHandler implements OrgResourceHandler {
     }
     categoryService.delete(orgId, categoryId);
     resp.setStatus(204);
+  }
+
+  private void doPresign(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    PresignImageUploadRequest body = readBody(req, PresignImageUploadRequest.class);
+    writeJson(
+        resp,
+        200,
+        ImagePresignResponse.from(
+            categoryService.presignImageUpload(orgId, body.getFilename(), body.getContentType())));
+  }
+
+  private static boolean isPresignRoute(String remainingPath) {
+    if (remainingPath == null) {
+      return false;
+    }
+    String t = remainingPath.startsWith("/") ? remainingPath.substring(1) : remainingPath;
+    while (t.endsWith("/")) {
+      t = t.substring(0, t.length() - 1);
+    }
+    return "presign".equals(t);
   }
 
   private UUID parseId(String remainingPath) {

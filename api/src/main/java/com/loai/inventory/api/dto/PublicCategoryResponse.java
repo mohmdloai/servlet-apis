@@ -8,6 +8,9 @@ public class PublicCategoryResponse {
   private String slug;
   private String parentSlug;
 
+  /** Presigned image URL (absent → the storefront's neutral circle). */
+  private String imageUrl;
+
   private PublicCategoryResponse() {}
 
   public static PublicCategoryResponse from(CategoryNav c) {
@@ -15,7 +18,12 @@ public class PublicCategoryResponse {
     r.name = c.name();
     r.slug = c.slug();
     r.parentSlug = c.parentSlug();
+    r.imageUrl = c.imageUrl();
     return r;
+  }
+
+  public String getImageUrl() {
+    return imageUrl;
   }
 
   public String getName() {

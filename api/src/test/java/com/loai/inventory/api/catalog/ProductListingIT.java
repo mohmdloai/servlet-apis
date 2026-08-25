@@ -94,7 +94,8 @@ class ProductListingIT {
         new CategoryService(
             dsl,
             new CategoryRepositoryFactoryImpl(),
-            new com.loai.inventory.repository.OrgRepositoryFactoryImpl());
+            new com.loai.inventory.repository.OrgRepositoryFactoryImpl(),
+            com.loai.inventory.api.support.TestWiring.storage());
   }
 
   @AfterAll

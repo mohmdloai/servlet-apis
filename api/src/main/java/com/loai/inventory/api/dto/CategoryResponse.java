@@ -12,6 +12,13 @@ public class CategoryResponse {
   private UUID parentCategoryId;
   private String name;
   private String slug;
+
+  /** The raw org-scoped key (admin only); null = no image. */
+  private String imageObjectKey;
+
+  /** A fresh presigned preview URL for the image; null = no image. */
+  private String imageUrl;
+
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -29,6 +36,7 @@ public class CategoryResponse {
     r.parentCategoryId = c.getParentCategoryId();
     r.name = c.getName();
     r.slug = c.getSlug();
+    r.imageObjectKey = c.getImageObjectKey();
     r.createdAt = c.getCreatedAt();
     r.updatedAt = c.getUpdatedAt();
     return r;
@@ -38,7 +46,16 @@ public class CategoryResponse {
   public static CategoryResponse from(CategoryView v) {
     CategoryResponse r = from(v.category());
     r.translations = v.translations().stream().map(CategoryTranslationDto::from).toList();
+    r.imageUrl = v.imageUrl();
     return r;
+  }
+
+  public String getImageObjectKey() {
+    return imageObjectKey;
+  }
+
+  public String getImageUrl() {
+    return imageUrl;
   }
 
   public List<CategoryTranslationDto> getTranslations() {

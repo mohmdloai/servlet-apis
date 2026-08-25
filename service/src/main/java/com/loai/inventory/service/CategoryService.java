@@ -4,6 +4,7 @@ import com.loai.inventory.common.Pagination;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Category;
 import com.loai.inventory.domain.model.CategoryTranslation;
@@ -49,14 +50,17 @@ public class CategoryService {
   private final DSLContext rootDsl;
   private final CategoryRepositoryFactory repoFactory;
   private final OrgRepositoryFactory orgRepoFactory;
+  private final ObjectStorage storage;
 
   public CategoryService(
       DSLContext rootDsl,
       CategoryRepositoryFactory repoFactory,
-      OrgRepositoryFactory orgRepoFactory) {
+      OrgRepositoryFactory orgRepoFactory,
+      ObjectStorage storage) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.orgRepoFactory = orgRepoFactory;
+    this.storage = storage;
   }
 
   /**
@@ -64,7 +68,8 @@ public class CategoryService {
    * {@code category}'s {@code name} stays populated (dual-written to the org's default locale) for
    * the label and pre-L6 rollback.
    */
-  public record CategoryView(Category category, List<CategoryTranslation> translations) {}
+  public record CategoryView(
+      Category category, List<CategoryTranslation> translations, String imageUrl) {}
 
   /**
    * The localized content of a create/update write (slice L3). {@code translations} is the authored
@@ -77,7 +82,7 @@ public class CategoryService {
     CategoryRepository repo = repoFactory.create(rootDsl);
     Category category =
         repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Category", id));
-    return new CategoryView(category, repo.findTranslations(id));
+    return new CategoryView(category, repo.findTranslations(id), imageUrlOf(category));
   }
 
   public List<CategoryView> getAll(UUID orgId, int page, int size) {
@@ -90,7 +95,7 @@ public class CategoryService {
     List<UUID> ids = categories.stream().map(Category::getId).toList();
     Map<UUID, List<CategoryTranslation>> byCategory = repo.findTranslationsForCategories(ids);
     return categories.stream()
-        .map(c -> new CategoryView(c, byCategory.getOrDefault(c.getId(), List.of())))
+        .map(c -> new CategoryView(c, byCategory.getOrDefault(c.getId(), List.of()), imageUrlOf(c)))
         .toList();
   }
 
@@ -105,7 +110,22 @@ public class CategoryService {
 
   public Category create(
       UUID orgId, String slug, UUID parentCategoryId, TranslatedNameInput content) {
+    return create(orgId, slug, parentCategoryId, content, null);
+  }
+
+  /**
+   * Create with an optional category image ({@code stories/category_image.md}): the key must carry
+   * this org's {@code {orgId}/category/} prefix (minted by {@link #presignImageUpload});
+   * blank/absent = no image.
+   */
+  public Category create(
+      UUID orgId,
+      String slug,
+      UUID parentCategoryId,
+      TranslatedNameInput content,
+      String imageObjectKey) {
     validateSlug(slug);
+    String imageKey = cleanImageKey(orgId, imageObjectKey);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -126,6 +146,7 @@ public class CategoryService {
           category.setOrgId(orgId);
           category.setParentCategoryId(parentCategoryId);
           category.setSlug(slug);
+          category.setImageObjectKey(imageKey);
 
           Category saved = repo.insert(category);
           repo.replaceTranslations(saved.getId(), translations);
@@ -149,7 +170,23 @@ public class CategoryService {
 
   public Category update(
       UUID orgId, UUID id, String slug, UUID parentCategoryId, TranslatedNameInput content) {
+    return update(orgId, id, slug, parentCategoryId, content, null);
+  }
+
+  /**
+   * Update with the image merged the banner way: {@code imageObjectKey} absent (null) leaves the
+   * stored image untouched (a client that doesn't know about images can't wipe one); blank clears
+   * it; a value replaces it after the org-prefix check.
+   */
+  public Category update(
+      UUID orgId,
+      UUID id,
+      String slug,
+      UUID parentCategoryId,
+      TranslatedNameInput content,
+      String imageObjectKey) {
     validateSlug(slug);
+    String imageKey = imageObjectKey == null ? null : cleanImageKey(orgId, imageObjectKey);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -169,6 +206,9 @@ public class CategoryService {
 
           existing.setSlug(slug);
           existing.setParentCategoryId(parentCategoryId);
+          if (imageObjectKey != null) {
+            existing.setImageObjectKey(imageKey);
+          }
 
           Category updated = repo.update(existing);
           repo.replaceTranslations(id, translations); // PUT replaces the whole set
@@ -178,6 +218,43 @@ public class CategoryService {
           log.info("Updated category id={} orgId={} langs={}", id, orgId, translations.size());
           return updated;
         });
+  }
+
+  /**
+   * Hand out a presigned PUT URL + an org-scoped {@code {orgId}/category/…} key. No row is written
+   * — the client uploads the bytes, then attaches the key via create/update (which re-checks the
+   * prefix). The banner / logo / listing-image presign machinery, one more prefix.
+   */
+  public ImagePresign presignImageUpload(UUID orgId, String filename, String contentType) {
+    if (filename == null || filename.isBlank()) {
+      throw new ValidationException("filename is required");
+    }
+    orgRepoFactory
+        .create(rootDsl)
+        .findById(orgId)
+        .orElseThrow(() -> new NotFoundException("Org", orgId));
+    String objectKey = storage.newCategoryKey(orgId, filename);
+    return new ImagePresign(
+        storage.presignPut(objectKey, contentType), objectKey, storage.presignTtlSeconds());
+  }
+
+  /** Blank → null; a value must belong to this org's category prefix. */
+  private static String cleanImageKey(UUID orgId, String raw) {
+    if (raw == null) {
+      return null;
+    }
+    String key = raw.trim();
+    if (key.isEmpty()) {
+      return null;
+    }
+    if (!key.startsWith(ObjectStorage.categoryKeyPrefix(orgId))) {
+      throw new ValidationException("image_object_key does not belong to this org");
+    }
+    return key;
+  }
+
+  private String imageUrlOf(Category c) {
+    return c.getImageObjectKey() == null ? null : storage.presignGet(c.getImageObjectKey());
   }
 
   public void delete(UUID orgId, UUID id) {

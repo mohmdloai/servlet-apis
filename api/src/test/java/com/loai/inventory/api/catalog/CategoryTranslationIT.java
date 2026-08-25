@@ -88,7 +88,10 @@ class CategoryTranslationIT {
 
     admin =
         new CategoryService(
-            dsl, new CategoryRepositoryFactoryImpl(), new OrgRepositoryFactoryImpl());
+            dsl,
+            new CategoryRepositoryFactoryImpl(),
+            new OrgRepositoryFactoryImpl(),
+            com.loai.inventory.api.support.TestWiring.storage());
     listingAdmin =
         new ProductListingService(
             dsl,

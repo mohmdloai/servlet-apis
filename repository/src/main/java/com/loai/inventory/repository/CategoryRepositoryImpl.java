@@ -115,6 +115,7 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
             .set(CATEGORY.ORG_ID, category.getOrgId())
             .set(CATEGORY.PARENT_CATEGORY_ID, category.getParentCategoryId())
             .set(CATEGORY.SLUG, category.getSlug())
+            .set(CATEGORY.IMAGE_OBJECT_KEY, category.getImageObjectKey())
             .returning()
             .fetchOne();
     if (record == null) {
@@ -134,6 +135,7 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
         dsl.update(CATEGORY)
             .set(CATEGORY.PARENT_CATEGORY_ID, category.getParentCategoryId())
             .set(CATEGORY.SLUG, category.getSlug())
+            .set(CATEGORY.IMAGE_OBJECT_KEY, category.getImageObjectKey())
             .set(CATEGORY.UPDATED_AT, OffsetDateTime.now())
             .where(CATEGORY.ORG_ID.eq(category.getOrgId()).and(CATEGORY.ID.eq(category.getId())))
             .returning()
@@ -251,13 +253,16 @@ public final class CategoryRepositoryImpl implements CategoryRepository {
    */
   private Category toCategory(Record r) {
     String name = r.field(DEFAULT_CT.NAME) == null ? null : r.get(DEFAULT_CT.NAME);
-    return new Category(
-        r.get(CATEGORY.ID),
-        r.get(CATEGORY.ORG_ID),
-        r.get(CATEGORY.PARENT_CATEGORY_ID),
-        name,
-        r.get(CATEGORY.SLUG),
-        r.get(CATEGORY.CREATED_AT),
-        r.get(CATEGORY.UPDATED_AT));
+    Category c =
+        new Category(
+            r.get(CATEGORY.ID),
+            r.get(CATEGORY.ORG_ID),
+            r.get(CATEGORY.PARENT_CATEGORY_ID),
+            name,
+            r.get(CATEGORY.SLUG),
+            r.get(CATEGORY.CREATED_AT),
+            r.get(CATEGORY.UPDATED_AT));
+    c.setImageObjectKey(r.get(CATEGORY.IMAGE_OBJECT_KEY));
+    return c;
   }
 }
