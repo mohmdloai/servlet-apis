@@ -21,6 +21,13 @@ public class CollectionResponse {
   private String nameEn;
   private int sortOrder;
   private long listingCount;
+
+  /** The raw org-scoped key (admin only); null = no image. */
+  private String imageObjectKey;
+
+  /** A fresh presigned preview URL for the image; null = no image. */
+  private String imageUrl;
+
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -34,6 +41,8 @@ public class CollectionResponse {
     r.name = v.collection().getName();
     r.sortOrder = v.collection().getSortOrder();
     r.listingCount = v.listingCount();
+    r.imageObjectKey = v.collection().getImageObjectKey();
+    r.imageUrl = v.imageUrl();
     r.createdAt = v.collection().getCreatedAt();
     r.updatedAt = v.collection().getUpdatedAt();
     for (CollectionTranslation t : v.translations()) {
@@ -49,7 +58,15 @@ public class CollectionResponse {
   /** The write echo: a fresh create/update, before the membership read. */
   public static CollectionResponse from(
       com.loai.inventory.domain.model.Collection c, List<CollectionTranslation> translations) {
-    return from(new CollectionView(c, translations, 0L));
+    return from(new CollectionView(c, translations, 0L, null));
+  }
+
+  public String getImageObjectKey() {
+    return imageObjectKey;
+  }
+
+  public String getImageUrl() {
+    return imageUrl;
   }
 
   public UUID getId() {

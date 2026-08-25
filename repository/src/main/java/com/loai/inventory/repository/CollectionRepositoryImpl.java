@@ -115,6 +115,7 @@ public final class CollectionRepositoryImpl implements CollectionRepository {
             .set(COLLECTION.ORG_ID, collection.getOrgId())
             .set(COLLECTION.SLUG, collection.getSlug())
             .set(COLLECTION.SORT_ORDER, collection.getSortOrder())
+            .set(COLLECTION.IMAGE_OBJECT_KEY, collection.getImageObjectKey())
             .returning()
             .fetchOne();
     if (record == null) {
@@ -134,6 +135,7 @@ public final class CollectionRepositoryImpl implements CollectionRepository {
         dsl.update(COLLECTION)
             .set(COLLECTION.SLUG, collection.getSlug())
             .set(COLLECTION.SORT_ORDER, collection.getSortOrder())
+            .set(COLLECTION.IMAGE_OBJECT_KEY, collection.getImageObjectKey())
             .set(COLLECTION.UPDATED_AT, OffsetDateTime.now())
             .where(
                 COLLECTION
@@ -301,15 +303,19 @@ public final class CollectionRepositoryImpl implements CollectionRepository {
                                                 .ListingStatus.PUBLISHED))))))
         .orderBy(COLLECTION.SORT_ORDER.asc(), COLLECTION.SLUG.asc())
         .fetch(
-            r ->
-                new Collection(
-                    r.get(COLLECTION.ID),
-                    r.get(COLLECTION.ORG_ID),
-                    r.get(COLLECTION.SLUG),
-                    r.get(name),
-                    r.get(COLLECTION.SORT_ORDER),
-                    r.get(COLLECTION.CREATED_AT),
-                    r.get(COLLECTION.UPDATED_AT)));
+            r -> {
+              Collection c =
+                  new Collection(
+                      r.get(COLLECTION.ID),
+                      r.get(COLLECTION.ORG_ID),
+                      r.get(COLLECTION.SLUG),
+                      r.get(name),
+                      r.get(COLLECTION.SORT_ORDER),
+                      r.get(COLLECTION.CREATED_AT),
+                      r.get(COLLECTION.UPDATED_AT));
+              c.setImageObjectKey(r.get(COLLECTION.IMAGE_OBJECT_KEY));
+              return c;
+            });
   }
 
   private static CollectionTranslation toTranslation(CollectionTranslationRecord r) {
@@ -324,13 +330,16 @@ public final class CollectionRepositoryImpl implements CollectionRepository {
    */
   private Collection toCollection(Record r) {
     String name = r.field(DEFAULT_CT.NAME) == null ? null : r.get(DEFAULT_CT.NAME);
-    return new Collection(
-        r.get(COLLECTION.ID),
-        r.get(COLLECTION.ORG_ID),
-        r.get(COLLECTION.SLUG),
-        name,
-        r.get(COLLECTION.SORT_ORDER),
-        r.get(COLLECTION.CREATED_AT),
-        r.get(COLLECTION.UPDATED_AT));
+    Collection c =
+        new Collection(
+            r.get(COLLECTION.ID),
+            r.get(COLLECTION.ORG_ID),
+            r.get(COLLECTION.SLUG),
+            name,
+            r.get(COLLECTION.SORT_ORDER),
+            r.get(COLLECTION.CREATED_AT),
+            r.get(COLLECTION.UPDATED_AT));
+    c.setImageObjectKey(r.get(COLLECTION.IMAGE_OBJECT_KEY));
+    return c;
   }
 }

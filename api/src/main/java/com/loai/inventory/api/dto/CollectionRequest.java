@@ -13,7 +13,22 @@ public class CollectionRequest {
   private String nameEn;
   private Integer sortOrder;
 
+  /**
+   * Org-scoped image key from {@code POST /collections/presign} ({@code
+   * stories/collection_image.md}). Create: absent/blank = no image. Update: absent = unchanged,
+   * blank = clear, value = replace — the one merged field on an otherwise full-replace PUT.
+   */
+  private String imageObjectKey;
+
   public CollectionRequest() {}
+
+  public String getImageObjectKey() {
+    return imageObjectKey;
+  }
+
+  public void setImageObjectKey(String imageObjectKey) {
+    this.imageObjectKey = imageObjectKey;
+  }
 
   public String getSlug() {
     return slug;

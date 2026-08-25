@@ -12,13 +12,21 @@ public class PublicCollectionResponse {
   private String slug;
   private String name;
 
+  /** Presigned image URL for the rail tile (absent → a text-only tile). */
+  private String imageUrl;
+
   private PublicCollectionResponse() {}
 
   public static PublicCollectionResponse from(PublicCollectionView c) {
     PublicCollectionResponse r = new PublicCollectionResponse();
     r.slug = c.slug();
     r.name = c.name();
+    r.imageUrl = c.imageUrl();
     return r;
+  }
+
+  public String getImageUrl() {
+    return imageUrl;
   }
 
   public String getSlug() {

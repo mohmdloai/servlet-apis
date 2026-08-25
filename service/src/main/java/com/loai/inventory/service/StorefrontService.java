@@ -549,12 +549,13 @@ public class StorefrontService {
   // collections (roadmap item 8)
 
   /**
-   * A public collection row — the rail/nav shape, whitelisted to exactly {@code {slug, name}}. The
+   * A public collection row — the rail/nav shape, whitelisted to {@code {slug, name, image_url}}
+   * ({@code image_url} a presigned GET, null when none — {@code stories/collection_image.md}). The
    * slug is the public handle ({@code /col/{slug}} and {@code ?collection=}); no internal id, sort
    * order, or membership size crosses. A merchant's shelf sizes are their business, not the
    * shopper's.
    */
-  public record PublicCollectionView(String slug, String name) {}
+  public record PublicCollectionView(String slug, String name, String imageUrl) {}
 
   /**
    * The storefront's collections rail: the org's collections that hold at least one
@@ -572,7 +573,14 @@ public class StorefrontService {
         .create(rootDsl)
         .findPublicRail(org.getId(), resolvedLocale, defaultLocale)
         .stream()
-        .map(c -> new PublicCollectionView(c.getSlug(), c.getName()))
+        .map(
+            c ->
+                new PublicCollectionView(
+                    c.getSlug(),
+                    c.getName(),
+                    c.getImageObjectKey() == null
+                        ? null
+                        : storage.presignGet(c.getImageObjectKey())))
         .toList();
   }
 

@@ -611,7 +611,8 @@ public class AppConfig {
             collectionRepositoryFactory,
             productListingRepositoryFactory,
             orgRepositoryFactory,
-            productListingService);
+            productListingService,
+            objectStorage);
     this.productVariantService =
         new ProductVariantService(
             dsl,

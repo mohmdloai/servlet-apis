@@ -20,6 +20,13 @@ public class Collection {
   private String slug;
   private String name;
   private int sortOrder;
+
+  /**
+   * Object-storage key of the merchant's collection image ({@code {orgId}/collection/…}); null = no
+   * image, the rail tile stays text-only. Never a URL — the reads presign it.
+   */
+  private String imageObjectKey;
+
   private OffsetDateTime createdAt;
   private OffsetDateTime updatedAt;
 
@@ -80,6 +87,14 @@ public class Collection {
 
   public void setSortOrder(int sortOrder) {
     this.sortOrder = sortOrder;
+  }
+
+  public String getImageObjectKey() {
+    return imageObjectKey;
+  }
+
+  public void setImageObjectKey(String imageObjectKey) {
+    this.imageObjectKey = imageObjectKey;
   }
 
   public OffsetDateTime getCreatedAt() {
