@@ -5,6 +5,7 @@ import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -36,6 +37,7 @@ import com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.service.CollectionService;
 import com.loai.inventory.service.CollectionService.CollectionView;
+import com.loai.inventory.service.ImagePresign;
 import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.StorefrontService.ListingPage;
@@ -131,7 +133,8 @@ class CollectionsIT {
             new CollectionRepositoryFactoryImpl(),
             new ProductListingRepositoryFactoryImpl(),
             new OrgRepositoryFactoryImpl(),
-            listings);
+            listings,
+            storage);
     storefront =
         new StorefrontService(
             dsl,
@@ -163,7 +166,7 @@ class CollectionsIT {
             + " product, org RESTART IDENTITY CASCADE");
   }
 
-  // ───────── group 1: admin roundtrip ─────────
+  // group 1: admin roundtrip
 
   @Test
   void adminRoundtrip_createsCuratesReordersAndCounts() {
@@ -277,7 +280,7 @@ class CollectionsIT {
     assertThrows(ValidationException.class, () -> admin.create(s.orgId, "neg", "اسم", "Name", -1));
   }
 
-  // ───────── group 2: public read ─────────
+  // group 2: public read
 
   @Test
   void publicRead_servesCuratedOrder_publishedOnly() {
@@ -448,7 +451,7 @@ class CollectionsIT {
     verify(rail).setHeader("Cache-Control", "public, max-age=300");
   }
 
-  // ───────── group 3: rail honesty + locale ─────────
+  // group 3: rail honesty + locale
 
   @Test
   void rail_omitsAllDraftCollections_andIncludesOneTheMomentItPublishes() {
@@ -502,7 +505,7 @@ class CollectionsIT {
     assertEquals(List.of("عربي فقط"), railNames(s.slug, "en"));
   }
 
-  // ───────── group 4: lifecycle ─────────
+  // group 4: lifecycle
 
   @Test
   void lifecycle_deletingAListingCascadesItOut_deletingACollectionKeepsListings() {
@@ -549,7 +552,7 @@ class CollectionsIT {
         NotFoundException.class, () -> admin.update(s.orgId, ghost, "x-y", "اسم", "Name", 0));
   }
 
-  // ───────── group 5: no-leak + cross-org isolation ─────────
+  // group 5: no-leak + cross-org isolation
 
   @Test
   void publicRail_carriesOnlySlugAndName() throws Exception {
@@ -591,7 +594,7 @@ class CollectionsIT {
     assertEquals(1, admin.getAll(mine.orgId).size());
   }
 
-  // ───────── group 6: featured regression rider ─────────
+  // group 6: featured regression rider
 
   @Test
   void featuredAndPlainReadsAreUnaffectedByCollections() {
@@ -638,7 +641,7 @@ class CollectionsIT {
             .total());
   }
 
-  // ───────── servlet harness ─────────
+  // servlet harness
 
   private HttpServletResponse driveServlet(String pathInfo, String... params) throws Exception {
     PublicStorefrontServlet servlet = new PublicStorefrontServlet();
@@ -681,7 +684,84 @@ class CollectionsIT {
     f.set(target, value);
   }
 
-  // ───────── seeding + read helpers ─────────
+  // group: collection image (stories/collection_image.md)
+
+  @Test
+  void image_presignMintsOrgPrefixedKey_andForeignKeyIs400() {
+    Seed s = seed("acme");
+    Seed other = seed("rival");
+
+    ImagePresign presign = admin.presignImageUpload(s.orgId, "picks.png", "image/png");
+    assertTrue(presign.objectKey().startsWith(s.orgId + "/collection/"), presign.objectKey());
+    assertTrue(presign.uploadUrl().startsWith("http"));
+    assertTrue(presign.expiresInSeconds() > 0);
+
+    // Another org's key, our own category-prefixed key, and a bare filename are all refused.
+    for (String bad :
+        List.of(
+            other.orgId + "/collection/x.png",
+            ObjectStorage.categoryKeyPrefix(s.orgId) + "x.png",
+            "picks.png")) {
+      assertThrows(
+          ValidationException.class,
+          () -> admin.create(s.orgId, "picks", "مختارات", "Picks", 0, bad),
+          bad);
+    }
+    assertThrows(
+        ValidationException.class, () -> admin.presignImageUpload(s.orgId, " ", "image/png"));
+  }
+
+  @Test
+  void image_roundtrip_update_absentKeeps_blankClears_valueReplaces() {
+    Seed s = seed("acme");
+    String key = admin.presignImageUpload(s.orgId, "picks.png", "image/png").objectKey();
+
+    Collection created = admin.create(s.orgId, "picks", "مختارات", "Picks", 0, key);
+    assertEquals(key, created.getImageObjectKey());
+
+    CollectionView view = admin.getById(s.orgId, created.getId());
+    assertEquals(key, view.collection().getImageObjectKey());
+    assertNotNull(view.imageUrl());
+    assertTrue(view.imageUrl().startsWith("http"), view.imageUrl());
+    assertEquals(key, admin.getAll(s.orgId).get(0).collection().getImageObjectKey());
+
+    // Absent (the pre-image PUT shape) → unchanged.
+    admin.update(s.orgId, created.getId(), "picks", "مختارات", "Picks", 0);
+    assertEquals(key, admin.getById(s.orgId, created.getId()).collection().getImageObjectKey());
+
+    // A new key → replaced.
+    String key2 = admin.presignImageUpload(s.orgId, "picks-2.png", "image/png").objectKey();
+    admin.update(s.orgId, created.getId(), "picks", "مختارات", "Picks", 0, key2);
+    assertEquals(key2, admin.getById(s.orgId, created.getId()).collection().getImageObjectKey());
+
+    // Blank → cleared, preview gone with it.
+    admin.update(s.orgId, created.getId(), "picks", "مختارات", "Picks", 0, "  ");
+    CollectionView cleared = admin.getById(s.orgId, created.getId());
+    assertNull(cleared.collection().getImageObjectKey());
+    assertNull(cleared.imageUrl());
+  }
+
+  @Test
+  void image_publicRail_carriesPresignedUrl_nullWhenNone() {
+    Seed s = seed("acme");
+    UUID a = listing(s, "a", "Alpha", "10.00");
+    String key = admin.presignImageUpload(s.orgId, "picks.png", "image/png").objectKey();
+    Collection withImage = admin.create(s.orgId, "picks", "مختارات", "Picks", 0, key);
+    Collection without = admin.create(s.orgId, "plain", "عادي", "Plain", 1, null);
+    admin.setListings(s.orgId, withImage.getId(), List.of(a));
+    admin.setListings(s.orgId, without.getId(), List.of(a));
+
+    List<PublicCollectionView> rail = storefront.collections(s.slug, null);
+    assertEquals(2, rail.size());
+    assertEquals("picks", rail.get(0).slug());
+    assertNotNull(rail.get(0).imageUrl());
+    assertTrue(rail.get(0).imageUrl().startsWith("http"), rail.get(0).imageUrl());
+    assertTrue(
+        rail.get(0).imageUrl().contains(key.substring(key.lastIndexOf('/') + 1)), "key in URL");
+    assertNull(rail.get(1).imageUrl());
+  }
+
+  // seeding + read helpers
 
   private record Seed(UUID orgId, String slug) {}
 

@@ -5,6 +5,8 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.CollectionRequest;
 import com.loai.inventory.api.dto.CollectionResponse;
+import com.loai.inventory.api.dto.ImagePresignResponse;
+import com.loai.inventory.api.dto.PresignImageUploadRequest;
 import com.loai.inventory.api.dto.ProductListingResponse;
 import com.loai.inventory.api.dto.SetCollectionListingsRequest;
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -33,6 +35,8 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code GET|PUT|DELETE /{id}} — read / edit names+slug+sort / delete (membership cascades,
  *       listings untouched)
  *   <li>{@code GET|PUT /{id}/listings} — the curated membership; PUT is an atomic set-replace
+ *   <li>{@code POST /presign} — presigned collection-image upload slot ({@code
+ *       stories/collection_image.md})
  * </ul>
  *
  * VIEWER read · STAFF write (the featured-curation gate — merchandising is a staff act, and nothing
@@ -71,6 +75,11 @@ public class CollectionHandler implements OrgResourceHandler {
       }
 
       String[] parts = tail.split("/");
+      if (parts.length == 1 && "presign".equals(parts[0])) {
+        if ("POST".equals(method)) doPresign(req, resp, orgId);
+        else writeError(resp, 405, "Method not allowed");
+        return;
+      }
       UUID id = parseId(parts[0]);
 
       if (parts.length == 1) {
@@ -118,7 +127,12 @@ public class CollectionHandler implements OrgResourceHandler {
     CollectionRequest body = readBody(req, CollectionRequest.class);
     Collection created =
         service.create(
-            orgId, body.getSlug(), body.getNameAr(), body.getNameEn(), body.getSortOrder());
+            orgId,
+            body.getSlug(),
+            body.getNameAr(),
+            body.getNameEn(),
+            body.getSortOrder(),
+            body.getImageObjectKey());
     // Re-read for the full shape (both names + the count), mirroring the category handler.
     writeJson(resp, 201, CollectionResponse.from(service.getById(orgId, created.getId())));
   }
@@ -135,7 +149,13 @@ public class CollectionHandler implements OrgResourceHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
     CollectionRequest body = readBody(req, CollectionRequest.class);
     service.update(
-        orgId, id, body.getSlug(), body.getNameAr(), body.getNameEn(), body.getSortOrder());
+        orgId,
+        id,
+        body.getSlug(),
+        body.getNameAr(),
+        body.getNameEn(),
+        body.getSortOrder(),
+        body.getImageObjectKey());
     writeJson(resp, 200, CollectionResponse.from(service.getById(orgId, id)));
   }
 
@@ -144,6 +164,17 @@ public class CollectionHandler implements OrgResourceHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
     service.delete(orgId, id);
     resp.setStatus(204);
+  }
+
+  private void doPresign(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    PresignImageUploadRequest body = readBody(req, PresignImageUploadRequest.class);
+    writeJson(
+        resp,
+        200,
+        ImagePresignResponse.from(
+            service.presignImageUpload(orgId, body.getFilename(), body.getContentType())));
   }
 
   private void doGetListings(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)

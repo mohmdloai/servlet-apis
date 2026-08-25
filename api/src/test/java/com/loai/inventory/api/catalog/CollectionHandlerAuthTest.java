@@ -60,7 +60,8 @@ class CollectionHandlerAuthTest {
     return new CollectionView(
         new Collection(ID, ORG, "picks", "Picks", 0, OffsetDateTime.now(), OffsetDateTime.now()),
         List.of(),
-        0L);
+        0L,
+        null);
   }
 
   @Test
@@ -85,10 +86,10 @@ class CollectionHandlerAuthTest {
             ORG,
             "");
     assertEquals(403, deniedResp.status);
-    verify(denied, never()).create(any(), any(), any(), any(), any());
+    verify(denied, never()).create(any(), any(), any(), any(), any(), any());
 
     CollectionService allowed = Mockito.mock(CollectionService.class);
-    when(allowed.create(any(), any(), any(), any(), any())).thenReturn(aView().collection());
+    when(allowed.create(any(), any(), any(), any(), any(), any())).thenReturn(aView().collection());
     when(allowed.getById(ORG, ID)).thenReturn(aView());
     Resp okResp = new Resp();
     handler(allowed)
@@ -99,7 +100,7 @@ class CollectionHandlerAuthTest {
             ORG,
             "");
     assertEquals(201, okResp.status);
-    verify(allowed).create(any(), any(), any(), any(), any());
+    verify(allowed).create(any(), any(), any(), any(), any(), any());
   }
 
   @Test

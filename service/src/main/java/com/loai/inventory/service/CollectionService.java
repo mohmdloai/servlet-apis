@@ -3,6 +3,7 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.Collection;
 import com.loai.inventory.domain.model.CollectionTranslation;
@@ -76,18 +77,21 @@ public class CollectionService {
   private final ProductListingRepositoryFactory listingRepoFactory;
   private final OrgRepositoryFactory orgRepoFactory;
   private final ProductListingService listingService;
+  private final ObjectStorage storage;
 
   public CollectionService(
       DSLContext rootDsl,
       CollectionRepositoryFactory repoFactory,
       ProductListingRepositoryFactory listingRepoFactory,
       OrgRepositoryFactory orgRepoFactory,
-      ProductListingService listingService) {
+      ProductListingService listingService,
+      ObjectStorage storage) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.listingRepoFactory = listingRepoFactory;
     this.orgRepoFactory = orgRepoFactory;
     this.listingService = listingService;
+    this.storage = storage;
   }
 
   /**
@@ -96,7 +100,10 @@ public class CollectionService {
    * paired ar/en inputs the editor renders.
    */
   public record CollectionView(
-      Collection collection, List<CollectionTranslation> translations, long listingCount) {}
+      Collection collection,
+      List<CollectionTranslation> translations,
+      long listingCount,
+      String imageUrl) {}
 
   // --- admin reads ---
 
@@ -116,7 +123,8 @@ public class CollectionService {
                 new CollectionView(
                     c,
                     translations.getOrDefault(c.getId(), List.of()),
-                    counts.getOrDefault(c.getId(), 0L)))
+                    counts.getOrDefault(c.getId(), 0L),
+                    imageUrlOf(c)))
         .toList();
   }
 
@@ -125,7 +133,8 @@ public class CollectionService {
     Collection collection =
         repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Collection", id));
     List<UUID> listingIds = repo.findListingIds(id);
-    return new CollectionView(collection, repo.findTranslations(id), listingIds.size());
+    return new CollectionView(
+        collection, repo.findTranslations(id), listingIds.size(), imageUrlOf(collection));
   }
 
   /**
@@ -148,8 +157,24 @@ public class CollectionService {
    */
   public Collection create(
       UUID orgId, String slug, String nameAr, String nameEn, Integer sortOrder) {
+    return create(orgId, slug, nameAr, nameEn, sortOrder, null);
+  }
+
+  /**
+   * Create with an optional collection image ({@code stories/collection_image.md}): the key must
+   * carry this org's {@code {orgId}/collection/} prefix (minted by {@link #presignImageUpload});
+   * blank/absent = no image.
+   */
+  public Collection create(
+      UUID orgId,
+      String slug,
+      String nameAr,
+      String nameEn,
+      Integer sortOrder,
+      String imageObjectKey) {
     String cleanSlug = normalizeSlug(slug);
     int order = normalizeSortOrder(sortOrder);
+    String imageKey = cleanImageKey(orgId, imageObjectKey);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -170,6 +195,7 @@ public class CollectionService {
           collection.setOrgId(orgId);
           collection.setSlug(cleanSlug);
           collection.setSortOrder(order);
+          collection.setImageObjectKey(imageKey);
 
           Collection saved = repo.insert(collection);
           repo.replaceTranslations(saved.getId(), translations);
@@ -194,8 +220,25 @@ public class CollectionService {
    */
   public Collection update(
       UUID orgId, UUID id, String slug, String nameAr, String nameEn, Integer sortOrder) {
+    return update(orgId, id, slug, nameAr, nameEn, sortOrder, null);
+  }
+
+  /**
+   * Update with the image merged the banner way: {@code imageObjectKey} absent (null) leaves the
+   * stored image untouched (a client that doesn't know about images can't wipe one); blank clears
+   * it; a value replaces it after the org-prefix check.
+   */
+  public Collection update(
+      UUID orgId,
+      UUID id,
+      String slug,
+      String nameAr,
+      String nameEn,
+      Integer sortOrder,
+      String imageObjectKey) {
     String cleanSlug = normalizeSlug(slug);
     int order = normalizeSortOrder(sortOrder);
+    String imageKey = imageObjectKey == null ? null : cleanImageKey(orgId, imageObjectKey);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -213,12 +256,52 @@ public class CollectionService {
 
           existing.setSlug(cleanSlug);
           existing.setSortOrder(order);
+          if (imageObjectKey != null) {
+            existing.setImageObjectKey(imageKey);
+          }
           Collection updated = repo.update(existing);
           repo.replaceTranslations(id, translations); // PUT replaces the whole set
           updated.setName(translations.get(0).name());
           log.info("Updated collection id={} orgId={} langs={}", id, orgId, translations.size());
           return updated;
         });
+  }
+
+  /**
+   * Hand out a presigned PUT URL + an org-scoped {@code {orgId}/collection/…} key. No row is
+   * written — the client uploads the bytes, then attaches the key via create/update (which
+   * re-checks the prefix). The banner / category presign machinery, one more prefix.
+   */
+  public ImagePresign presignImageUpload(UUID orgId, String filename, String contentType) {
+    if (filename == null || filename.isBlank()) {
+      throw new ValidationException("filename is required");
+    }
+    orgRepoFactory
+        .create(rootDsl)
+        .findById(orgId)
+        .orElseThrow(() -> new NotFoundException("Org", orgId));
+    String objectKey = storage.newCollectionKey(orgId, filename);
+    return new ImagePresign(
+        storage.presignPut(objectKey, contentType), objectKey, storage.presignTtlSeconds());
+  }
+
+  /** Blank → null; a value must belong to this org's collection prefix. */
+  private static String cleanImageKey(UUID orgId, String raw) {
+    if (raw == null) {
+      return null;
+    }
+    String key = raw.trim();
+    if (key.isEmpty()) {
+      return null;
+    }
+    if (!key.startsWith(ObjectStorage.collectionKeyPrefix(orgId))) {
+      throw new ValidationException("image_object_key does not belong to this org");
+    }
+    return key;
+  }
+
+  private String imageUrlOf(Collection c) {
+    return c.getImageObjectKey() == null ? null : storage.presignGet(c.getImageObjectKey());
   }
 
   /** Delete a collection. Its membership rows cascade away; no listing is ever touched. */
