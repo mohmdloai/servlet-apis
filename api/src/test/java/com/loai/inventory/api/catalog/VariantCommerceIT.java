@@ -195,6 +195,7 @@ class VariantCommerceIT {
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
+            new InventoryReservationRepositoryFactoryImpl(),
             com.loai.inventory.api.support.TestWiring.notificationService(dsl),
             magicLink,
             new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));

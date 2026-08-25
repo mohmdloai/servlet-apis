@@ -147,6 +147,7 @@ class OrderStatusCountsIT {
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
+            new InventoryReservationRepositoryFactoryImpl(),
             TestWiring.notificationService(dsl),
             TestWiring.magicLinkService(dsl),
             new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));

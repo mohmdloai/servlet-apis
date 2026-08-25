@@ -13,6 +13,7 @@ import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.PlatformFunnelStage;
 import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesOrder;
+import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository;
@@ -72,6 +73,7 @@ public final class PaymentService {
   private final SalesOrderRepositoryFactory salesOrderRepoFactory;
   private final PaymentTransactionRepositoryFactory txnRepoFactory;
   private final RefundRepositoryFactory refundRepoFactory;
+  private final InventoryReservationRepositoryFactory reservationRepoFactory;
   private final NotificationService notificationService;
   private final MagicLinkService magicLinkService;
   private final OrgMilestoneService milestoneService;
@@ -82,6 +84,7 @@ public final class PaymentService {
       SalesOrderRepositoryFactory salesOrderRepoFactory,
       PaymentTransactionRepositoryFactory txnRepoFactory,
       RefundRepositoryFactory refundRepoFactory,
+      InventoryReservationRepositoryFactory reservationRepoFactory,
       NotificationService notificationService,
       MagicLinkService magicLinkService,
       OrgMilestoneService milestoneService) {
@@ -90,9 +93,29 @@ public final class PaymentService {
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.txnRepoFactory = txnRepoFactory;
     this.refundRepoFactory = refundRepoFactory;
+    this.reservationRepoFactory = reservationRepoFactory;
     this.notificationService = notificationService;
     this.magicLinkService = magicLinkService;
     this.milestoneService = milestoneService;
+  }
+
+  /**
+   * The PENDING_PAYMENT → PAID flip's twin write ({@code stories/clear_expiry_on_paid.md}): a paid
+   * order has no payment-hold window, so its ACTIVE reservations' {@code expires_at} display mirror
+   * (V19) is nulled in the same transaction — otherwise the holds keep asserting a deadline that
+   * ceased to exist and the UI renders "Expired" over stock firmly held for a paid order. {@code
+   * markPaid} nulls the order's own column; this clears the mirror. Deliberately absent from the
+   * UNDERPAID branch — a partially-paid order is still expirable and its countdown is true. Moves
+   * no stock.
+   */
+  private void clearHoldDeadlines(DSLContext txDsl, SalesOrder order) {
+    int cleared = reservationRepoFactory.create(txDsl).clearExpiryForOrder(order.getId());
+    if (cleared > 0) {
+      log.debug(
+          "Cleared expires_at on {} ACTIVE reservation(s) of paid order {}",
+          cleared,
+          order.getOrderNumber());
+    }
   }
 
   /** Target order for a transaction; at most one of the two fields is populated. */
@@ -181,6 +204,7 @@ public final class PaymentService {
       BigDecimal newPrepaid = order.getPrepaidAmount().add(txn.getAmount());
       order.markPaid(newPrepaid, now); // domain guard allows prepaid > grand_total
       orderRepo.updatePaymentState(order);
+      clearHoldDeadlines(txDsl, order);
       // Same template as MATCHED — the excess-refund conversation is the admin's, not an email's.
       notifyOrderPaid(txDsl, orgId, order, txn, now);
       log.info(
@@ -201,6 +225,7 @@ public final class PaymentService {
     BigDecimal newPrepaid = order.getPrepaidAmount().add(txn.getAmount());
     order.markPaid(newPrepaid, now); // domain guard: prepaid >= grand_total, PENDING_PAYMENT → PAID
     orderRepo.updatePaymentState(order);
+    clearHoldDeadlines(txDsl, order);
     notifyOrderPaid(txDsl, orgId, order, txn, now);
 
     log.info(

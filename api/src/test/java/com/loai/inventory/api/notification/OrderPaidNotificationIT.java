@@ -149,6 +149,7 @@ class OrderPaidNotificationIT {
             new SalesOrderRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
             new RefundRepositoryFactoryImpl(),
+            new InventoryReservationRepositoryFactoryImpl(),
             notificationService,
             magicLink,
             new OrgMilestoneService(new OrgMilestoneRepositoryFactoryImpl()));

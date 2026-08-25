@@ -659,6 +659,7 @@ public class AppConfig {
             salesOrderRepositoryFactory,
             paymentTransactionRepositoryFactory,
             refundRepositoryFactory,
+            inventoryReservationRepositoryFactory,
             notificationService,
             magicLinkService,
             orgMilestoneService);

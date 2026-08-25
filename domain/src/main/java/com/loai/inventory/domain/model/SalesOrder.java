@@ -280,6 +280,9 @@ public class SalesOrder {
     }
     this.status = OrderStatus.PAID;
     this.prepaidAmount = prepaid.setScale(MONEY_SCALE, MONEY_ROUNDING);
+    // A paid order has no payment-hold window — keeping the dead deadline is what made the UI
+    // say "Expired" over stock firmly held for a paid order (stories/clear_expiry_on_paid.md).
+    this.expiresAt = null;
     this.updatedAt = now;
   }
 
