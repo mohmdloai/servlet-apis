@@ -1,6 +1,7 @@
 package com.loai.inventory.api.sale;
 
 import static com.loai.inventory.repository.generated.Tables.APP_USER;
+import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.FULFILLMENT;
 import static com.loai.inventory.repository.generated.Tables.FULFILLMENT_LINE;
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
@@ -234,6 +235,12 @@ class InStoreSaleIT {
     assertEquals(0, new BigDecimal("30.00").compareTo(sale.order().getPrepaidAmount()));
     assertEquals("CLOSED", orderStatus(sale.order().getId()));
 
+    // Email present → the CRM row owns the identity; the walk-in snapshot (V87) stays null.
+    assertNotNull(sale.order().getCustomerId());
+    assertNull(orderCustomerName(sale.order().getId()), "email sale: snapshot name stays null");
+    assertNull(orderCustomerPhone(sale.order().getId()), "email sale: snapshot phone stays null");
+    assertEquals("Nadia", invoiceCustomerName(sale.invoice().getId()), "invoice name from CRM");
+
     // Invoice ISSUED→PAID, gapless number, fully paid; one line.
     assertEquals("PAID", sale.invoice().getStatus().name());
     assertEquals(
@@ -307,6 +314,127 @@ class InStoreSaleIT {
 
     assertEquals("CLOSED", sale.order().getStatus().name());
     assertNull(sale.order().getCustomerId());
+    assertNull(orderCustomerName(sale.order().getId()));
+    assertNull(orderCustomerPhone(sale.order().getId()));
+    assertEquals(0, tableCount(CUSTOMER), "anonymous sale creates no CRM row");
+    assertEquals("Walk-in customer", invoiceCustomerName(sale.invoice().getId()));
+    assertNull(invoiceCustomerPhone(sale.invoice().getId()));
+  }
+
+  /**
+   * The bug this slice fixes (capture_walk_in_customer.md): name + phone with NO email used to be
+   * dropped on the floor. Now: no CRM row, {@code customer_id} NULL, the typed contact frozen on
+   * the order, echoed on the returned aggregate, and printed on the invoice's contact block.
+   */
+  @Test
+  void walkIn_nameAndPhone_noEmail_capturedOnOrderAndInvoice_noCrmRow() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("cashier@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 5, 0);
+
+    InStoreSale sale =
+        service.placeInStoreSale(
+            org,
+            new CustomerInput("Mohamed gamal", null, "01006123584", null),
+            List.of(new OrderLineInput(product, 1)),
+            new PaymentInput(PaymentProvider.CASH, null, null),
+            null,
+            actor(staff),
+            UUID.randomUUID().toString(),
+            staff);
+
+    assertEquals("CLOSED", sale.order().getStatus().name());
+    assertNull(sale.order().getCustomerId(), "no email ⇒ no CRM identity");
+    assertEquals(0, tableCount(CUSTOMER), "a walk-in never mints a customer row");
+
+    // Echoed on the aggregate the response is built from, and persisted on the row.
+    assertEquals("Mohamed gamal", sale.order().getCustomerName());
+    assertEquals("01006123584", sale.order().getCustomerPhone());
+    assertEquals("Mohamed gamal", orderCustomerName(sale.order().getId()));
+    assertEquals("01006123584", orderCustomerPhone(sale.order().getId()));
+
+    // The invoice's frozen contact block is the snapshot — the receipt prints the real name.
+    assertEquals("Mohamed gamal", invoiceCustomerName(sale.invoice().getId()));
+    assertEquals("01006123584", invoiceCustomerPhone(sale.invoice().getId()));
+  }
+
+  /** Phone only: the name side stays null and the invoice keeps its walk-in label, phone set. */
+  @Test
+  void walkIn_phoneOnly_nameNull_invoiceKeepsWalkInLabelWithPhone() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("cashier@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 5, 0);
+
+    InStoreSale sale =
+        service.placeInStoreSale(
+            org,
+            new CustomerInput(null, null, "01006123584", null),
+            List.of(new OrderLineInput(product, 1)),
+            new PaymentInput(PaymentProvider.CASH, null, null),
+            null,
+            actor(staff),
+            UUID.randomUUID().toString(),
+            staff);
+
+    assertNull(sale.order().getCustomerId());
+    assertNull(orderCustomerName(sale.order().getId()));
+    assertEquals("01006123584", orderCustomerPhone(sale.order().getId()));
+    assertEquals("Walk-in customer", invoiceCustomerName(sale.invoice().getId()));
+    assertEquals("01006123584", invoiceCustomerPhone(sale.invoice().getId()));
+  }
+
+  /**
+   * Same normalisation as the CRM upsert ({@code Text.normalizeNumeric}): a cashier on an Arabic
+   * keyboard stores the same digits as one on an English keyboard; the name keeps its letters.
+   */
+  @Test
+  void walkIn_arabicIndicDigits_foldToAscii() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("cashier@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 5, 0);
+
+    InStoreSale sale =
+        service.placeInStoreSale(
+            org,
+            new CustomerInput("  محمد   جمال ", "", "٠١٠٠٦١٢٣٥٨٤", null),
+            List.of(new OrderLineInput(product, 1)),
+            new PaymentInput(PaymentProvider.CASH, null, null),
+            null,
+            actor(staff),
+            UUID.randomUUID().toString(),
+            staff);
+
+    assertNull(sale.order().getCustomerId(), "blank email is no email");
+    assertEquals("محمد جمال", orderCustomerName(sale.order().getId()), "trimmed, one space");
+    assertEquals("01006123584", orderCustomerPhone(sale.order().getId()));
+  }
+
+  /** Blank/whitespace-only fields are the anonymous sale: nothing stored, nothing printed. */
+  @Test
+  void walkIn_blankNameAndPhone_isAnonymous() {
+    UUID org = createOrg("acme");
+    UUID staff = createUser("cashier@acme.test");
+    UUID product = createProduct(org, "SKU1");
+    createInventory(org, product, 5, 0);
+
+    InStoreSale sale =
+        service.placeInStoreSale(
+            org,
+            new CustomerInput("   ", null, " \t ", null),
+            List.of(new OrderLineInput(product, 1)),
+            new PaymentInput(PaymentProvider.CASH, null, null),
+            null,
+            actor(staff),
+            UUID.randomUUID().toString(),
+            staff);
+
+    assertNull(sale.order().getCustomerId());
+    assertNull(orderCustomerName(sale.order().getId()));
+    assertNull(orderCustomerPhone(sale.order().getId()));
+    assertEquals(0, tableCount(CUSTOMER));
     assertEquals("Walk-in customer", invoiceCustomerName(sale.invoice().getId()));
   }
 
@@ -551,6 +679,28 @@ class InStoreSaleIT {
         .from(SALES_INVOICE)
         .where(SALES_INVOICE.ID.eq(invoiceId))
         .fetchOne(SALES_INVOICE.CUSTOMER_NAME);
+  }
+
+  private String invoiceCustomerPhone(UUID invoiceId) {
+    return dsl.select(SALES_INVOICE.CUSTOMER_PHONE)
+        .from(SALES_INVOICE)
+        .where(SALES_INVOICE.ID.eq(invoiceId))
+        .fetchOne(SALES_INVOICE.CUSTOMER_PHONE);
+  }
+
+  /** The walk-in snapshot (V87) as persisted, not as echoed. */
+  private String orderCustomerName(UUID orderId) {
+    return dsl.select(SALES_ORDER.CUSTOMER_NAME)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ID.eq(orderId))
+        .fetchOne(SALES_ORDER.CUSTOMER_NAME);
+  }
+
+  private String orderCustomerPhone(UUID orderId) {
+    return dsl.select(SALES_ORDER.CUSTOMER_PHONE)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ID.eq(orderId))
+        .fetchOne(SALES_ORDER.CUSTOMER_PHONE);
   }
 
   private BigDecimal paymentUnallocated(UUID paymentId) {

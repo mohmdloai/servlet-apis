@@ -52,6 +52,16 @@ public class SalesOrderResponse {
   private String deliveryPhone;
   private String deliveryAddress;
 
+  /**
+   * The walk-in buyer's typed contact (V87) — an IN_STORE sale with no email, so no {@code
+   * customerId}. Both omitted when absent (anonymous sale, or an email sale whose CRM row owns the
+   * details). Staff plane only, the same rule as {@code notes} and the delivery contact: every
+   * internal contact field is withheld from the anonymous magic-link view.
+   */
+  private String customerName;
+
+  private String customerPhone;
+
   private List<SalesOrderLineResponse> lines;
 
   private SalesOrderResponse() {}
@@ -99,6 +109,8 @@ public class SalesOrderResponse {
     r.deliveryRecipient = includeInternal ? order.getDeliveryRecipient() : null;
     r.deliveryPhone = includeInternal ? order.getDeliveryPhone() : null;
     r.deliveryAddress = includeInternal ? order.getDeliveryAddress() : null;
+    r.customerName = includeInternal ? order.getCustomerName() : null;
+    r.customerPhone = includeInternal ? order.getCustomerPhone() : null;
     r.lines = lines.stream().map(SalesOrderLineResponse::from).toList();
     return r;
   }
@@ -125,6 +137,14 @@ public class SalesOrderResponse {
 
   public UUID getCustomerId() {
     return customerId;
+  }
+
+  public String getCustomerName() {
+    return customerName;
+  }
+
+  public String getCustomerPhone() {
+    return customerPhone;
   }
 
   public String getOrderNumber() {
