@@ -224,10 +224,12 @@ class InStoreSaleIT {
             new CustomerInput("Nadia", "nadia@acme.test", null, null),
             List.of(new OrderLineInput(product, 3)),
             new PaymentInput(PaymentProvider.CASH, null, null),
+            null,
             "counter sale",
             actor(staff),
             UUID.randomUUID().toString(),
-            staff);
+            staff,
+            false);
 
     // Order DRAFT → PAID → CLOSED, prepaid = grand total.
     assertEquals("CLOSED", sale.order().getStatus().name());
@@ -240,6 +242,13 @@ class InStoreSaleIT {
     assertNull(orderCustomerName(sale.order().getId()), "email sale: snapshot name stays null");
     assertNull(orderCustomerPhone(sale.order().getId()), "email sale: snapshot phone stays null");
     assertEquals("Nadia", invoiceCustomerName(sale.invoice().getId()), "invoice name from CRM");
+
+    // No discount block (V88): discount_total stays zero and the four intent columns stay NULL.
+    assertEquals(0, BigDecimal.ZERO.compareTo(sale.order().getDiscountTotal()));
+    assertNull(sale.order().getCounterDiscountType());
+    assertNull(sale.order().getCounterDiscountBy());
+    assertNull(counterDiscountType(sale.order().getId()), "no discount → column NULL");
+    assertNull(counterDiscountBy(sale.order().getId()), "no discount → column NULL");
 
     // Invoice ISSUED→PAID, gapless number, fully paid; one line.
     assertEquals("PAID", sale.invoice().getStatus().name());
@@ -281,9 +290,11 @@ class InStoreSaleIT {
             List.of(new OrderLineInput(a, 2), new OrderLineInput(b, 1)),
             new PaymentInput(PaymentProvider.INSTAPAY_IN_STORE, "IPN-INSTORE-1", null),
             null,
+            null,
             actor(staff),
             UUID.randomUUID().toString(),
-            staff);
+            staff,
+            false);
 
     assertEquals("CLOSED", sale.order().getStatus().name());
     assertEquals(0, new BigDecimal("30.00").compareTo(sale.invoice().getGrandTotal()));
@@ -308,9 +319,11 @@ class InStoreSaleIT {
             List.of(new OrderLineInput(product, 1)),
             new PaymentInput(PaymentProvider.CASH, null, null),
             null,
+            null,
             actor(staff),
             UUID.randomUUID().toString(),
-            staff);
+            staff,
+            false);
 
     assertEquals("CLOSED", sale.order().getStatus().name());
     assertNull(sale.order().getCustomerId());
@@ -340,9 +353,11 @@ class InStoreSaleIT {
             List.of(new OrderLineInput(product, 1)),
             new PaymentInput(PaymentProvider.CASH, null, null),
             null,
+            null,
             actor(staff),
             UUID.randomUUID().toString(),
-            staff);
+            staff,
+            false);
 
     assertEquals("CLOSED", sale.order().getStatus().name());
     assertNull(sale.order().getCustomerId(), "no email ⇒ no CRM identity");
@@ -374,9 +389,11 @@ class InStoreSaleIT {
             List.of(new OrderLineInput(product, 1)),
             new PaymentInput(PaymentProvider.CASH, null, null),
             null,
+            null,
             actor(staff),
             UUID.randomUUID().toString(),
-            staff);
+            staff,
+            false);
 
     assertNull(sale.order().getCustomerId());
     assertNull(orderCustomerName(sale.order().getId()));
@@ -403,9 +420,11 @@ class InStoreSaleIT {
             List.of(new OrderLineInput(product, 1)),
             new PaymentInput(PaymentProvider.CASH, null, null),
             null,
+            null,
             actor(staff),
             UUID.randomUUID().toString(),
-            staff);
+            staff,
+            false);
 
     assertNull(sale.order().getCustomerId(), "blank email is no email");
     assertEquals("محمد جمال", orderCustomerName(sale.order().getId()), "trimmed, one space");
@@ -427,9 +446,11 @@ class InStoreSaleIT {
             List.of(new OrderLineInput(product, 1)),
             new PaymentInput(PaymentProvider.CASH, null, null),
             null,
+            null,
             actor(staff),
             UUID.randomUUID().toString(),
-            staff);
+            staff,
+            false);
 
     assertNull(sale.order().getCustomerId());
     assertNull(orderCustomerName(sale.order().getId()));
@@ -455,9 +476,11 @@ class InStoreSaleIT {
                 List.of(new OrderLineInput(product, 5)),
                 new PaymentInput(PaymentProvider.CASH, null, null),
                 null,
+                null,
                 actor(staff),
                 UUID.randomUUID().toString(),
-                staff));
+                staff,
+                false));
 
     // Nothing persisted; stock unchanged.
     assertEquals(0, tableCount(SALES_ORDER));
@@ -483,9 +506,11 @@ class InStoreSaleIT {
                 List.of(new OrderLineInput(product, 1)),
                 new PaymentInput(PaymentProvider.INSTAPAY_MANUAL, "IPN-1", null),
                 null,
+                null,
                 actor(staff),
                 UUID.randomUUID().toString(),
-                staff));
+                staff,
+                false));
     assertEquals(0, tableCount(SALES_ORDER));
   }
 
@@ -509,9 +534,11 @@ class InStoreSaleIT {
                 List.of(new OrderLineInput(product, 3)), // grand total 30.00
                 new PaymentInput(PaymentProvider.CASH, null, new BigDecimal("25.00")),
                 null,
+                null,
                 actor(staff),
                 UUID.randomUUID().toString(),
-                staff));
+                staff,
+                false));
     assertEquals(0, tableCount(SALES_ORDER));
     assertEquals(0, tableCount(PAYMENT));
     assertEquals(5, stockQty(org, product));
@@ -536,10 +563,12 @@ class InStoreSaleIT {
             new CustomerInput("Nadia", "nadia@acme.test", null, null),
             List.of(new OrderLineInput(product, 3)), // grand total 30.00
             new PaymentInput(PaymentProvider.CASH, null, new BigDecimal("50.00")),
+            null,
             "round cash",
             actor(staff),
             UUID.randomUUID().toString(),
-            staff);
+            staff,
+            false);
 
     // Order CLOSED; prepaid is the NET money (tender − change) = grand total.
     assertEquals("CLOSED", sale.order().getStatus().name());
@@ -586,9 +615,11 @@ class InStoreSaleIT {
             List.of(new OrderLineInput(product, 3)),
             new PaymentInput(PaymentProvider.CASH, null, null),
             null,
+            null,
             actor(staff),
             idem,
-            staff);
+            staff,
+            false);
     assertEquals("CLOSED", first.order().getStatus().name());
 
     assertThrows(
@@ -600,9 +631,11 @@ class InStoreSaleIT {
                 List.of(new OrderLineInput(product, 3)),
                 new PaymentInput(PaymentProvider.CASH, null, null),
                 null,
+                null,
                 actor(staff),
                 idem,
-                staff));
+                staff,
+                false));
 
     // Exactly one sale persisted; stock decremented once (10 → 7), not twice.
     assertEquals(1, tableCount(SALES_ORDER));
@@ -701,6 +734,21 @@ class InStoreSaleIT {
         .from(SALES_ORDER)
         .where(SALES_ORDER.ID.eq(orderId))
         .fetchOne(SALES_ORDER.CUSTOMER_PHONE);
+  }
+
+  /** The V88 intent columns as persisted — NULL on every sale without a discount block. */
+  private String counterDiscountType(UUID orderId) {
+    return dsl.select(SALES_ORDER.COUNTER_DISCOUNT_TYPE)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ID.eq(orderId))
+        .fetchOne(SALES_ORDER.COUNTER_DISCOUNT_TYPE);
+  }
+
+  private UUID counterDiscountBy(UUID orderId) {
+    return dsl.select(SALES_ORDER.COUNTER_DISCOUNT_BY)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ID.eq(orderId))
+        .fetchOne(SALES_ORDER.COUNTER_DISCOUNT_BY);
   }
 
   private BigDecimal paymentUnallocated(UUID paymentId) {

@@ -1,7 +1,6 @@
 package com.loai.inventory.domain.model;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -19,13 +18,6 @@ import java.util.UUID;
  * arithmetic (see {@link CouponType}).
  */
 public class Coupon {
-
-  /** Money is scale-2 HALF_EVEN everywhere in this system; a discount is money. */
-  private static final int MONEY_SCALE = 2;
-
-  private static final RoundingMode MONEY_ROUNDING = RoundingMode.HALF_EVEN;
-
-  private static final BigDecimal ONE_HUNDRED = new BigDecimal("100");
 
   private UUID id;
   private UUID orgId;
@@ -70,23 +62,13 @@ public class Coupon {
   }
 
   /**
-   * The discount this coupon takes off {@code subtotal} — the load-bearing arithmetic, kept on the
-   * model so there is exactly one implementation of it (the checkout preview and the placement both
-   * call this, and they must never disagree by a piastre).
-   *
-   * <p>PERCENT rounds HALF_EVEN at scale 2; FIXED is capped at the subtotal so the goods total can
-   * never go negative. Neither can return more than {@code subtotal}, which is precisely the
-   * invariant {@code SalesOrder.setTotals} enforces on the other side.
+   * The discount this coupon takes off {@code subtotal} — the load-bearing arithmetic. Kept on the
+   * model so the checkout preview and the placement call the same thing and never disagree by a
+   * piastre; the arithmetic itself lives in {@link DiscountMath} so the counter discount ({@code
+   * stories/counter_discount.md}) shares it too — one implementation, three callers.
    */
   public BigDecimal discountFor(BigDecimal subtotal) {
-    if (subtotal == null || subtotal.signum() <= 0) {
-      return BigDecimal.ZERO.setScale(MONEY_SCALE);
-    }
-    BigDecimal raw =
-        type == CouponType.PERCENT
-            ? subtotal.multiply(value).divide(ONE_HUNDRED, MONEY_SCALE, MONEY_ROUNDING)
-            : value;
-    return raw.min(subtotal).setScale(MONEY_SCALE, MONEY_ROUNDING);
+    return DiscountMath.discountFor(type, value, subtotal);
   }
 
   /**

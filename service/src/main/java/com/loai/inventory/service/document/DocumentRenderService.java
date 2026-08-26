@@ -1,6 +1,7 @@
 package com.loai.inventory.service.document;
 
 import com.loai.inventory.common.exception.NotFoundException;
+import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.CreditNote;
 import com.loai.inventory.domain.model.CreditNoteLine;
 import com.loai.inventory.domain.model.InvoiceStatus;
@@ -246,10 +247,15 @@ public final class DocumentRenderService {
     Org org = org(orgId);
     Image receiptLogo = logoImage(org, RECEIPT_LOGO_MAX_W, RECEIPT_LOGO_MAX_H);
 
-    // 80mm ≈ 226.77 pt wide; height sized to content so the slip isn't mostly blank.
+    // 80mm ≈ 226.77 pt wide; height sized to content so the slip isn't mostly blank. A discounted
+    // sale draws one more totals row (V88), so it gets one more row of height.
+    boolean discounted = nz(inv.getDiscountTotal()).signum() > 0;
     float width = 226.77f;
     float height =
-        220f + live.lines().size() * 16f + (receiptLogo == null ? 0f : RECEIPT_LOGO_EXTRA_H);
+        220f
+            + live.lines().size() * 16f
+            + (discounted ? 13f : 0f)
+            + (receiptLogo == null ? 0f : RECEIPT_LOGO_EXTRA_H);
     byte[] bytes =
         build(
             new Rectangle(width, height),
@@ -282,6 +288,15 @@ public final class DocumentRenderService {
               receiptRule(doc);
               receiptLine(doc, "Subtotal", money(inv.getSubtotal()) + " " + inv.getCurrency());
               receiptLine(doc, "Tax", money(inv.getTaxTotal()) + " " + inv.getCurrency());
+              // Only when there is one: until the counter discount (V88) this was always zero and
+              // the slip printed nothing — a discounted receipt would otherwise show a subtotal
+              // and a total that disagree with no line between them.
+              if (discounted) {
+                receiptLine(
+                    doc,
+                    discountLabel(order),
+                    "-" + money(inv.getDiscountTotal()) + " " + inv.getCurrency());
+              }
               receiptTotal(doc, "TOTAL", money(inv.getGrandTotal()) + " " + inv.getCurrency());
               receiptLine(doc, "Tendered", money(tenderF) + " " + inv.getCurrency());
               if (changeF.signum() > 0) {
@@ -495,6 +510,24 @@ public final class DocumentRenderService {
     Paragraph p = new Paragraph(text, font);
     p.setAlignment(Element.ALIGN_CENTER);
     doc.add(p);
+  }
+
+  /**
+   * The receipt's discount label names the intent when the order carries one: {@code Discount
+   * (10%)} for a PERCENT counter discount, {@code Discount (SAVE10)} for a redeemed code, plain
+   * {@code Discount} for a FIXED amount (the amount beside it already says everything).
+   */
+  private static String discountLabel(SalesOrder order) {
+    if (order.getCounterDiscountType() == CouponType.PERCENT
+        && order.getCounterDiscountValue() != null) {
+      return "Discount ("
+          + order.getCounterDiscountValue().stripTrailingZeros().toPlainString()
+          + "%)";
+    }
+    if (!blank(order.getCouponCode())) {
+      return "Discount (" + order.getCouponCode() + ")";
+    }
+    return "Discount";
   }
 
   private static void receiptLine(Document doc, String left, String right)

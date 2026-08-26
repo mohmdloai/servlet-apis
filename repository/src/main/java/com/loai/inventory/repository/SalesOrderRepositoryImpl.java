@@ -7,6 +7,7 @@ import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 
 import com.loai.inventory.common.text.Phone;
+import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrderStatus;
@@ -378,6 +379,14 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
         // V87: the walk-in buyer's typed contact (IN_STORE, no CRM row) — frozen here too.
         .set(SALES_ORDER.CUSTOMER_NAME, order.getCustomerName())
         .set(SALES_ORDER.CUSTOMER_PHONE, order.getCustomerPhone())
+        // V88: the counter discount's intent + grantor (all null without one; discount_total is
+        // the money and was set above).
+        .set(
+            SALES_ORDER.COUNTER_DISCOUNT_TYPE,
+            order.getCounterDiscountType() == null ? null : order.getCounterDiscountType().name())
+        .set(SALES_ORDER.COUNTER_DISCOUNT_VALUE, order.getCounterDiscountValue())
+        .set(SALES_ORDER.COUNTER_DISCOUNT_REASON, order.getCounterDiscountReason())
+        .set(SALES_ORDER.COUNTER_DISCOUNT_BY, order.getCounterDiscountBy())
         .execute();
 
     if (!lines.isEmpty()) {
@@ -453,6 +462,11 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
     order.setDeliveryContact(
         r.getDeliveryRecipient(), r.getDeliveryPhone(), r.getDeliveryAddress());
     order.setWalkInContact(r.getCustomerName(), r.getCustomerPhone());
+    order.setCounterDiscount(
+        r.getCounterDiscountType() == null ? null : CouponType.valueOf(r.getCounterDiscountType()),
+        r.getCounterDiscountValue(),
+        r.getCounterDiscountReason(),
+        r.getCounterDiscountBy());
     return order;
   }
 

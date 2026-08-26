@@ -20,6 +20,7 @@ public class PlaceSalesOrderRequest {
   private CustomerPayload customer;
   private List<LinePayload> lines;
   private PaymentPayload payment;
+  private DiscountPayload discount;
   private String notes;
 
   public PlaceSalesOrderRequest() {}
@@ -54,6 +55,14 @@ public class PlaceSalesOrderRequest {
 
   public void setPayment(PaymentPayload payment) {
     this.payment = payment;
+  }
+
+  public DiscountPayload getDiscount() {
+    return discount;
+  }
+
+  public void setDiscount(DiscountPayload discount) {
+    this.discount = discount;
   }
 
   public String getNotes() {
@@ -158,6 +167,43 @@ public class PlaceSalesOrderRequest {
 
     public void setAmount(BigDecimal amount) {
       this.amount = amount;
+    }
+  }
+
+  /**
+   * Counter discount on an in-store sale ({@code stories/counter_discount.md}): {@code type} is
+   * {@code PERCENT} or {@code FIXED}, {@code value} the rate or the EGP amount, {@code reason}
+   * optional. Accepted only from MANAGER+ — decided in the service.
+   */
+  public static class DiscountPayload {
+    private String type;
+    private BigDecimal value;
+    private String reason;
+
+    public DiscountPayload() {}
+
+    public String getType() {
+      return type;
+    }
+
+    public void setType(String type) {
+      this.type = type;
+    }
+
+    public BigDecimal getValue() {
+      return value;
+    }
+
+    public void setValue(BigDecimal value) {
+      this.value = value;
+    }
+
+    public String getReason() {
+      return reason;
+    }
+
+    public void setReason(String reason) {
+      this.reason = reason;
     }
   }
 }

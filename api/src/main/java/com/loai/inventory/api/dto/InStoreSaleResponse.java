@@ -59,6 +59,7 @@ public class InStoreSaleResponse {
     private InvoiceStatus status;
     private BigDecimal subtotal;
     private BigDecimal taxTotal;
+    private BigDecimal discountTotal;
     private BigDecimal grandTotal;
     private BigDecimal paidAmount;
     private List<Line> lines;
@@ -73,6 +74,9 @@ public class InStoreSaleResponse {
       i.status = inv.getStatus();
       i.subtotal = inv.getSubtotal();
       i.taxTotal = inv.getTaxTotal();
+      // Carried since V21; the in-store DTO never surfaced it because it was always zero. A
+      // discounted receipt needs it to explain subtotal ≠ total.
+      i.discountTotal = inv.getDiscountTotal();
       i.grandTotal = inv.getGrandTotal();
       i.paidAmount = inv.getPaidAmount();
       i.lines =
@@ -108,6 +112,10 @@ public class InStoreSaleResponse {
 
     public BigDecimal getTaxTotal() {
       return taxTotal;
+    }
+
+    public BigDecimal getDiscountTotal() {
+      return discountTotal;
     }
 
     public BigDecimal getGrandTotal() {

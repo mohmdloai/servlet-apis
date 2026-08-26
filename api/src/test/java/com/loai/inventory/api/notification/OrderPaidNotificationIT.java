@@ -367,9 +367,11 @@ class OrderPaidNotificationIT {
         List.of(new OrderLineInput(product, 2)),
         new PaymentInput(PaymentProvider.CASH, null, new BigDecimal("20.00")),
         null,
+        null,
         ActorContext.user(staff.toString()),
         UUID.randomUUID().toString(),
-        staff);
+        staff,
+        false);
 
     assertEquals(
         0, orderPaidNotificationIds(orgId).size(), "in-store PAID flip must not fire ORDER_PAID");

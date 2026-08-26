@@ -1,10 +1,12 @@
 package com.loai.inventory.service.document;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.CreditNote;
 import com.loai.inventory.domain.model.CreditNoteStatus;
 import com.loai.inventory.domain.model.Org;
@@ -103,6 +105,107 @@ class DocumentRenderServiceTest {
         && new String(bytes, 0, 4, StandardCharsets.ISO_8859_1).equals("%PDF");
   }
 
+  /**
+   * Every string literal the document draws, one per line, across all pages and their XObjects —
+   * for asserting on what a slip actually says (labels, amounts). OpenPDF writes standard-font text
+   * as plain {@code (…) Tj} operands and renders table cells into form XObjects, so scanning the
+   * decoded streams is both simpler and more complete than the library's legacy text extractor
+   * (which recovered two lines of a receipt).
+   */
+  private static String pdfText(byte[] bytes) {
+    try {
+      com.lowagie.text.pdf.PdfReader reader = new com.lowagie.text.pdf.PdfReader(bytes);
+      StringBuilder out = new StringBuilder();
+      for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+        collectLiterals(reader.getPageContent(page), out);
+        collectXObjectLiterals(
+            reader.getPageN(page).getAsDict(com.lowagie.text.pdf.PdfName.RESOURCES), out);
+      }
+      return out.toString();
+    } catch (java.io.IOException e) {
+      throw new IllegalStateException("unreadable PDF", e);
+    }
+  }
+
+  private static void collectXObjectLiterals(
+      com.lowagie.text.pdf.PdfDictionary resources, StringBuilder out) throws java.io.IOException {
+    if (resources == null) {
+      return;
+    }
+    com.lowagie.text.pdf.PdfDictionary xobjects =
+        resources.getAsDict(com.lowagie.text.pdf.PdfName.XOBJECT);
+    if (xobjects == null) {
+      return;
+    }
+    for (Object key : xobjects.getKeys()) {
+      com.lowagie.text.pdf.PdfObject o =
+          com.lowagie.text.pdf.PdfReader.getPdfObject(
+              xobjects.get((com.lowagie.text.pdf.PdfName) key));
+      if (o instanceof com.lowagie.text.pdf.PRStream stream) {
+        collectLiterals(com.lowagie.text.pdf.PdfReader.getStreamBytes(stream), out);
+        collectXObjectLiterals(stream.getAsDict(com.lowagie.text.pdf.PdfName.RESOURCES), out);
+      }
+    }
+  }
+
+  private static final java.util.regex.Pattern LITERAL =
+      java.util.regex.Pattern.compile("\\((?:\\\\.|[^\\\\)])*\\)");
+
+  private static void collectLiterals(byte[] content, StringBuilder out) {
+    java.util.regex.Matcher m = LITERAL.matcher(new String(content, StandardCharsets.ISO_8859_1));
+    while (m.find()) {
+      String lit = m.group();
+      out.append(
+              lit.substring(1, lit.length() - 1)
+                  .replace("\\(", "(")
+                  .replace("\\)", ")")
+                  .replace("\\\\", "\\"))
+          .append('\n');
+    }
+  }
+
+  /**
+   * An invoice like {@link #anInvoice()} but carrying a discount: 100 + 20 tax − {@code discount}.
+   */
+  private static SalesInvoice aDiscountedInvoice(String discount) {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    SalesInvoice inv =
+        SalesInvoice.createDraft(
+            INVOICE,
+            ORG,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new BigDecimal("100.00"),
+            new BigDecimal("20.00"),
+            BigDecimal.ZERO,
+            new BigDecimal(discount),
+            "EGP",
+            "Nadia",
+            "nadia@example.com",
+            null,
+            null,
+            now);
+    inv.issue("INV-2026-0008", now);
+    return inv;
+  }
+
+  /**
+   * Wires a receipt render for {@code inv} against {@code order} with a tender of {@code tender}.
+   */
+  private void stubReceipt(SalesInvoice inv, SalesOrder order, String tender) {
+    InvoiceView view = new InvoiceView(inv, List.of(aLine()));
+    when(invoiceAdminService.listForOrder(ORG, ORDER))
+        .thenReturn(new InvoiceAdminService.OrderInvoices(order, List.of(view)));
+    Payment payment = mock(Payment.class);
+    when(payment.getAmount()).thenReturn(new BigDecimal(tender));
+    when(paymentService.listForOrder(ORG, ORDER))
+        .thenReturn(
+            new PaymentService.OrderPayments(
+                order, List.of(new PaymentWithRefunds(payment, List.of()))));
+    when(orgService.getById(ORG)).thenReturn(orgWithProfile());
+  }
+
   @Test
   void renderInvoice_producesPdfNamedAfterInvoiceNumber() {
     when(invoiceAdminService.get(ORG, INVOICE))
@@ -175,6 +278,51 @@ class DocumentRenderServiceTest {
 
     assertTrue(doc.filename().endsWith(".pdf"));
     assertTrue(isPdf(doc.bytes()));
+    // An undiscounted slip prints no Discount line at all — subtotal, tax, TOTAL, tendered, change.
+    String text = pdfText(doc.bytes());
+    assertFalse(text.contains("Discount"), text);
+    assertTrue(text.contains("Tendered"), text);
+    assertTrue(text.contains("Change"), text);
+  }
+
+  /**
+   * V88: a discounted sale prints its discount between Tax and TOTAL, naming the intent — otherwise
+   * the slip shows a subtotal and a total that disagree with nothing between them.
+   */
+  @Test
+  void renderReceipt_printsDiscountLineWhenDiscounted() {
+    SalesOrder order = mock(SalesOrder.class);
+    when(order.getOrderNumber()).thenReturn("SO-2026-000124");
+    when(order.getCounterDiscountType()).thenReturn(CouponType.PERCENT);
+    when(order.getCounterDiscountValue()).thenReturn(new BigDecimal("20.00"));
+    stubReceipt(aDiscountedInvoice("20.00"), order, "100.00");
+
+    String text = pdfText(svc.renderReceipt(ORG, ORDER).bytes());
+
+    assertTrue(text.contains("Discount (20%)"), text);
+    assertTrue(text.contains("-20.00 EGP"), text);
+    assertTrue(text.contains("100.00 EGP"), text); // the discounted TOTAL
+  }
+
+  /** A FIXED counter discount is a plain "Discount"; a redeemed code names the code. */
+  @Test
+  void renderReceipt_discountLabelNamesFixedPlainAndCouponByCode() {
+    SalesOrder fixed = mock(SalesOrder.class);
+    when(fixed.getOrderNumber()).thenReturn("SO-2026-000125");
+    when(fixed.getCounterDiscountType()).thenReturn(CouponType.FIXED);
+    when(fixed.getCounterDiscountValue()).thenReturn(new BigDecimal("15.00"));
+    stubReceipt(aDiscountedInvoice("15.00"), fixed, "105.00");
+    String fixedText = pdfText(svc.renderReceipt(ORG, ORDER).bytes());
+    assertTrue(fixedText.contains("Discount"), fixedText);
+    assertFalse(fixedText.contains("Discount ("), fixedText);
+    assertTrue(fixedText.contains("-15.00 EGP"), fixedText);
+
+    SalesOrder coupon = mock(SalesOrder.class);
+    when(coupon.getOrderNumber()).thenReturn("SO-2026-000126");
+    when(coupon.getCouponCode()).thenReturn("SAVE10");
+    stubReceipt(aDiscountedInvoice("10.00"), coupon, "110.00");
+    String couponText = pdfText(svc.renderReceipt(ORG, ORDER).bytes());
+    assertTrue(couponText.contains("Discount (SAVE10)"), couponText);
   }
 
   // ---- letterhead logo (V51 logo_object_key via LogoSource) ------------------------------------

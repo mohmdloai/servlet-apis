@@ -1,5 +1,6 @@
 package com.loai.inventory.api.dto;
 
+import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -62,6 +63,14 @@ public class SalesOrderResponse {
 
   private String customerPhone;
 
+  /**
+   * The counter discount a manager granted on this IN_STORE sale (V88) — why {@code discountTotal}
+   * is non-zero without a {@code couponCode}. Omitted when none. Staff plane only: it names a staff
+   * user id, so {@code forCustomerView} withholds it like every other internal field; {@code
+   * discountTotal} itself was already public and stays so.
+   */
+  private CounterDiscount counterDiscount;
+
   private List<SalesOrderLineResponse> lines;
 
   private SalesOrderResponse() {}
@@ -111,6 +120,7 @@ public class SalesOrderResponse {
     r.deliveryAddress = includeInternal ? order.getDeliveryAddress() : null;
     r.customerName = includeInternal ? order.getCustomerName() : null;
     r.customerPhone = includeInternal ? order.getCustomerPhone() : null;
+    r.counterDiscount = includeInternal ? CounterDiscount.from(order) : null;
     r.lines = lines.stream().map(SalesOrderLineResponse::from).toList();
     return r;
   }
@@ -211,7 +221,25 @@ public class SalesOrderResponse {
     return notes;
   }
 
+  public CounterDiscount getCounterDiscount() {
+    return counterDiscount;
+  }
+
   public List<SalesOrderLineResponse> getLines() {
     return lines;
+  }
+
+  /** What was keyed and who signed it; {@code reason} omitted when the manager typed none. */
+  public record CounterDiscount(CouponType type, BigDecimal value, String reason, UUID by) {
+    static CounterDiscount from(SalesOrder order) {
+      if (order.getCounterDiscountType() == null) {
+        return null;
+      }
+      return new CounterDiscount(
+          order.getCounterDiscountType(),
+          order.getCounterDiscountValue(),
+          order.getCounterDiscountReason(),
+          order.getCounterDiscountBy());
+    }
   }
 }
