@@ -24,7 +24,7 @@
         <junit.version>6.1.2</junit.version>
         <mockito.version>5.23.0</mockito.version>
         <testcontainers.version>1.21.4</testcontainers.version>
-        <jedis.version>5.1.0</jedis.version>
+        <jedis.version>8.0.0</jedis.version>
         <jjwt.version>0.13.0</jjwt.version>
         <jbcrypt.version>0.4</jbcrypt.version>
         <!-- JobRunr runs with DatabaseOptions.SKIP_CREATE, so Flyway owns its schema and this pin
