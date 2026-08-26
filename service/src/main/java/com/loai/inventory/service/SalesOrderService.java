@@ -574,6 +574,16 @@ public class SalesOrderService {
                   now);
           SalesOrder order = built.order();
           List<SalesOrderLine> orderLines = built.lines();
+          // Walk-in contact (V87): a counter sale with NO email resolves no CRM row, so the name
+          // and phone the cashier typed used to be dropped on the floor. Freeze them on the order —
+          // not on delivery_* (nothing is delivered; V80's phone is what a courier dials) and not
+          // on customer (identity stays email-keyed). Never written when the email path resolved a
+          // Customer: that row is the source of truth and the snapshot stays null. Same
+          // normalisation the CRM upsert applies, so an Arabic-keyboard phone stores the same row.
+          if (built.customer() == null && customer != null) {
+            order.setWalkInContact(
+                Text.normalizeText(customer.name()), Text.normalizeNumeric(customer.phone()));
+          }
           repo.insert(order, orderLines);
           // FIRST_ORDER — same helper, same rule as online/storefront placement: the row exists
           // now, in this txn, so a rolled-back sale (bad tender, out of stock) leaves no stamp.

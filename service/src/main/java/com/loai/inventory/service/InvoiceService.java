@@ -172,7 +172,11 @@ public final class InvoiceService {
             // contact used to be merged destructively onto the customer and cannot be recovered
             // per-order. Email stays the customer's: that is the billing identity and the address
             // the order-view link was sent to, and it is not part of the delivery block.
-            firstNonBlank(order.getDeliveryPhone(), customer == null ? null : customer.getPhone()),
+            firstNonBlank(
+                order.getDeliveryPhone(),
+                // V87: a walk-in's typed phone (no CRM row) is the only phone such a sale has.
+                firstNonBlank(
+                    order.getCustomerPhone(), customer == null ? null : customer.getPhone())),
             firstNonBlank(
                 order.getDeliveryAddress(), customer == null ? null : customer.getAddress()),
             now);
@@ -363,11 +367,20 @@ public final class InvoiceService {
    * phone and address that belong to someone else is worse than either choice alone. That also
    * makes this byte-identical to the pre-V80 rendering: back then the recipient had been merged
    * onto the customer row, so this method read the same string by a longer route.
+   *
+   * <p>Below it sits the walk-in snapshot (V87): the name a cashier typed for a counter sale that
+   * has no CRM row. The two never compete — an IN_STORE order carries no delivery recipient, and
+   * the snapshot is never set when a customer row exists — so the chain stays a strict order of
+   * "most specific to this sale" first, with the literal walk-in label as the last resort.
    */
   private static String invoiceCustomerName(SalesOrder order, Customer customer) {
     String recipient = order == null ? null : order.getDeliveryRecipient();
     if (recipient != null && !recipient.isBlank()) {
       return recipient;
+    }
+    String walkIn = order == null ? null : order.getCustomerName();
+    if (walkIn != null && !walkIn.isBlank()) {
+      return walkIn;
     }
     if (customer == null) {
       return "Walk-in customer";

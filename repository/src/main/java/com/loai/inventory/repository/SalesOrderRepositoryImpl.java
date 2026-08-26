@@ -375,6 +375,9 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
         .set(SALES_ORDER.DELIVERY_RECIPIENT, order.getDeliveryRecipient())
         .set(SALES_ORDER.DELIVERY_PHONE, order.getDeliveryPhone())
         .set(SALES_ORDER.DELIVERY_ADDRESS, order.getDeliveryAddress())
+        // V87: the walk-in buyer's typed contact (IN_STORE, no CRM row) — frozen here too.
+        .set(SALES_ORDER.CUSTOMER_NAME, order.getCustomerName())
+        .set(SALES_ORDER.CUSTOMER_PHONE, order.getCustomerPhone())
         .execute();
 
     if (!lines.isEmpty()) {
@@ -449,6 +452,7 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
     order.setCouponCode(r.getCouponCode());
     order.setDeliveryContact(
         r.getDeliveryRecipient(), r.getDeliveryPhone(), r.getDeliveryAddress());
+    order.setWalkInContact(r.getCustomerName(), r.getCustomerPhone());
     return order;
   }
 

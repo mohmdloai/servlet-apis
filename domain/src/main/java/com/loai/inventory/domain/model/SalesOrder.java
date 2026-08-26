@@ -58,6 +58,20 @@ public class SalesOrder {
   private String deliveryAddress;
 
   /**
+   * The walk-in buyer's contact for an IN_STORE sale (V87): the name and phone the cashier typed
+   * when the customer gave no email, frozen at sale. A snapshot, not an identity — there is no CRM
+   * row behind it, and it is only ever set when {@code customerId} is null (an email sale is owned
+   * by its customer row, which then stays the single source of truth).
+   *
+   * <p><b>Not the delivery contact.</b> {@code deliveryPhone} is the number a courier calls for a
+   * parcel; a counter sale has no parcel and nobody to call, and the two must never be conflated —
+   * the same "one field cannot mean both" rule that separated V80 from {@code customer.phone}.
+   */
+  private String customerName;
+
+  private String customerPhone;
+
+  /**
    * The coupon this order redeemed (roadmap item 9) — the id for the redemption count and FK
    * integrity, plus a FROZEN {@code couponCode} snapshot for display. Both null on an order placed
    * without a code, which is every order before V72 — nothing downstream may require them.
@@ -528,6 +542,25 @@ public class SalesOrder {
     this.deliveryRecipient = recipient;
     this.deliveryPhone = phone;
     this.deliveryAddress = address;
+  }
+
+  public String getCustomerName() {
+    return customerName;
+  }
+
+  public String getCustomerPhone() {
+    return customerPhone;
+  }
+
+  /**
+   * Freeze the walk-in buyer's typed contact onto an IN_STORE order with no CRM customer (V87).
+   * Called once, before insert, with already-normalised values (blank ⇒ null); the caller guards
+   * that no {@code Customer} was resolved, so an email sale never carries a second copy of its CRM
+   * row.
+   */
+  public void setWalkInContact(String name, String phone) {
+    this.customerName = name;
+    this.customerPhone = phone;
   }
 
   public UUID getCouponId() {
