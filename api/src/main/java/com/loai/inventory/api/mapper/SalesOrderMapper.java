@@ -6,12 +6,14 @@ import com.loai.inventory.api.dto.OrderStatusCountsResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.dto.SalesOrderResponse;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.service.OrderCancellationService.CancelResult;
 import com.loai.inventory.service.SalesOrderService.CustomerInput;
+import com.loai.inventory.service.SalesOrderService.DiscountInput;
 import com.loai.inventory.service.SalesOrderService.InStoreSale;
 import com.loai.inventory.service.SalesOrderService.OrderLineInput;
 import com.loai.inventory.service.SalesOrderService.OrderStatusCounts;
@@ -51,6 +53,26 @@ public final class SalesOrderMapper {
     }
     PlaceSalesOrderRequest.PaymentPayload p = req.getPayment();
     return new PaymentInput(parseProvider(p.getProvider()), p.getProviderRef(), p.getAmount());
+  }
+
+  /**
+   * Maps the optional counter-discount block; null block → null. An unknown {@code type} is a 400
+   * here (the service then range-checks the value) — the same split as {@link #toPaymentInput}.
+   */
+  public static DiscountInput toDiscountInput(PlaceSalesOrderRequest req) {
+    if (req == null || req.getDiscount() == null) {
+      return null;
+    }
+    PlaceSalesOrderRequest.DiscountPayload d = req.getDiscount();
+    CouponType type = null;
+    if (d.getType() != null && !d.getType().isBlank()) {
+      try {
+        type = CouponType.valueOf(d.getType().trim().toUpperCase(java.util.Locale.ROOT));
+      } catch (IllegalArgumentException e) {
+        throw new ValidationException("discount.type must be PERCENT or FIXED");
+      }
+    }
+    return new DiscountInput(type, d.getValue(), d.getReason());
   }
 
   public static SalesOrderResponse toResponse(Placed placed) {

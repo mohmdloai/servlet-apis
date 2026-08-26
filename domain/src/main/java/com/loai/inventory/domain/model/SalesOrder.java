@@ -80,6 +80,24 @@ public class SalesOrder {
 
   private String couponCode;
 
+  /**
+   * The counter discount a manager took off this IN_STORE sale (V88, {@code
+   * stories/counter_discount.md}) — the intent behind a non-zero {@code discountTotal} when no
+   * coupon was involved. {@code discountTotal} stays the money; these say <em>why</em>: the type
+   * and the value keyed (the coupon's two meanings, so "10%" prints as 10% and not as
+   * reverse-engineered piastres), the optional reason, and the user who granted it — which is the
+   * audit of the grant, the way a refund's {@code executedBy} is.
+   *
+   * <p>All null on every order that carried none (every order before V88, every online order, and
+   * every plain counter sale). Exclusive with {@code couponId} by DB CHECK: one discount authority
+   * per order.
+   */
+  private CouponType counterDiscountType;
+
+  private BigDecimal counterDiscountValue;
+  private String counterDiscountReason;
+  private UUID counterDiscountBy;
+
   public static SalesOrder createDraft(
       UUID id,
       UUID orgId,
@@ -407,6 +425,34 @@ public class SalesOrder {
     this.updatedAt = now;
   }
 
+  /**
+   * Record the counter discount a manager granted while the order is still a DRAFT (V88). The same
+   * split as {@link #applyCoupon}: {@link #setTotals} already carries the money, this is the
+   * provenance — what was keyed and who signed it. The service has computed the money through
+   * {@link DiscountMath} and re-run {@link #setTotals} before calling this, and has refused the
+   * grant if it would zero the grand total; this method only freezes the facts.
+   *
+   * <p>Refused on an order that already redeemed a coupon: one discount authority per order (the DB
+   * CHECK {@code ck_so_one_discount_source} is the backstop).
+   */
+  public void applyCounterDiscount(
+      CouponType type, BigDecimal value, String reason, UUID grantedBy, OffsetDateTime now) {
+    requireStatus(OrderStatus.DRAFT);
+    requireChannel(OrderChannel.IN_STORE);
+    Objects.requireNonNull(type, "type required");
+    Objects.requireNonNull(value, "value required");
+    Objects.requireNonNull(grantedBy, "grantedBy required");
+    Objects.requireNonNull(now, "now required");
+    if (this.couponId != null) {
+      throw new IllegalStateException("an order takes a coupon or a counter discount, not both");
+    }
+    this.counterDiscountType = type;
+    this.counterDiscountValue = value.setScale(MONEY_SCALE, MONEY_ROUNDING);
+    this.counterDiscountReason = reason;
+    this.counterDiscountBy = grantedBy;
+    this.updatedAt = now;
+  }
+
   public void updateNotes(String notes, OffsetDateTime now) {
     Objects.requireNonNull(now, "now required");
     this.notes = notes;
@@ -577,6 +623,34 @@ public class SalesOrder {
 
   public void setCouponCode(String couponCode) {
     this.couponCode = couponCode;
+  }
+
+  public CouponType getCounterDiscountType() {
+    return counterDiscountType;
+  }
+
+  public BigDecimal getCounterDiscountValue() {
+    return counterDiscountValue;
+  }
+
+  public String getCounterDiscountReason() {
+    return counterDiscountReason;
+  }
+
+  public UUID getCounterDiscountBy() {
+    return counterDiscountBy;
+  }
+
+  /**
+   * Repository rehydration only (beside {@link #setCouponId}/{@link #setWalkInContact}): the
+   * counter-discount snapshot is frozen data, not state-machine state, so it rides as fields rather
+   * than widening the rehydrate signature. New grants go through {@link #applyCounterDiscount}.
+   */
+  public void setCounterDiscount(CouponType type, BigDecimal value, String reason, UUID by) {
+    this.counterDiscountType = type;
+    this.counterDiscountValue = value;
+    this.counterDiscountReason = reason;
+    this.counterDiscountBy = by;
   }
 
   @Override

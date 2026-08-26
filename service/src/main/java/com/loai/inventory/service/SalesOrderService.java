@@ -1,17 +1,21 @@
 package com.loai.inventory.service;
 
+import com.loai.inventory.common.exception.ApprovalRequiredException;
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.text.Locales;
 import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.ActorContext;
+import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.Customer;
+import com.loai.inventory.domain.model.DiscountMath;
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
 import com.loai.inventory.domain.model.PaymentProvider;
@@ -183,6 +187,17 @@ public class SalesOrderService {
    * Cashier tender for an in-store sale. {@code amount} is optional (defaults to the grand total).
    */
   public record PaymentInput(PaymentProvider provider, String providerRef, BigDecimal amount) {}
+
+  /**
+   * A counter discount keyed by a manager on an in-store sale ({@code
+   * stories/counter_discount.md}): {@code type} and {@code value} carry the coupon's two meanings
+   * (a rate in (0, 100] for {@code PERCENT}, an EGP amount for {@code FIXED}); {@code reason} is
+   * optional free text. Absent entirely on the ordinary sale.
+   */
+  public record DiscountInput(CouponType type, BigDecimal value, String reason) {}
+
+  /** Longest reason a manager may attach to a counter discount. */
+  public static final int COUNTER_DISCOUNT_REASON_MAX = 200;
 
   /** Carries the placed order + its lines + the resolved customer for response mapping. */
   public record Placed(SalesOrder order, List<SalesOrderLine> lines, Customer customer) {}
@@ -512,18 +527,29 @@ public class SalesOrderService {
    * idempotency_key)} UNIQUE (this method short-circuits a replay before doing any work) and the
    * payment transaction's {@code (provider, provider_ref)} UNIQUE (the cash ref is derived from the
    * same idempotency key — see {@link PaymentService#recordInStorePayment}).
+   *
+   * <p><b>Counter discount (V88).</b> An optional {@code discount} takes a PERCENT or FIXED amount
+   * off the whole ticket through {@link DiscountMath} — the coupon's arithmetic, so a "10% off" at
+   * the till and a {@code SAVE10} code produce the same piastres. It is accepted only when {@code
+   * callerIsManagerOrAdmin}: the sale stays a STAFF action, the discount block alone raises the bar
+   * — the codebase's one money-authority pattern ({@code refund_approval_threshold} → OWNER),
+   * decided here in the service (not the handler) so no other caller can dodge it, and refused as
+   * {@link ApprovalRequiredException} so the client can say "needs MANAGER" instead of "no
+   * permission". {@code verifiedBy} — the calling user — is also recorded as the grantor.
    */
   public InStoreSale placeInStoreSale(
       UUID orgId,
       CustomerInput customer,
       List<OrderLineInput> lines,
       PaymentInput payment,
+      DiscountInput discount,
       String notes,
       ActorContext actor,
       String idempotencyKey,
-      UUID verifiedBy) {
+      UUID verifiedBy,
+      boolean callerIsManagerOrAdmin) {
 
-    validateInStoreInputs(lines, payment);
+    validateInStoreInputs(lines, payment, discount);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -583,6 +609,9 @@ public class SalesOrderService {
           if (built.customer() == null && customer != null) {
             order.setWalkInContact(
                 Text.normalizeText(customer.name()), Text.normalizeNumeric(customer.phone()));
+          }
+          if (discount != null) {
+            applyCounterDiscount(order, discount, callerIsManagerOrAdmin, verifiedBy, now);
           }
           repo.insert(order, orderLines);
           // FIRST_ORDER — same helper, same rule as online/storefront placement: the row exists
@@ -1009,7 +1038,8 @@ public class SalesOrderService {
     validateLines(lines);
   }
 
-  private void validateInStoreInputs(List<OrderLineInput> lines, PaymentInput payment) {
+  private void validateInStoreInputs(
+      List<OrderLineInput> lines, PaymentInput payment, DiscountInput discount) {
     validateLines(lines);
     if (payment == null || payment.provider() == null) {
       throw new ValidationException("payment.provider is required");
@@ -1020,6 +1050,77 @@ public class SalesOrderService {
     if (payment.amount() != null && payment.amount().signum() <= 0) {
       throw new ValidationException("payment.amount must be > 0");
     }
+    if (discount != null) {
+      validateDiscount(discount);
+    }
+  }
+
+  /**
+   * Shape checks on a counter discount — cause-naming 400s, before the authority question is even
+   * asked (a malformed request from a manager is still malformed). The ranges are the coupon's:
+   * PERCENT in (0, 100], FIXED strictly positive; whether the money then exceeds the ticket is
+   * decided against the real subtotal inside the txn.
+   */
+  private static void validateDiscount(DiscountInput discount) {
+    if (discount.type() == null) {
+      throw new ValidationException("discount.type must be PERCENT or FIXED");
+    }
+    BigDecimal value = discount.value();
+    if (value == null) {
+      throw new ValidationException("discount.value is required");
+    }
+    if (discount.type() == CouponType.PERCENT) {
+      if (value.signum() <= 0 || value.compareTo(new BigDecimal("100")) > 0) {
+        throw new ValidationException("discount.value must be > 0 and <= 100 for PERCENT");
+      }
+    } else if (value.signum() <= 0) {
+      throw new ValidationException("discount.value must be > 0 for FIXED");
+    }
+    if (discount.reason() != null && discount.reason().length() > COUNTER_DISCOUNT_REASON_MAX) {
+      throw new ValidationException(
+          "discount.reason must be at most " + COUNTER_DISCOUNT_REASON_MAX + " characters");
+    }
+  }
+
+  /**
+   * Take the counter discount off the DRAFT order inside the sale txn (V88): the money through
+   * {@link DiscountMath} against the goods subtotal (pre-tax; tax stays on the undiscounted lines —
+   * the coupon convention, {@code grand = subtotal + tax + shipping − discount}), the totals
+   * re-run, then the provenance frozen on the order.
+   *
+   * <p>The authority check sits here, once the money is known, so the refusal can name the amount
+   * asked for — and before the insert, so a STAFF request writes nothing (the txn rolls back the
+   * claimed order number with it). No {@code threshold_amount} on the refusal on purpose: this
+   * slice has no configurable STAFF allowance (that knob is the deferred threshold half of the
+   * pattern), and a literal {@code 0.00} would make the client say "above the EGP 0.00 limit".
+   */
+  private static void applyCounterDiscount(
+      SalesOrder order,
+      DiscountInput discount,
+      boolean callerIsManagerOrAdmin,
+      UUID grantedBy,
+      OffsetDateTime now) {
+    BigDecimal money =
+        DiscountMath.discountFor(discount.type(), discount.value(), order.getSubtotal());
+    if (!callerIsManagerOrAdmin) {
+      throw new ApprovalRequiredException(
+          "a counter discount of "
+              + money
+              + " on order "
+              + order.getOrderNumber()
+              + " requires MANAGER",
+          OrgRole.MANAGER.name(),
+          null,
+          money);
+    }
+    order.setTotals(order.getSubtotal(), order.getTaxTotal(), order.getShippingTotal(), money, now);
+    // The coupon's rule, for the coupon's reason: the payment machinery assumes money moves, and a
+    // free giveaway is an inventory adjustment, not a sale.
+    if (order.getGrandTotal().signum() <= 0) {
+      throw new ValidationException("This discount exceeds the order total");
+    }
+    order.applyCounterDiscount(
+        discount.type(), discount.value(), Text.normalizeText(discount.reason()), grantedBy, now);
   }
 
   private void validateLines(List<OrderLineInput> lines) {

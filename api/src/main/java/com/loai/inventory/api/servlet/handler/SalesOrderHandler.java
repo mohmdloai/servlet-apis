@@ -43,7 +43,9 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code POST /} — place an order, dispatching by request {@code channel}: {@code IN_STORE}
  *       runs the whole sale in one txn ({@code stories/in_store_sale.md}); {@code ONLINE} / {@code
  *       PHONE} (the default) place a PENDING_PAYMENT order with reservations ({@code
- *       stories/place_online_order.md}). Both require STAFF (system ADMIN bypasses).
+ *       stories/place_online_order.md}). Both require STAFF (system ADMIN bypasses); an in-store
+ *       {@code discount} block additionally needs MANAGER+, decided in the service (403 {@code
+ *       APPROVAL_REQUIRED} with {@code required_role: MANAGER}).
  *   <li>{@code POST /{id}/cancel} — cancel an order (MANAGER).
  *   <li>{@code GET /?order_number=} — exact-match lookup by human-readable number, the pre-flight
  *       for the manual money path ({@code stories/lookup_order_by_number.md}). VIEWER. A bare
@@ -183,6 +185,14 @@ public class SalesOrderHandler implements OrgResourceHandler {
       throw new ValidationException(IDEMPOTENCY_HEADER + " header is required");
     }
 
+    // A counter discount is an in-store gesture (stories/counter_discount.md): staff phone orders
+    // take coupons, and a discount on an order that still has to be paid remotely is a different
+    // authority again. Refused by shape here; the MANAGER gate itself lives in the service.
+    SalesOrderService.DiscountInput discount = SalesOrderMapper.toDiscountInput(body);
+    if (discount != null && channel != OrderChannel.IN_STORE) {
+      throw new ValidationException("discount is only accepted on IN_STORE sales");
+    }
+
     if (channel == OrderChannel.IN_STORE) {
       InStoreSale sale =
           service.placeInStoreSale(
@@ -190,10 +200,12 @@ public class SalesOrderHandler implements OrgResourceHandler {
               SalesOrderMapper.toCustomerInput(body),
               SalesOrderMapper.toLineInputs(body),
               SalesOrderMapper.toPaymentInput(body),
+              discount,
               body.getNotes(),
               actor,
               idempotencyKey,
-              sc.actorId());
+              sc.actorId(),
+              isManagerOrAdmin(sc, orgId));
       writeJson(resp, 201, SalesOrderMapper.toInStoreResponse(sale));
       return;
     }
@@ -376,6 +388,19 @@ public class SalesOrderHandler implements OrgResourceHandler {
     }
     var roles = sc.orgRoles() == null ? null : sc.orgRoles().get(orgId);
     return roles != null && roles.contains(OrgRole.OWNER);
+  }
+
+  /**
+   * MANAGER or OWNER in the org (or system ADMIN) — gates a counter discount on an in-store sale.
+   * Both roles are named explicitly: {@link #isOwnerOrAdmin} tests {@code contains(OWNER)} alone,
+   * and an OWNER at the till must clear a MANAGER bar.
+   */
+  static boolean isManagerOrAdmin(SecurityContext sc, UUID orgId) {
+    if (sc.isSystemAdmin()) {
+      return true;
+    }
+    var roles = sc.orgRoles() == null ? null : sc.orgRoles().get(orgId);
+    return roles != null && (roles.contains(OrgRole.MANAGER) || roles.contains(OrgRole.OWNER));
   }
 
   private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {

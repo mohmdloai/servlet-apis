@@ -351,9 +351,11 @@ class PlatformFunnelIT {
         List.of(new SalesOrderService.OrderLineInput(product, 1)),
         new SalesOrderService.PaymentInput(PaymentProvider.CASH, null, null),
         null,
+        null,
         actor(staff),
         UUID.randomUUID().toString(),
-        staff);
+        staff,
+        false);
 
     JsonNode stages = funnel("?cohort=all&path=all").path("stages");
     assertEquals(0, reachedOf(stages, "PUBLISHED"));
@@ -500,9 +502,11 @@ class PlatformFunnelIT {
         List.of(new SalesOrderService.OrderLineInput(product, 1)),
         new SalesOrderService.PaymentInput(PaymentProvider.CASH, null, null),
         null,
+        null,
         actor(staff),
         UUID.randomUUID().toString(),
-        staff);
+        staff,
+        false);
     // A provisioned org, its ORG_CREATE audit row being what the ACTIVATED split keys on.
     UUID admin = createUser("ops@platform.test");
     UUID provisioned =
@@ -572,9 +576,11 @@ class PlatformFunnelIT {
                 List.of(new SalesOrderService.OrderLineInput(product, 5)),
                 new SalesOrderService.PaymentInput(PaymentProvider.CASH, null, null),
                 null,
+                null,
                 actor(staff),
                 UUID.randomUUID().toString(),
-                staff));
+                staff,
+                false));
 
     assertEquals(0, dsl.fetchCount(SALES_ORDER), "fixture control: the order rolled back");
     assertNull(reachedAt(org, "FIRST_ORDER"), "a rolled-back order left a FIRST_ORDER stamp");

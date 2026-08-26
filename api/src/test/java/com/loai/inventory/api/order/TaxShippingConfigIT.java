@@ -309,9 +309,11 @@ class TaxShippingConfigIT {
             List.of(new OrderLineInput(product, 3)),
             new PaymentInput(PaymentProvider.CASH, null, null),
             null,
+            null,
             actor,
             UUID.randomUUID().toString(),
-            staff);
+            staff,
+            false);
 
     // subtotal 30.00 + tax 4.20, NO shipping → grand 34.20; invoice mirrors it.
     assertEquals(0, BigDecimal.ZERO.compareTo(sale.order().getShippingTotal()));
