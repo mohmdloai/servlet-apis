@@ -60,9 +60,9 @@ docker exec inventory_db sh -c \
 # OWNER of three stores + platform ADMIN (the run.sh output names the granted slugs).
 ```
 
-### perfdb schema state: hand-migrated to V77 (2026-07-28)
+### perfdb schema state: hand-migrated to V86 (2026-08-26)
 
-**perfdb's schema and Flyway history are both at V77.** It got there by hand in psql — Flyway is
+**perfdb's schema and Flyway history are both at V86.** It got there by hand in psql — Flyway is
 still never pointed at it, and the history-copy recipe above is for a *fresh* reseed only (on an
 already-populated perfdb it PK-collides with the existing rows; see the gotcha below). What was
 applied, and how:
@@ -78,18 +78,23 @@ applied, and how:
 - **History rows 73–77** were then INSERTed, copied verbatim from the dev `inventorydb`'s
   `flyway_schema_history` (`pg_dump --column-inserts`, filtered to those versions) so the
   checksums match the files in the jar and startup validation passes.
+- **V78–V86** (notification claim lease, `customer.phone_e164` + backfill over all 200,001 seeded
+  customers ~9 s, order delivery contact, `customer.locale`, WhatsApp tables + widened channel CHECKs,
+  `org.discoverable`, V84 deadline clearing (1 order, 0 reservations), category/collection image keys)
+  were applied 2026-08-26 by the standing procedure below, one version at a time — DDL first, then
+  that version's history row. History is now row-for-row identical to dev (86 rows).
 
-**The standing procedure when a new migration lands on dev** (V78 and beyond), before benching:
+**The standing procedure when a new migration lands on dev** (V87 and beyond), before benching:
 
 ```bash
 # 1. apply the DDL by hand, never via Flyway:
-docker cp repository/src/main/resources/db/migration/V78__*.sql inventory_db:/tmp/
+docker cp repository/src/main/resources/db/migration/V87__*.sql inventory_db:/tmp/
 docker exec -e PGOPTIONS="-c search_path=inventorydb" inventory_db \
-  psql -U postgres -d perfdb -v ON_ERROR_STOP=1 --single-transaction -f /tmp/V78__*.sql
+  psql -U postgres -d perfdb -v ON_ERROR_STOP=1 --single-transaction -f /tmp/V87__*.sql
 # 2. copy that version's history row from the dev DB (checksum must match the jar):
 docker exec inventory_db sh -c \
   "pg_dump -U postgres --data-only --column-inserts -t inventorydb.flyway_schema_history inventorydb" \
-  | grep "VALUES (78, '78'" \
+  | grep "VALUES (87, '87'" \
   | docker exec -i inventory_db psql -U postgres -d perfdb -v ON_ERROR_STOP=1
 ```
 
