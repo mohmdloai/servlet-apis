@@ -365,7 +365,7 @@ class OrderPaidNotificationIT {
         orgId,
         new CustomerInput("Walk In", "walkin@acme.test", null, null),
         List.of(new OrderLineInput(product, 2)),
-        new PaymentInput(PaymentProvider.CASH, null, new BigDecimal("20.00")),
+        List.of(new PaymentInput(PaymentProvider.CASH, null, new BigDecimal("20.00"))),
         null,
         null,
         ActorContext.user(staff.toString()),

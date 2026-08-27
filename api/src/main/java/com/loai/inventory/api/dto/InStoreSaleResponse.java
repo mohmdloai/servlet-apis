@@ -1,7 +1,9 @@
 package com.loai.inventory.api.dto;
 
 import com.loai.inventory.domain.model.InvoiceStatus;
+import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.service.SalesOrderService.InStoreSale;
+import com.loai.inventory.service.SalesOrderService.TenderPayment;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -9,13 +11,18 @@ import java.util.UUID;
 
 /**
  * Result of an in-store sale ({@code POST /api/orgs/{orgId}/sales-orders} with {@code channel =
- * IN_STORE}): the CLOSED order, the ISSUED→PAID invoice, the ALLOCATED payment and the DELIVERED
- * fulfillment — every aggregate created in the one checkout transaction.
+ * IN_STORE}): the CLOSED order, the ISSUED→PAID invoice, the ALLOCATED payment per tender and the
+ * DELIVERED fulfillment — every aggregate created in the one checkout transaction.
+ *
+ * <p>{@code payments} is the truth, one entry per tender in the ledger's order ({@code
+ * stories/split_tender.md}); {@code payment} repeats its first element for one release so an admin
+ * build that predates the split-tender pair still renders.
  */
 public class InStoreSaleResponse {
 
   private SalesOrderResponse order;
   private Invoice invoice;
+  private List<Payment> payments;
   private Payment payment;
   private Fulfillment fulfillment;
   private Change change;
@@ -26,7 +33,8 @@ public class InStoreSaleResponse {
     InStoreSaleResponse r = new InStoreSaleResponse();
     r.order = SalesOrderResponse.from(sale.order(), sale.lines());
     r.invoice = Invoice.from(sale);
-    r.payment = Payment.from(sale);
+    r.payments = sale.payments().stream().map(Payment::from).toList();
+    r.payment = r.payments.get(0);
     r.fulfillment = Fulfillment.from(sale);
     r.change = Change.from(sale);
     return r;
@@ -38,6 +46,10 @@ public class InStoreSaleResponse {
 
   public Invoice getInvoice() {
     return invoice;
+  }
+
+  public List<Payment> getPayments() {
+    return payments;
   }
 
   public Payment getPayment() {
@@ -140,24 +152,53 @@ public class InStoreSaleResponse {
       BigDecimal unitPrice,
       BigDecimal lineTotal) {}
 
-  /** The recognised + allocated payment summary. */
-  public record Payment(UUID id, String status, BigDecimal amount, BigDecimal unallocatedAmount) {
-    static Payment from(InStoreSale sale) {
-      com.loai.inventory.domain.model.Payment p = sale.payment();
-      return new Payment(p.getId(), p.getStatus().name(), p.getAmount(), p.getUnallocatedAmount());
+  /** One recognised + allocated tender: the payment with its transaction's provider and ref. */
+  public record Payment(
+      UUID id,
+      String provider,
+      String providerRef,
+      String status,
+      BigDecimal amount,
+      BigDecimal unallocatedAmount) {
+    static Payment from(TenderPayment tp) {
+      com.loai.inventory.domain.model.Payment p = tp.payment();
+      return new Payment(
+          p.getId(),
+          tp.transaction().getProvider().name(),
+          tp.transaction().getProviderRef(),
+          p.getStatus().name(),
+          p.getAmount(),
+          p.getUnallocatedAmount());
     }
   }
 
   /**
-   * Counter change handed back for an overpaid tender: the EXECUTED cash refund of the excess.
-   * Omitted (null) for an exact tender.
+   * Counter change handed back for an overpaid tender: {@code amount} is the sum across every
+   * residual payment, {@code refunds} one EXECUTED cash refund per such payment; {@code refundId} /
+   * {@code status} describe the first (compat). Omitted (null) for an exact tender.
    */
-  public record Change(BigDecimal amount, UUID refundId, String status) {
+  public record Change(
+      BigDecimal amount, UUID refundId, String status, List<ChangeRefund> refunds) {
     static Change from(InStoreSale sale) {
-      com.loai.inventory.domain.model.Refund r = sale.changeRefund();
-      return r == null ? null : new Change(r.getAmount(), r.getId(), r.getStatus().name());
+      if (sale.changeRefunds().isEmpty()) {
+        return null;
+      }
+      Refund first = sale.changeRefunds().get(0);
+      return new Change(
+          sale.changeAmount(),
+          first.getId(),
+          first.getStatus().name(),
+          sale.changeRefunds().stream()
+              .map(
+                  r ->
+                      new ChangeRefund(
+                          r.getId(), r.getAmount(), r.getStatus().name(), r.getPaymentId()))
+              .toList());
     }
   }
+
+  /** One change refund: the EXECUTED cash draw off the payment that held the residue. */
+  public record ChangeRefund(UUID refundId, BigDecimal amount, String status, UUID paymentId) {}
 
   /** The DELIVERED fulfillment summary. */
   public record Fulfillment(UUID id, String status, OffsetDateTime deliveredAt) {

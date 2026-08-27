@@ -10,9 +10,10 @@ import java.util.UUID;
  *
  * <p>{@code channel} selects the flow: {@code ONLINE}/{@code PHONE} (default) place a
  * PENDING_PAYMENT order with reservations; {@code IN_STORE} runs the whole sale in one txn and
- * reads the {@code payment} block. Validation lives in {@link
- * com.loai.inventory.service.SalesOrderService}; this is just a Jackson data carrier (snake_case
- * JSON ↔ camelCase Java handled by the global {@code ObjectMapper}).
+ * reads the tender — the single {@code payment} block, or {@code payments} (1–4 tenders that
+ * together settle the ticket, {@code stories/split_tender.md}); both at once is a 400. Validation
+ * lives in {@link com.loai.inventory.service.SalesOrderService}; this is just a Jackson data
+ * carrier (snake_case JSON ↔ camelCase Java handled by the global {@code ObjectMapper}).
  */
 public class PlaceSalesOrderRequest {
 
@@ -20,6 +21,7 @@ public class PlaceSalesOrderRequest {
   private CustomerPayload customer;
   private List<LinePayload> lines;
   private PaymentPayload payment;
+  private List<PaymentPayload> payments;
   private DiscountPayload discount;
   private String notes;
 
@@ -55,6 +57,14 @@ public class PlaceSalesOrderRequest {
 
   public void setPayment(PaymentPayload payment) {
     this.payment = payment;
+  }
+
+  public List<PaymentPayload> getPayments() {
+    return payments;
+  }
+
+  public void setPayments(List<PaymentPayload> payments) {
+    this.payments = payments;
   }
 
   public DiscountPayload getDiscount() {
@@ -137,7 +147,11 @@ public class PlaceSalesOrderRequest {
     }
   }
 
-  /** Cashier tender for an in-store sale. {@code provider} is the enum name or the DB literal. */
+  /**
+   * One cashier tender for an in-store sale. {@code provider} is the enum name or the DB literal;
+   * {@code amount} may be omitted on the single {@code payment} block (exact) but not in {@code
+   * payments}.
+   */
   public static class PaymentPayload {
     private String provider;
     private String providerRef;

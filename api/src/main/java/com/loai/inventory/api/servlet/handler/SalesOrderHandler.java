@@ -217,7 +217,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
               orgId,
               SalesOrderMapper.toCustomerInput(body),
               SalesOrderMapper.toLineInputs(body),
-              SalesOrderMapper.toPaymentInput(body),
+              SalesOrderMapper.toPaymentInputs(body),
               discount,
               body.getNotes(),
               actor,

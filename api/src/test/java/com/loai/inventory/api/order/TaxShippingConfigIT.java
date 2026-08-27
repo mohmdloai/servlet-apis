@@ -307,7 +307,7 @@ class TaxShippingConfigIT {
             org,
             new CustomerInput("Nadia", "nadia@acme.test", null, null),
             List.of(new OrderLineInput(product, 3)),
-            new PaymentInput(PaymentProvider.CASH, null, null),
+            List.of(new PaymentInput(PaymentProvider.CASH, null, null)),
             null,
             null,
             actor,

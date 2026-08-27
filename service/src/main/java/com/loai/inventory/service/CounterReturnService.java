@@ -18,6 +18,7 @@ import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.Refund;
+import com.loai.inventory.domain.model.RefundStatus;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -29,6 +30,7 @@ import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepository;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
+import com.loai.inventory.domain.repository.PaymentTransactionRepository;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.RefundRepository;
 import com.loai.inventory.domain.repository.RefundRepositoryFactory;
@@ -72,9 +74,13 @@ import org.slf4j.LoggerFactory;
  *       quantity, which takes the exact remainder — so partial returns are fair to the piastre and
  *       a complete return sums to exactly the grand total ({@code InvoiceService.discountToBill}'s
  *       rule, one level down).
- *   <li><b>Cash executes now; a transfer stays PENDING.</b> The refund's method is the sale's
- *       tender: CASH is handed back and executed here; INSTAPAY_IN_STORE creates a PENDING refund
- *       with method INSTAPAY_MANUAL for the existing two-step.
+ *   <li><b>Cash executes now; a transfer stays PENDING.</b> The refund is CASH — handed back and
+ *       executed here — when the note's total fits the cash the drawer still holds for this sale
+ *       ({@code cash_refundable} = Σ cash tenders − Σ non-CANCELLED CASH refunds on the sale: the
+ *       counter change and every earlier return alike), else a PENDING refund with method
+ *       INSTAPAY_MANUAL for the existing two-step. A cash-only sale therefore always refunds cash
+ *       and an InstaPay-only sale always a transfer; a split sale ({@code stories/split_tender.md})
+ *       goes either way per return, recomputed under the invoice lock.
  *   <li><b>Restock.</b> {@code StockReason.RETURNED} — in the enum since V5, never written until
  *       now — with the order id; default on, off for damaged goods.
  *   <li><b>Idempotent, because it moves money.</b> A replay under the same key returns the prior
@@ -129,13 +135,27 @@ public final class CounterReturnService {
 
   // Wire shapes
 
-  /** How the money goes back: the sale's tender decides. */
+  /** How the money goes back: the sale's tenders and the cash the drawer still holds decide. */
   public enum RefundMode {
-    /** A CASH sale — the refund is EXECUTED in the same transaction, cash across the counter. */
+    /**
+     * Any return fits in cash ({@code cash_refundable ≥} what can still be credited — every
+     * cash-only sale) — the refund is EXECUTED in the same transaction, cash across the counter.
+     */
     IMMEDIATE_CASH,
-    /** An InstaPay sale — a PENDING refund the merchant executes after sending the transfer. */
-    PENDING_TRANSFER
+    /**
+     * No cash to give back (an InstaPay-only sale, or a split whose cash is spent) — a PENDING
+     * refund the merchant executes after sending the transfer.
+     */
+    PENDING_TRANSFER,
+    /**
+     * A split sale with some cash headroom left: cash iff {@code note.total ≤ cash_refundable},
+     * decided per return — the sheet previews it per quantity, the POST decides.
+     */
+    SPLIT
   }
+
+  /** One tender of the sale as the ledger holds it, in the allocator's (canonical) order. */
+  public record SaleTender(PaymentProvider provider, BigDecimal amount) {}
 
   /** One invoice line as the return sheet sees it. {@code unitRefund} is display-only. */
   public record ReturnableLine(
@@ -148,12 +168,18 @@ public final class CounterReturnService {
       int returnable,
       BigDecimal unitRefund) {}
 
-  /** The preview behind {@code GET /sales-orders/{id}/returnable}. */
+  /**
+   * The preview behind {@code GET /sales-orders/{id}/returnable}. {@code tender} is the first
+   * (canonical) tender — the single-tender view; {@code tenders} lists them all; {@code
+   * cashRefundable} is the live headroom the {@link RefundMode#SPLIT} rule is judged against.
+   */
   public record Returnable(
       SalesOrder order,
       SalesInvoice invoice,
       PaymentProvider tender,
       RefundMode refundMode,
+      List<SaleTender> tenders,
+      BigDecimal cashRefundable,
       List<ReturnableLine> lines) {}
 
   public record LineInput(UUID productId, int quantity) {}
@@ -189,9 +215,9 @@ public final class CounterReturnService {
     SalesInvoiceRepository invoiceRepo = invoiceRepoFactory.create(rootDsl);
     SalesInvoice invoice = liveInvoice(invoiceRepo, orgId, order);
     List<SalesInvoiceLine> invoiceLines = invoiceRepo.findLinesByInvoiceId(invoice.getId());
-    Map<UUID, Integer> credited =
-        creditNoteRepoFactory.create(rootDsl).creditedQuantityByProduct(orgId, invoice.getId());
-    PaymentProvider tender = tenderOf(rootDsl, orgId, order);
+    CreditNoteRepository creditNoteRepo = creditNoteRepoFactory.create(rootDsl);
+    Map<UUID, Integer> credited = creditNoteRepo.creditedQuantityByProduct(orgId, invoice.getId());
+    Ledger ledger = ledgerOf(rootDsl, orgId, order, invoice, creditNoteRepo);
 
     List<ReturnableLine> lines = new ArrayList<>(invoiceLines.size());
     for (SalesInvoiceLine l : invoiceLines) {
@@ -214,7 +240,14 @@ public final class CounterReturnService {
               returnable,
               unitRefund.max(BigDecimal.ZERO)));
     }
-    return new Returnable(order, invoice, tender, modeFor(tender), lines);
+    return new Returnable(
+        order,
+        invoice,
+        ledger.tender(),
+        ledger.mode(),
+        ledger.tenders(),
+        ledger.cashRefundable(),
+        lines);
   }
 
   // Return
@@ -374,12 +407,14 @@ public final class CounterReturnService {
             creditNoteRepo.updateRestocked(note);
           }
 
-          // 6. The refund: the sale's tender decides the method and whether it executes now.
-          PaymentProvider tender = tenderOf(txDsl, orgId, order);
-          PaymentProvider method =
-              tender == PaymentProvider.CASH
-                  ? PaymentProvider.CASH
-                  : PaymentProvider.INSTAPAY_MANUAL;
+          // 6. The refund: cash iff the note fits the cash the drawer still holds for this sale,
+          //    read from the ledger now, under the invoice lock issuance took — never a cached
+          //    figure, so two returns on one receipt cannot both spend the same headroom. A
+          //    cash-only sale always fits (its headroom is exactly what can still be credited);
+          //    an InstaPay-only sale never does.
+          Ledger ledger = ledgerOf(txDsl, orgId, order, invoice, creditNoteRepo);
+          boolean cash = note.getTotal().compareTo(ledger.cashRefundable()) <= 0;
+          PaymentProvider method = cash ? PaymentProvider.CASH : PaymentProvider.INSTAPAY_MANUAL;
           Refund refund =
               Refund.createPending(
                   UUID.randomUUID(),
@@ -394,7 +429,7 @@ public final class CounterReturnService {
                   now);
           refundRepo.insert(refund);
           PaymentTransaction debit = null;
-          if (tender == PaymentProvider.CASH) {
+          if (cash) {
             RefundService.Executed executed =
                 refundService.executeInTx(txDsl, orgId, refund.getId(), null, actorUserId, now);
             refund = executed.refund();
@@ -407,13 +442,15 @@ public final class CounterReturnService {
           }
 
           log.info(
-              "Counter return order={} orgId={} note={} total={} discountShare={} refund={} {} restocked={}",
+              "Counter return order={} orgId={} note={} total={} discountShare={} cashRefundable={} refund={} {} {} restocked={}",
               order.getOrderNumber(),
               orgId,
               note.getCreditNoteNumber(),
               note.getTotal(),
               discountShare,
+              ledger.cashRefundable(),
               refund.getId(),
+              method,
               refund.getStatus(),
               cmd.restock());
           return new Returned(note, issued.lines(), refund, debit, moves, false);
@@ -461,23 +498,103 @@ public final class CounterReturnService {
     return invoice;
   }
 
-  /** The tender the sale was paid with — the provider of its one payment's transaction. */
-  private PaymentProvider tenderOf(DSLContext dsl, UUID orgId, SalesOrder order) {
+  /**
+   * The money side of a counter sale as the ledger holds it: its tenders in the allocator's order,
+   * the cash the drawer still holds for it, and what the invoice can still credit.
+   */
+  private record Ledger(
+      List<SaleTender> tenders, BigDecimal cashRefundable, BigDecimal remainingCreditable) {
+
+    /** The first (canonical) tender — the single-tender view. */
+    PaymentProvider tender() {
+      return tenders.get(0).provider();
+    }
+
+    boolean hasCash() {
+      return tenders.stream().anyMatch(t -> t.provider() == PaymentProvider.CASH);
+    }
+
+    RefundMode mode() {
+      if (!hasCash()) {
+        return RefundMode.PENDING_TRANSFER;
+      }
+      if (cashRefundable.compareTo(remainingCreditable) >= 0) {
+        return RefundMode.IMMEDIATE_CASH;
+      }
+      if (cashRefundable.signum() == 0) {
+        return RefundMode.PENDING_TRANSFER;
+      }
+      return RefundMode.SPLIT;
+    }
+  }
+
+  /**
+   * {@code cash_refundable = Σ cash tenders − Σ CASH refunds on the sale that are not CANCELLED} —
+   * the counter-change refunds against the sale's payments and the credit-note-backed refunds
+   * against its invoice's notes alike, each row counted once. {@code remaining_creditable = grand −
+   * Σ live notes}. Read from the rows, never cached.
+   */
+  private Ledger ledgerOf(
+      DSLContext dsl,
+      UUID orgId,
+      SalesOrder order,
+      SalesInvoice invoice,
+      CreditNoteRepository creditNoteRepo) {
     List<Payment> payments = paymentRepoFactory.create(dsl).findByOrderId(orgId, order.getId());
     if (payments.isEmpty()) {
       throw new ConflictException(
           "order " + order.getOrderNumber() + " has no payment to refund against");
     }
-    UUID txnId = payments.get(0).getPaymentTransactionId();
-    return txnRepoFactory
-        .create(dsl)
-        .findById(orgId, txnId)
-        .map(PaymentTransaction::getProvider)
-        .orElseThrow(() -> new IllegalStateException("payment transaction " + txnId + " missing"));
+    PaymentTransactionRepository txnRepo = txnRepoFactory.create(dsl);
+    RefundRepository refundRepo = refundRepoFactory.create(dsl);
+
+    List<SaleTender> tenders = new ArrayList<>(payments.size());
+    BigDecimal cashIn = BigDecimal.ZERO;
+    Map<UUID, Refund> cashOut = new LinkedHashMap<>();
+    for (Payment p : payments) {
+      UUID txnId = p.getPaymentTransactionId();
+      PaymentProvider provider =
+          txnRepo
+              .findById(orgId, txnId)
+              .map(PaymentTransaction::getProvider)
+              .orElseThrow(
+                  () -> new IllegalStateException("payment transaction " + txnId + " missing"));
+      tenders.add(new SaleTender(provider, p.getAmount()));
+      if (provider == PaymentProvider.CASH) {
+        cashIn = cashIn.add(p.getAmount());
+      }
+      for (Refund r : refundRepo.findByPaymentId(orgId, p.getId())) {
+        collectCash(cashOut, r);
+      }
+    }
+    BigDecimal credited = BigDecimal.ZERO;
+    for (CreditNote n : creditNoteRepo.findByInvoiceId(orgId, invoice.getId(), null)) {
+      if (n.getStatus() != CreditNoteStatus.VOID) {
+        credited = credited.add(n.getTotal());
+      }
+      for (Refund r : refundRepo.findByCreditNoteId(orgId, n.getId())) {
+        collectCash(cashOut, r);
+      }
+    }
+    BigDecimal spent = BigDecimal.ZERO;
+    for (Refund r : cashOut.values()) {
+      spent = spent.add(r.getAmount());
+    }
+    BigDecimal cashRefundable =
+        cashIn.subtract(spent).max(BigDecimal.ZERO).setScale(MONEY_SCALE, MONEY_ROUNDING);
+    BigDecimal remaining =
+        invoice
+            .getGrandTotal()
+            .subtract(credited)
+            .max(BigDecimal.ZERO)
+            .setScale(MONEY_SCALE, MONEY_ROUNDING);
+    return new Ledger(tenders, cashRefundable, remaining);
   }
 
-  private static RefundMode modeFor(PaymentProvider tender) {
-    return tender == PaymentProvider.CASH ? RefundMode.IMMEDIATE_CASH : RefundMode.PENDING_TRANSFER;
+  private static void collectCash(Map<UUID, Refund> into, Refund r) {
+    if (r.getMethod() == PaymentProvider.CASH && r.getStatus() != RefundStatus.CANCELLED) {
+      into.putIfAbsent(r.getId(), r);
+    }
   }
 
   /**

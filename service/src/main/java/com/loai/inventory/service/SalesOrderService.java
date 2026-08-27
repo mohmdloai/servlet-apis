@@ -19,6 +19,7 @@ import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentAllocation;
 import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.PlatformFunnelStage;
 import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesInvoice;
@@ -37,6 +38,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -184,9 +186,14 @@ public class SalesOrderService {
       boolean created) {}
 
   /**
-   * Cashier tender for an in-store sale. {@code amount} is optional (defaults to the grand total).
+   * One cashier tender on an in-store sale. {@code amount} is optional only on a single-tender body
+   * (it defaults to the grand total); every tender of a split ({@code stories/split_tender.md})
+   * carries its own amount.
    */
   public record PaymentInput(PaymentProvider provider, String providerRef, BigDecimal amount) {}
+
+  /** The most tenders one in-store sale may carry — beyond this it is an installment plan. */
+  public static final int MAX_IN_STORE_TENDERS = 4;
 
   /**
    * A counter discount keyed by a manager on an in-store sale ({@code
@@ -204,7 +211,10 @@ public class SalesOrderService {
 
   /**
    * The full result of an in-store sale: every aggregate created in the one checkout txn. {@code
-   * changeRefund} is the EXECUTED cash refund of the tender's excess over the grand total — null
+   * payments} is one entry per tender in canonical order (InstaPay first, the folded cash tender
+   * last — {@code stories/split_tender.md}), each the allocator's fresh copy of the payment beside
+   * the transaction that names its provider and reference. {@code changeRefunds} are the EXECUTED
+   * cash refunds of the excess over the grand total, one per payment that held a residue — empty
    * for an exact tender.
    */
   public record InStoreSale(
@@ -213,9 +223,32 @@ public class SalesOrderService {
       Fulfillment fulfillment,
       SalesInvoice invoice,
       List<SalesInvoiceLine> invoiceLines,
-      Payment payment,
+      List<TenderPayment> payments,
       List<PaymentAllocation> allocations,
-      Refund changeRefund) {}
+      List<Refund> changeRefunds) {
+
+    /** The first tender's payment — the single-tender view behind the compat {@code payment}. */
+    public Payment payment() {
+      return payments.get(0).payment();
+    }
+
+    /** The first change refund, or null — the single-tender view behind the compat fields. */
+    public Refund changeRefund() {
+      return changeRefunds.isEmpty() ? null : changeRefunds.get(0);
+    }
+
+    /** Change handed back across every residual payment; zero for an exact tender. */
+    public BigDecimal changeAmount() {
+      BigDecimal sum = BigDecimal.ZERO;
+      for (Refund r : changeRefunds) {
+        sum = sum.add(r.getAmount());
+      }
+      return sum;
+    }
+  }
+
+  /** One recorded tender: the payment (post-allocation state) and the transaction behind it. */
+  public record TenderPayment(Payment payment, PaymentTransaction transaction) {}
 
   public Placed placeOnlineOrder(
       UUID orgId,
@@ -536,12 +569,22 @@ public class SalesOrderService {
    * decided here in the service (not the handler) so no other caller can dodge it, and refused as
    * {@link ApprovalRequiredException} so the client can say "needs MANAGER" instead of "no
    * permission". {@code verifiedBy} — the calling user — is also recorded as the grantor.
+   *
+   * <p><b>Split tender ({@code stories/split_tender.md}).</b> {@code tenders} is one to {@link
+   * #MAX_IN_STORE_TENDERS} cashier tenders that together settle the ticket: one {@link
+   * PaymentService#recordInStorePayment} per tender (cash tenders folded into one first — {@link
+   * #normaliseTenders}), stamped with strictly increasing {@code received_at} in the canonical
+   * order the FIFO allocator then consumes them in, so the residue of an overpaid split lands on
+   * the cash payment whenever the notes cover it and the change is a draw on the cash. Coverage is
+   * judged on the sum ({@code Σ ≥ grand}, else the same "underpaid" rejection as one short tender);
+   * every payment left with a residue after allocation hands it back as an EXECUTED cash change
+   * refund inside this txn. A single tender is the one-element case of the same path.
    */
   public InStoreSale placeInStoreSale(
       UUID orgId,
       CustomerInput customer,
       List<OrderLineInput> lines,
-      PaymentInput payment,
+      List<PaymentInput> tenders,
       DiscountInput discount,
       String notes,
       ActorContext actor,
@@ -549,7 +592,7 @@ public class SalesOrderService {
       UUID verifiedBy,
       boolean callerIsManagerOrAdmin) {
 
-    validateInStoreInputs(lines, payment, discount);
+    validateInStoreInputs(lines, tenders, discount);
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -623,8 +666,19 @@ public class SalesOrderService {
           // v1 releases goods only against full payment (salesOrder.md edge case "pay full or
           // cancel"; fulfillment.md: SalesOrder must be PAID before goods move). Partial-accept
           // (write off the shortfall) is a MANAGER CreditNote decision, not a STAFF checkout path.
+          // A split tender relaxes how MANY tenders settle the sale, never how much: the sum is
+          // what is judged, against the discounted grand — which is why the check sits here, after
+          // buildDraftOrder, and not in the shape validation.
           BigDecimal grandTotal = order.getGrandTotal();
-          BigDecimal tender = payment.amount() == null ? grandTotal : payment.amount();
+          List<PaymentInput> keyed = tenders;
+          if (tenders.size() == 1 && tenders.get(0).amount() == null) {
+            PaymentInput only = tenders.get(0);
+            keyed = List.of(new PaymentInput(only.provider(), only.providerRef(), grandTotal));
+          }
+          BigDecimal tender = BigDecimal.ZERO;
+          for (PaymentInput t : keyed) {
+            tender = tender.add(t.amount());
+          }
           if (tender.compareTo(grandTotal) < 0) {
             throw new ValidationException(
                 "in-store tender "
@@ -635,17 +689,28 @@ public class SalesOrderService {
           }
           BigDecimal change = tender.subtract(grandTotal);
 
-          // 2. Take the money: payment recorded for the FULL tender, VERIFIED + MATCHED, RECEIVED.
-          Payment paymentRow =
-              paymentService.recordInStorePayment(
-                  txDsl,
-                  orgId,
-                  order,
-                  payment.provider(),
-                  payment.providerRef(),
-                  tender,
-                  verifiedBy,
-                  now);
+          // 2. Take the money: one payment per tender, each recorded for its FULL amount,
+          // VERIFIED + MATCHED, RECEIVED — in canonical order (InstaPay first, cash last) with
+          // strictly increasing received_at, which is the order the FIFO allocator consumes them
+          // in (payment.md §Split tender, rule 4). The milestone stamp inside is idempotent, so N
+          // tenders stamp FIRST_PAYMENT once.
+          List<PaymentInput> canonical =
+              normaliseTenders(keyed, PaymentService.idempotencyTokenOf(order));
+          List<TenderPayment> recorded = new ArrayList<>(canonical.size());
+          for (int i = 0; i < canonical.size(); i++) {
+            PaymentInput t = canonical.get(i);
+            PaymentService.InStorePayment p =
+                paymentService.recordInStorePayment(
+                    txDsl,
+                    orgId,
+                    order,
+                    t.provider(),
+                    t.providerRef(),
+                    t.amount(),
+                    verifiedBy,
+                    now.plusNanos(1_000L * i));
+            recorded.add(new TenderPayment(p.payment(), p.transaction()));
+          }
 
           // 3. Order DRAFT → PAID — paid before any goods move. prepaid_amount is the NET money
           // attached to the order (SUM(payments) − SUM(executed refunds)); the change refund
@@ -691,37 +756,55 @@ public class SalesOrderService {
           order.closeInStore(now);
           repo.updateFulfillmentState(order);
 
-          // The FIFO allocator mutated its own copy of the payment; surface that rather than the
-          // as-created RECEIVED instance. The sale has exactly one same-txn payment — guard the
-          // invariant so a future multi-tender slice can't silently pick the wrong one.
-          if (issued.consumedPayments().size() > 1) {
-            throw new IllegalStateException(
-                "in-store sale expected at most one consumed payment, got "
-                    + issued.consumedPayments().size());
+          // The FIFO allocator mutated its own copies of the payments it consumed; a tender past
+          // full coverage was never touched and still holds its whole amount as RECEIVED. Surface
+          // the fresh state per tender, in canonical order.
+          Map<UUID, Payment> consumed = new HashMap<>();
+          for (Payment p : issued.consumedPayments()) {
+            consumed.put(p.getId(), p);
           }
-          Payment finalPayment =
-              issued.consumedPayments().isEmpty() ? paymentRow : issued.consumedPayments().get(0);
+          List<TenderPayment> payments = new ArrayList<>(recorded.size());
+          for (TenderPayment tp : recorded) {
+            payments.add(
+                new TenderPayment(
+                    consumed.getOrDefault(tp.payment().getId(), tp.payment()), tp.transaction()));
+          }
 
           // 7. Counter change: the allocator consumed the invoice total, leaving the excess as the
-          // payment's unallocated balance — hand it straight back as an EXECUTED cash refund
-          // (payment.md §Overpaid (in-store) steps 4–5). Payment ends ALLOCATED, unallocated 0.
-          RefundService.Executed changeRefund = null;
-          if (change.signum() > 0) {
-            changeRefund =
-                refundService.createExecutedChangeInTx(
-                    txDsl, orgId, finalPayment, change, verifiedBy, now);
+          // unallocated balance of the trailing payment(s) — hand each residue straight back as an
+          // EXECUTED cash refund drawn from that payment (payment.md §Overpaid (in-store) steps
+          // 4–5; §Split tender rule 5: cash regardless of which tender holds it). With the
+          // canonical order that is one refund off the cash payment whenever the notes cover the
+          // excess, and one more off a transfer only when the transfer itself overpaid. Every
+          // payment ends ALLOCATED, unallocated 0.
+          List<Refund> changeRefunds = new ArrayList<>();
+          BigDecimal handedBack = BigDecimal.ZERO;
+          for (TenderPayment tp : payments) {
+            BigDecimal residue = tp.payment().getUnallocatedAmount();
+            if (residue.signum() > 0) {
+              changeRefunds.add(
+                  refundService
+                      .createExecutedChangeInTx(
+                          txDsl, orgId, tp.payment(), residue, verifiedBy, now)
+                      .refund());
+              handedBack = handedBack.add(residue);
+            }
+          }
+          if (handedBack.compareTo(change) != 0) {
+            throw new IllegalStateException(
+                "in-store change " + change + " but the payments held " + handedBack);
           }
 
           log.info(
-              "In-store sale order id={} orgId={} number={} grandTotal={} tender={} change={} invoice={} payment={} status={}",
+              "In-store sale order id={} orgId={} number={} grandTotal={} tenders={} tender={} change={} invoice={} status={}",
               order.getId(),
               orgId,
               order.getOrderNumber(),
               order.getGrandTotal(),
+              payments.size(),
               tender,
               change,
               issued.invoice().getInvoiceNumber(),
-              finalPayment.getStatus(),
               order.getStatus());
 
           return new InStoreSale(
@@ -730,9 +813,9 @@ public class SalesOrderService {
               fulfillment.fulfillment(),
               issued.invoice(),
               issued.lines(),
-              finalPayment,
+              payments,
               issued.allocations(),
-              changeRefund == null ? null : changeRefund.refund());
+              changeRefunds);
         });
   }
 
@@ -1049,20 +1132,79 @@ public class SalesOrderService {
   }
 
   private void validateInStoreInputs(
-      List<OrderLineInput> lines, PaymentInput payment, DiscountInput discount) {
+      List<OrderLineInput> lines, List<PaymentInput> tenders, DiscountInput discount) {
     validateLines(lines);
-    if (payment == null || payment.provider() == null) {
+    if (tenders == null) {
       throw new ValidationException("payment.provider is required");
     }
-    if (payment.provider() == PaymentProvider.INSTAPAY_MANUAL) {
-      throw new ValidationException(PaymentService.IN_STORE_PROVIDER_REJECT_MSG);
+    if (tenders.isEmpty()) {
+      throw new ValidationException("payments must not be empty");
     }
-    if (payment.amount() != null && payment.amount().signum() <= 0) {
-      throw new ValidationException("payment.amount must be > 0");
+    if (tenders.size() > MAX_IN_STORE_TENDERS) {
+      throw new ValidationException(
+          "payments: at most " + MAX_IN_STORE_TENDERS + " tenders may settle one sale");
+    }
+    // The single-tender shorthand keeps its messages (and its "no amount ⇒ exact" default); a
+    // split names the offending element and requires every amount.
+    boolean split = tenders.size() > 1;
+    for (int i = 0; i < tenders.size(); i++) {
+      String at = split ? "payments[" + i + "]" : "payment";
+      PaymentInput t = tenders.get(i);
+      if (t == null || t.provider() == null) {
+        throw new ValidationException(at + ".provider is required");
+      }
+      if (t.provider() == PaymentProvider.INSTAPAY_MANUAL) {
+        throw new ValidationException(PaymentService.IN_STORE_PROVIDER_REJECT_MSG);
+      }
+      if (split && t.amount() == null) {
+        throw new ValidationException(at + ".amount is required on a split tender");
+      }
+      if (t.amount() != null && t.amount().signum() <= 0) {
+        throw new ValidationException(at + ".amount must be > 0");
+      }
     }
     if (discount != null) {
       validateDiscount(discount);
     }
+  }
+
+  /**
+   * The canonical tender list of a sale — rules 3 and 4 of {@code stories/split_tender.md}: cash
+   * tenders fold into one (amounts summed, the first real reference kept — two amounts of notes at
+   * one counter moment are one drawer event), InstaPay tenders keep request order and go first, the
+   * folded cash tender last. A refless InstaPay tender gets the synthesised {@code
+   * INSTAPAY_IN_STORE-<idem>-<n>} only when the sale carries more than one InstaPay tender — the
+   * one case where two synthesised refs would collide; a lone InstaPay tender keeps today's {@code
+   * INSTAPAY_IN_STORE-<idem>} (and cash its {@code CASH-<idem>}), so every single-tender body is
+   * byte-identical. Pure; every amount is assumed present and positive.
+   */
+  static List<PaymentInput> normaliseTenders(List<PaymentInput> tenders, String idemToken) {
+    List<PaymentInput> instaPay = new ArrayList<>(tenders.size());
+    BigDecimal cash = null;
+    String cashRef = null;
+    for (PaymentInput t : tenders) {
+      if (t.provider() == PaymentProvider.CASH) {
+        cash = cash == null ? t.amount() : cash.add(t.amount());
+        if (cashRef == null && t.providerRef() != null && !t.providerRef().isBlank()) {
+          cashRef = t.providerRef().trim();
+        }
+      } else {
+        instaPay.add(t);
+      }
+    }
+    List<PaymentInput> out = new ArrayList<>(instaPay.size() + 1);
+    for (int i = 0; i < instaPay.size(); i++) {
+      PaymentInput t = instaPay.get(i);
+      String ref = t.providerRef();
+      if ((ref == null || ref.isBlank()) && instaPay.size() > 1) {
+        ref = t.provider().name() + "-" + idemToken + "-" + (i + 1);
+      }
+      out.add(new PaymentInput(t.provider(), ref, t.amount()));
+    }
+    if (cash != null) {
+      out.add(new PaymentInput(PaymentProvider.CASH, cashRef, cash));
+    }
+    return out;
   }
 
   /**
