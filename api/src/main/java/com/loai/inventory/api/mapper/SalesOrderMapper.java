@@ -49,18 +49,40 @@ public final class SalesOrderMapper {
         .toList();
   }
 
-  /** Maps the in-store tender block. Throws 400 on an unknown provider; null block → null. */
-  public static PaymentInput toPaymentInput(PlaceSalesOrderRequest req) {
-    if (req == null || req.getPayment() == null) {
+  /**
+   * Maps the in-store tender: the single {@code payment} block becomes a one-element list, {@code
+   * payments} maps element-wise (a null element stays null for the service to name), both present
+   * is a 400, neither → null. Throws 400 on an unknown provider.
+   */
+  public static List<PaymentInput> toPaymentInputs(PlaceSalesOrderRequest req) {
+    if (req == null) {
       return null;
     }
-    PlaceSalesOrderRequest.PaymentPayload p = req.getPayment();
+    boolean single = req.getPayment() != null;
+    boolean split = req.getPayments() != null;
+    if (single && split) {
+      throw new ValidationException("send either payment or payments, not both");
+    }
+    if (single) {
+      return List.of(toPaymentInput(req.getPayment()));
+    }
+    if (split) {
+      List<PaymentInput> out = new java.util.ArrayList<>(req.getPayments().size());
+      for (PlaceSalesOrderRequest.PaymentPayload p : req.getPayments()) {
+        out.add(p == null ? null : toPaymentInput(p));
+      }
+      return out;
+    }
+    return null;
+  }
+
+  private static PaymentInput toPaymentInput(PlaceSalesOrderRequest.PaymentPayload p) {
     return new PaymentInput(parseProvider(p.getProvider()), p.getProviderRef(), p.getAmount());
   }
 
   /**
    * Maps the optional counter-discount block; null block → null. An unknown {@code type} is a 400
-   * here (the service then range-checks the value) — the same split as {@link #toPaymentInput}.
+   * here (the service then range-checks the value) — the same split as {@link #toPaymentInputs}.
    */
   public static DiscountInput toDiscountInput(PlaceSalesOrderRequest req) {
     if (req == null || req.getDiscount() == null) {

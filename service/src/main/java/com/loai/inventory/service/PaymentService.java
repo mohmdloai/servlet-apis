@@ -347,7 +347,7 @@ public final class PaymentService {
    * double-charge — this is the second of the two double-submit barriers (the first is the order's
    * {@code (org_id, idempotency_key)} UNIQUE).
    */
-  public Payment recordInStorePayment(
+  public InStorePayment recordInStorePayment(
       DSLContext txDsl,
       UUID orgId,
       SalesOrder order,
@@ -369,11 +369,10 @@ public final class PaymentService {
 
     // A refless tender (cash, or in-store InstaPay with no ref) gets a synthesised ref keyed on the
     // order's idempotency key — stable across a retried POST so the UNIQUE below catches the retry.
-    // The order id is NOT usable here: it is a fresh random UUID on every attempt.
-    String idemToken =
-        (order.getIdempotencyKey() == null || order.getIdempotencyKey().isBlank())
-            ? order.getId().toString()
-            : order.getIdempotencyKey();
+    // The order id is NOT usable here: it is a fresh random UUID on every attempt. (A split sale's
+    // second refless InstaPay tender arrives with its ordinal-suffixed ref already resolved —
+    // SalesOrderService.normaliseTenders.)
+    String idemToken = idempotencyTokenOf(order);
     String ref =
         (providerRef == null || providerRef.isBlank())
             ? provider.name() + "-" + idemToken
@@ -427,7 +426,20 @@ public final class PaymentService {
         provider,
         order.getOrderNumber(),
         payment.getAmount());
-    return payment;
+    return new InStorePayment(payment, rec.transaction());
+  }
+
+  /** One recorded in-store tender: the RECEIVED payment and its VERIFIED + MATCHED transaction. */
+  public record InStorePayment(Payment payment, PaymentTransaction transaction) {}
+
+  /**
+   * The token a sale's synthesised provider refs are keyed on: the order's idempotency key when it
+   * has one (stable across a retried POST), else its id.
+   */
+  public static String idempotencyTokenOf(SalesOrder order) {
+    return (order.getIdempotencyKey() == null || order.getIdempotencyKey().isBlank())
+        ? order.getId().toString()
+        : order.getIdempotencyKey();
   }
 
   private Optional<SalesOrder> resolveOrder(
@@ -441,8 +453,12 @@ public final class PaymentService {
     return orderRepo.findByOrderNumberForUpdate(orgId, ref.orderNumber());
   }
 
-  /** One payment applied to an order together with its refunds, oldest first. */
-  public record PaymentWithRefunds(Payment payment, List<Refund> refunds) {}
+  /**
+   * One payment applied to an order, the transaction it was recognised from (its provider and
+   * reference — which tender it was) and its refunds, oldest first.
+   */
+  public record PaymentWithRefunds(
+      Payment payment, PaymentTransaction transaction, List<Refund> refunds) {}
 
   /** An order's full money story: the order header + every payment FIFO, each with refunds. */
   public record OrderPayments(SalesOrder order, List<PaymentWithRefunds> payments) {}
@@ -464,9 +480,15 @@ public final class PaymentService {
             .orElseThrow(() -> new NotFoundException("SalesOrder", salesOrderId));
     PaymentRepository paymentRepo = paymentRepoFactory.create(rootDsl);
     RefundRepository refundRepo = refundRepoFactory.create(rootDsl);
+    PaymentTransactionRepository txnRepo = txnRepoFactory.create(rootDsl);
     List<PaymentWithRefunds> payments =
         paymentRepo.findByOrderId(orgId, salesOrderId).stream()
-            .map(p -> new PaymentWithRefunds(p, refundRepo.findByPaymentId(orgId, p.getId())))
+            .map(
+                p ->
+                    new PaymentWithRefunds(
+                        p,
+                        txnRepo.findById(orgId, p.getPaymentTransactionId()).orElse(null),
+                        refundRepo.findByPaymentId(orgId, p.getId())))
             .toList();
     return new OrderPayments(order, payments);
   }

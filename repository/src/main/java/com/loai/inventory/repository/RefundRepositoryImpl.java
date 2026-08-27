@@ -158,6 +158,15 @@ public final class RefundRepositoryImpl implements RefundRepository {
   }
 
   @Override
+  public List<Refund> findByCreditNoteId(UUID orgId, UUID creditNoteId) {
+    return dsl.selectFrom(REFUND)
+        .where(REFUND.ORG_ID.eq(orgId).and(REFUND.CREDIT_NOTE_ID.eq(creditNoteId)))
+        .orderBy(REFUND.CREATED_AT.asc(), REFUND.ID.asc())
+        .fetch()
+        .map(this::toRefund);
+  }
+
+  @Override
   public List<Refund> list(
       UUID orgId, RefundStatus status, UUID creditNoteId, int offset, int limit) {
     var query = dsl.selectFrom(REFUND).where(conditions(orgId, status, creditNoteId));

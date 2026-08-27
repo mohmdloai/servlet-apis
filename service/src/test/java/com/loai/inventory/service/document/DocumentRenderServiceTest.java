@@ -202,7 +202,7 @@ class DocumentRenderServiceTest {
     when(paymentService.listForOrder(ORG, ORDER))
         .thenReturn(
             new PaymentService.OrderPayments(
-                order, List.of(new PaymentWithRefunds(payment, List.of()))));
+                order, List.of(new PaymentWithRefunds(payment, null, List.of()))));
     when(orgService.getById(ORG)).thenReturn(orgWithProfile());
   }
 
@@ -303,7 +303,7 @@ class DocumentRenderServiceTest {
 
     Payment payment = mock(Payment.class);
     when(payment.getAmount()).thenReturn(new BigDecimal("150.00")); // tender > 120 grand total
-    PaymentWithRefunds pwr = new PaymentWithRefunds(payment, List.of());
+    PaymentWithRefunds pwr = new PaymentWithRefunds(payment, null, List.of());
     PaymentService.OrderPayments op = new PaymentService.OrderPayments(order, List.of(pwr));
     when(paymentService.listForOrder(ORG, ORDER)).thenReturn(op);
 
@@ -318,6 +318,54 @@ class DocumentRenderServiceTest {
     assertFalse(text.contains("Discount"), text);
     assertTrue(text.contains("Tendered"), text);
     assertTrue(text.contains("Change"), text);
+    // A single tender prints no per-provider lines (stories/split_tender.md keeps it
+    // byte-identical).
+    assertFalse(text.contains("InstaPay"), text);
+    assertFalse(text.contains("Cash"), text);
+  }
+
+  /**
+   * A split sale ({@code stories/split_tender.md}) prints one line per tender — {@code InstaPay}
+   * then {@code Cash}, in the ledger's order — above the {@code Tendered} sum.
+   */
+  @Test
+  void renderReceipt_printsOneLinePerTenderWhenSplit() {
+    SalesInvoice inv = anInvoice();
+    SalesOrder order = mock(SalesOrder.class);
+    when(order.getOrderNumber()).thenReturn("SO-2026-000124");
+    when(invoiceAdminService.listForOrder(ORG, ORDER))
+        .thenReturn(
+            new InvoiceAdminService.OrderInvoices(
+                order, List.of(new InvoiceView(inv, List.of(aLine())))));
+
+    Payment transfer = mock(Payment.class);
+    when(transfer.getAmount()).thenReturn(new BigDecimal("100.00"));
+    com.loai.inventory.domain.model.PaymentTransaction transferTxn =
+        mock(com.loai.inventory.domain.model.PaymentTransaction.class);
+    when(transferTxn.getProvider())
+        .thenReturn(com.loai.inventory.domain.model.PaymentProvider.INSTAPAY_IN_STORE);
+    Payment notes = mock(Payment.class);
+    when(notes.getAmount()).thenReturn(new BigDecimal("20.00"));
+    com.loai.inventory.domain.model.PaymentTransaction notesTxn =
+        mock(com.loai.inventory.domain.model.PaymentTransaction.class);
+    when(notesTxn.getProvider()).thenReturn(com.loai.inventory.domain.model.PaymentProvider.CASH);
+    when(paymentService.listForOrder(ORG, ORDER))
+        .thenReturn(
+            new PaymentService.OrderPayments(
+                order,
+                List.of(
+                    new PaymentWithRefunds(transfer, transferTxn, List.of()),
+                    new PaymentWithRefunds(notes, notesTxn, List.of()))));
+    when(orgService.getById(ORG)).thenReturn(orgWithProfile());
+
+    String text = pdfText(svc.renderReceipt(ORG, ORDER).bytes());
+    assertTrue(text.contains("InstaPay"), text);
+    assertTrue(text.contains("100.00"), text);
+    assertTrue(text.contains("Cash"), text);
+    assertTrue(text.contains("20.00"), text);
+    assertTrue(text.contains("Tendered"), text);
+    assertTrue(text.contains("120.00"), text);
+    assertFalse(text.contains("Change"), text);
   }
 
   /**
@@ -501,7 +549,7 @@ class DocumentRenderServiceTest {
     when(paymentService.listForOrder(ORG, ORDER))
         .thenReturn(
             new PaymentService.OrderPayments(
-                order, List.of(new PaymentWithRefunds(payment, List.of()))));
+                order, List.of(new PaymentWithRefunds(payment, null, List.of()))));
     when(orgService.getById(ORG)).thenReturn(orgWithLogo());
 
     DocumentRenderService withLogo =

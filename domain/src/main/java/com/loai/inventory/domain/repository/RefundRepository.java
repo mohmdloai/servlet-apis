@@ -47,6 +47,9 @@ public interface RefundRepository {
   /** All refunds backed directly by this payment, oldest first. */
   List<Refund> findByPaymentId(UUID orgId, UUID paymentId);
 
+  /** All refunds backed by this credit note, any status, oldest first. */
+  List<Refund> findByCreditNoteId(UUID orgId, UUID creditNoteId);
+
   /**
    * One page of the org's refunds — the to-execute worklist / refund ledger. A non-null {@code
    * status} makes it a queue: {@code created_at ASC, id ASC} (execute the oldest first); {@code

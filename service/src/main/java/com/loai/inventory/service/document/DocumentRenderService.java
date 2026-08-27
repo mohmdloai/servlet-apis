@@ -6,6 +6,7 @@ import com.loai.inventory.domain.model.CreditNote;
 import com.loai.inventory.domain.model.CreditNoteLine;
 import com.loai.inventory.domain.model.InvoiceStatus;
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -248,26 +249,32 @@ public final class DocumentRenderService {
                 () -> new NotFoundException("no issued invoice for order " + salesOrderId));
     SalesInvoice inv = live.invoice();
 
+    List<PaymentService.PaymentWithRefunds> tenders =
+        paymentService.listForOrder(orgId, salesOrderId).payments();
     BigDecimal tender = BigDecimal.ZERO;
-    for (PaymentService.PaymentWithRefunds pw :
-        paymentService.listForOrder(orgId, salesOrderId).payments()) {
+    for (PaymentService.PaymentWithRefunds pw : tenders) {
       tender = tender.add(nz(pw.payment().getAmount()));
     }
     BigDecimal change = tender.subtract(nz(inv.getGrandTotal()));
     final BigDecimal tenderF = tender;
     final BigDecimal changeF = change;
+    // A split sale (stories/split_tender.md) prints one line per tender above the Tendered sum;
+    // a single-tender slip is byte-identical to before.
+    boolean split = tenders.size() > 1;
 
     Org org = org(orgId);
     Image receiptLogo = logoImage(org, RECEIPT_LOGO_MAX_W, RECEIPT_LOGO_MAX_H);
 
     // 80mm ≈ 226.77 pt wide; height sized to content so the slip isn't mostly blank. A discounted
-    // sale draws one more totals row (V88), so it gets one more row of height.
+    // sale draws one more totals row (V88), so it gets one more row of height; a split sale one
+    // per tender.
     boolean discounted = nz(inv.getDiscountTotal()).signum() > 0;
     float width = 226.77f;
     float height =
         220f
             + live.lines().size() * 16f
             + (discounted ? 13f : 0f)
+            + (split ? tenders.size() * 13f : 0f)
             + RECEIPT_BARCODE_EXTRA_H
             + (receiptLogo == null ? 0f : RECEIPT_LOGO_EXTRA_H);
     byte[] bytes =
@@ -317,6 +324,14 @@ public final class DocumentRenderService {
                     "-" + money(inv.getDiscountTotal()) + " " + inv.getCurrency());
               }
               receiptTotal(doc, "TOTAL", money(inv.getGrandTotal()) + " " + inv.getCurrency());
+              if (split) {
+                for (PaymentService.PaymentWithRefunds pw : tenders) {
+                  receiptLine(
+                      doc,
+                      tenderLabel(pw.transaction().getProvider()),
+                      money(pw.payment().getAmount()) + " " + inv.getCurrency());
+                }
+              }
               receiptLine(doc, "Tendered", money(tenderF) + " " + inv.getCurrency());
               if (changeF.signum() > 0) {
                 receiptLine(doc, "Change", money(changeF) + " " + inv.getCurrency());
@@ -329,6 +344,14 @@ public final class DocumentRenderService {
 
   private Org org(UUID orgId) {
     return orgService.getById(orgId);
+  }
+
+  /** The tender's name on the slip: {@code Cash} / {@code InstaPay}. */
+  private static String tenderLabel(PaymentProvider provider) {
+    return switch (provider) {
+      case CASH -> "Cash";
+      case INSTAPAY_IN_STORE, INSTAPAY_MANUAL -> "InstaPay";
+    };
   }
 
   /** A safe download filename from a document number: {@code INV-2026-0007.pdf}. */

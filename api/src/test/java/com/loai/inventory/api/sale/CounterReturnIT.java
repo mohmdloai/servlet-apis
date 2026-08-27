@@ -261,7 +261,8 @@ class CounterReturnIT {
         org,
         null,
         List.of(new OrderLineInput(product, qty)),
-        new PaymentInput(tender, tender == PaymentProvider.CASH ? null : "IPN-" + key(), null),
+        List.of(
+            new PaymentInput(tender, tender == PaymentProvider.CASH ? null : "IPN-" + key(), null)),
         percentOff == null
             ? null
             : new DiscountInput(CouponType.PERCENT, new BigDecimal(percentOff), null),
@@ -270,6 +271,31 @@ class CounterReturnIT {
         key(),
         manager,
         true);
+  }
+
+  /** A split counter sale ({@code stories/split_tender.md}) of {@code qty × product}. */
+  private InStoreSale sellWith(
+      UUID org, UUID manager, UUID product, int qty, List<PaymentInput> tenders) {
+    return service.placeInStoreSale(
+        org,
+        null,
+        List.of(new OrderLineInput(product, qty)),
+        tenders,
+        null,
+        null,
+        actor(manager),
+        key(),
+        manager,
+        true);
+  }
+
+  private static PaymentInput instaPay(String amount) {
+    return new PaymentInput(
+        PaymentProvider.INSTAPAY_IN_STORE, "IPN-" + key(), new BigDecimal(amount));
+  }
+
+  private static PaymentInput cash(String amount) {
+    return new PaymentInput(PaymentProvider.CASH, null, new BigDecimal(amount));
   }
 
   private Returned doReturn(
@@ -487,6 +513,165 @@ class CounterReturnIT {
     assertEquals("EXECUTED", refundStatus(r.refund().getId()));
     assertEquals("SETTLED", creditNoteStatus(r.creditNote().getId()));
     assertEquals("REFUNDED", paymentStatus(sale.payment().getId()));
+  }
+
+  // split tender (stories/split_tender.md): cash iff the note fits the drawer's headroom
+
+  /**
+   * InstaPay 400 + cash 100 on a 5 × 100 sale. The preview says {@code cash_refundable 100}, {@code
+   * SPLIT}, both tenders in canonical order. A 300.00 return (3 units) does not fit → a PENDING
+   * INSTAPAY_MANUAL transfer; a 100.00 return (1 unit) fits → CASH, EXECUTED now. The transfer's
+   * PENDING refund never spent cash, so the headroom is still 100 for the second.
+   */
+  @Test
+  void splitSale_cashIffTheNoteFitsTheHeadroom() {
+    UUID org = createOrg("acme");
+    UUID manager = createUser("manager@acme.test");
+    UUID product = createProduct(org, "SKU1", new BigDecimal("100.00"));
+    createInventory(org, product, 10, 0);
+    InStoreSale sale =
+        sellWith(org, manager, product, 5, List.of(instaPay("400.00"), cash("100.00")));
+
+    assertTrue(sale.changeRefunds().isEmpty(), "an exact split");
+    Returnable preview = counterReturnService.returnable(org, sale.order().getId());
+    assertEquals(RefundMode.SPLIT, preview.refundMode());
+    assertMoney("100.00", preview.cashRefundable());
+    assertEquals(2, preview.tenders().size());
+    assertEquals(PaymentProvider.INSTAPAY_IN_STORE, preview.tenders().get(0).provider());
+    assertMoney("400.00", preview.tenders().get(0).amount());
+    assertEquals(PaymentProvider.CASH, preview.tenders().get(1).provider());
+    assertMoney("100.00", preview.tenders().get(1).amount());
+    assertEquals(PaymentProvider.INSTAPAY_IN_STORE, preview.tender(), "first canonical tender");
+
+    Returned big = doReturn(org, manager, sale.order().getId(), ret(product, 3), key(), true);
+    assertEquals("PENDING", big.refund().getStatus().name());
+    assertEquals(PaymentProvider.INSTAPAY_MANUAL, big.refund().getMethod());
+    assertMoney("300.00", big.refund().getAmount());
+    assertNull(big.debit());
+    assertEquals(0, cashDebitTxnCount(org));
+    assertMoney(
+        "100.00", counterReturnService.returnable(org, sale.order().getId()).cashRefundable());
+
+    Returned small = doReturn(org, manager, sale.order().getId(), ret(product, 1), key(), true);
+    assertEquals("EXECUTED", small.refund().getStatus().name());
+    assertEquals(PaymentProvider.CASH, small.refund().getMethod());
+    assertMoney("100.00", small.refund().getAmount());
+    assertNotNull(small.debit());
+    assertEquals(1, cashDebitTxnCount(org));
+
+    Returnable after = counterReturnService.returnable(org, sale.order().getId());
+    assertMoney("0.00", after.cashRefundable());
+    assertEquals(RefundMode.PENDING_TRANSFER, after.refundMode(), "the cash is spent");
+    assertEquals(9, stockQty(org, product), "4 of the 5 units came back");
+  }
+
+  /**
+   * Earlier returns spend the headroom: cash 450 + InstaPay 50; 400 back in cash first (400 ≤ 450),
+   * then the preview says 50 and a further 100.00 return is a transfer (50 < 100).
+   */
+  @Test
+  void splitSale_earlierCashReturnsSpendTheHeadroom() {
+    UUID org = createOrg("acme");
+    UUID manager = createUser("manager@acme.test");
+    UUID product = createProduct(org, "SKU1", new BigDecimal("100.00"));
+    createInventory(org, product, 10, 0);
+    InStoreSale sale =
+        sellWith(org, manager, product, 5, List.of(cash("450.00"), instaPay("50.00")));
+    assertMoney(
+        "450.00", counterReturnService.returnable(org, sale.order().getId()).cashRefundable());
+
+    Returned first = doReturn(org, manager, sale.order().getId(), ret(product, 4), key(), true);
+    assertEquals(PaymentProvider.CASH, first.refund().getMethod());
+    assertEquals("EXECUTED", first.refund().getStatus().name());
+    assertMoney("400.00", first.refund().getAmount());
+
+    Returnable preview = counterReturnService.returnable(org, sale.order().getId());
+    assertMoney("50.00", preview.cashRefundable());
+    assertEquals(RefundMode.SPLIT, preview.refundMode());
+
+    Returned second = doReturn(org, manager, sale.order().getId(), ret(product, 1), key(), true);
+    assertEquals(PaymentProvider.INSTAPAY_MANUAL, second.refund().getMethod());
+    assertEquals("PENDING", second.refund().getStatus().name());
+    assertMoney("100.00", second.refund().getAmount());
+    assertEquals(1, cashDebitTxnCount(org));
+  }
+
+  /**
+   * The counter change spends it too: cash 150 + InstaPay 450 on 500 hands 100 back at the sale, so
+   * only 50 of the 150 in notes is still in the drawer for this sale — a 100.00 return is a
+   * transfer even though 150 crossed the counter.
+   */
+  @Test
+  void splitSale_counterChangeSpendsTheHeadroom() {
+    UUID org = createOrg("acme");
+    UUID manager = createUser("manager@acme.test");
+    UUID product = createProduct(org, "SKU1", new BigDecimal("100.00"));
+    createInventory(org, product, 10, 0);
+    InStoreSale sale =
+        sellWith(org, manager, product, 5, List.of(cash("150.00"), instaPay("450.00")));
+    assertMoney("100.00", sale.changeAmount());
+
+    Returnable preview = counterReturnService.returnable(org, sale.order().getId());
+    assertMoney("50.00", preview.cashRefundable());
+    assertEquals(RefundMode.SPLIT, preview.refundMode());
+
+    Returned r = doReturn(org, manager, sale.order().getId(), ret(product, 1), key(), true);
+    assertEquals(PaymentProvider.INSTAPAY_MANUAL, r.refund().getMethod());
+    assertEquals("PENDING", r.refund().getStatus().name());
+    assertEquals(1, cashDebitTxnCount(org), "only the sale's change was ever a cash DEBIT");
+  }
+
+  /**
+   * A CANCELLED cash refund never counts: a desk-created PENDING cash refund of 400 against a
+   * desk-issued note takes the headroom from 450 to 50; cancelling it gives the 400 back, and the
+   * next unit's 100.00 return is cash again.
+   */
+  @Test
+  void splitSale_cancelledCashRefundGivesTheHeadroomBack() {
+    UUID org = createOrg("acme");
+    UUID manager = createUser("manager@acme.test");
+    UUID product = createProduct(org, "SKU1", new BigDecimal("100.00"));
+    createInventory(org, product, 10, 0);
+    InStoreSale sale =
+        sellWith(org, manager, product, 5, List.of(cash("450.00"), instaPay("50.00")));
+
+    // The desk path: a RETURN note for 4 units, then a PENDING cash refund for it.
+    CreditNoteService.Issued deskNote =
+        creditNoteService.issue(
+            org,
+            new CreditNoteService.IssueCommand(
+                sale.invoice().getId(),
+                com.loai.inventory.domain.model.CreditNoteReason.RETURN,
+                null,
+                List.of(
+                    new CreditNoteService.LineSpec(
+                        product, "SKU1 widget", 4, new BigDecimal("100.00"), BigDecimal.ZERO))),
+            true);
+    Refund pendingCash =
+        refundService.create(
+            org,
+            new RefundService.CreateCommand(
+                deskNote.creditNote().getId(),
+                null,
+                new BigDecimal("400.00"),
+                "EGP",
+                PaymentProvider.CASH,
+                "keyed at the desk"),
+            true);
+    assertEquals("PENDING", pendingCash.getStatus().name());
+    assertMoney(
+        "50.00", counterReturnService.returnable(org, sale.order().getId()).cashRefundable());
+
+    refundService.cancel(org, pendingCash.getId(), "keyed wrong");
+    Returnable restored = counterReturnService.returnable(org, sale.order().getId());
+    assertMoney("450.00", restored.cashRefundable());
+    assertEquals(
+        RefundMode.IMMEDIATE_CASH, restored.refundMode(), "450 ≥ the 100 still creditable");
+
+    Returned r = doReturn(org, manager, sale.order().getId(), ret(product, 1), key(), true);
+    assertEquals(PaymentProvider.CASH, r.refund().getMethod());
+    assertEquals("EXECUTED", r.refund().getStatus().name());
+    assertMoney("100.00", r.refund().getAmount());
   }
 
   /** restock:false — money identical, no ledger row, stock unchanged, restocked_at NULL. */
