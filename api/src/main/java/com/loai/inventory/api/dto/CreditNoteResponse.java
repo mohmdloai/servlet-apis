@@ -19,6 +19,13 @@ public class CreditNoteResponse {
   private BigDecimal subtotal;
   private BigDecimal taxTotal;
   private BigDecimal total;
+
+  /** V89: the credited lines' share of the invoice discount (0 on a desk-issued note). */
+  private BigDecimal discountTotal;
+
+  /** V89: when a counter return restocked the goods; omitted when it did not. */
+  private OffsetDateTime restockedAt;
+
   private BigDecimal refundedTotal;
   private BigDecimal remainingRefundable;
   private String currency;
@@ -62,6 +69,8 @@ public class CreditNoteResponse {
     r.subtotal = n.getSubtotal();
     r.taxTotal = n.getTaxTotal();
     r.total = n.getTotal();
+    r.discountTotal = n.getDiscountTotal();
+    r.restockedAt = n.getRestockedAt();
     r.currency = n.getCurrency();
     r.issuedAt = n.getIssuedAt();
     return r;
@@ -113,6 +122,14 @@ public class CreditNoteResponse {
 
   public BigDecimal getTotal() {
     return total;
+  }
+
+  public BigDecimal getDiscountTotal() {
+    return discountTotal;
+  }
+
+  public OffsetDateTime getRestockedAt() {
+    return restockedAt;
   }
 
   public BigDecimal getRefundedTotal() {

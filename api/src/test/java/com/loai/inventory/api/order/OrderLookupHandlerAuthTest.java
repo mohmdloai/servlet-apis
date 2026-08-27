@@ -81,6 +81,7 @@ class OrderLookupHandlerAuthTest {
         Mockito.mock(com.loai.inventory.service.InvoiceAdminService.class),
         Mockito.mock(com.loai.inventory.service.InventoryService.class),
         Mockito.mock(com.loai.inventory.service.document.DocumentRenderService.class),
+        /* counterReturnService */ null,
         com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 
@@ -100,14 +101,14 @@ class OrderLookupHandlerAuthTest {
   @Test
   void bareGet_returnsTheWorklist_serviceListCalled() throws IOException {
     SalesOrderService service = Mockito.mock(SalesOrderService.class);
-    when(service.list(eq(ORG), any(), anyInt(), anyInt()))
+    when(service.list(eq(ORG), any(), any(), anyInt(), anyInt()))
         .thenReturn(new SalesOrderService.OrderListPage(List.of(), 0));
     Resp resp = new Resp();
 
     handler(service).handle("GET", reqWith(ctxWith(ORG, OrgRole.VIEWER), null), resp.mock, ORG, "");
 
     assertEquals(200, resp.status, "bare GET now returns the order worklist page");
-    verify(service).list(eq(ORG), any(), anyInt(), anyInt());
+    verify(service).list(eq(ORG), any(), any(), anyInt(), anyInt());
     verify(service, never()).getByNumber(any(), anyString());
   }
 

@@ -4,8 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.CancelOrderRequest;
+import com.loai.inventory.api.dto.CounterReturnRequest;
+import com.loai.inventory.api.dto.CounterReturnResponse;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
+import com.loai.inventory.api.dto.ReturnableResponse;
 import com.loai.inventory.api.mapper.FulfillmentMapper;
 import com.loai.inventory.api.mapper.InventoryMapper;
 import com.loai.inventory.api.mapper.InvoiceMapper;
@@ -18,6 +21,7 @@ import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
+import com.loai.inventory.service.CounterReturnService;
 import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
@@ -47,6 +51,9 @@ import org.slf4j.LoggerFactory;
  *       {@code discount} block additionally needs MANAGER+, decided in the service (403 {@code
  *       APPROVAL_REQUIRED} with {@code required_role: MANAGER}).
  *   <li>{@code POST /{id}/cancel} — cancel an order (MANAGER).
+ *   <li>{@code GET /{id}/returnable} · {@code POST /{id}/return} — the counter return ({@code
+ *       stories/counter_return.md}): preview (VIEWER) and the one-transaction credit note + refund
+ *       + restock (MANAGER, {@code Idempotency-Key}).
  *   <li>{@code GET /?order_number=} — exact-match lookup by human-readable number, the pre-flight
  *       for the manual money path ({@code stories/lookup_order_by_number.md}). VIEWER. A bare
  *       {@code GET} without the param returns the order worklist page ({@code
@@ -77,6 +84,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
   private final InvoiceAdminService invoiceAdminService;
   private final InventoryService inventoryService;
   private final DocumentRenderService renderService;
+  private final CounterReturnService counterReturnService;
   private final ObjectMapper mapper;
 
   public SalesOrderHandler(
@@ -87,6 +95,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
       InvoiceAdminService invoiceAdminService,
       InventoryService inventoryService,
       DocumentRenderService renderService,
+      CounterReturnService counterReturnService,
       ObjectMapper mapper) {
     this.service = service;
     this.cancellationService = cancellationService;
@@ -95,6 +104,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
     this.invoiceAdminService = invoiceAdminService;
     this.inventoryService = inventoryService;
     this.renderService = renderService;
+    this.counterReturnService = counterReturnService;
     this.mapper = mapper;
   }
 
@@ -146,6 +156,10 @@ public class SalesOrderHandler implements OrgResourceHandler {
         doReceiptPdf(req, resp, orgId, parseId(parts[0]));
         return;
       }
+      if ("GET".equals(method) && parts.length == 2 && "returnable".equals(parts[1])) {
+        doReturnable(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
       if (!"POST".equals(method)) {
         writeError(resp, 405, "Method not allowed");
         return;
@@ -157,6 +171,10 @@ public class SalesOrderHandler implements OrgResourceHandler {
       }
       if (parts.length == 2 && "cancel".equals(parts[1])) {
         doCancel(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
+      if (parts.length == 2 && "return".equals(parts[1])) {
+        doReturn(req, resp, orgId, parseId(parts[0]));
         return;
       }
       throw new ValidationException(
@@ -279,7 +297,12 @@ public class SalesOrderHandler implements OrgResourceHandler {
             Math.max(intParam(req, "size", SalesOrderService.DEFAULT_PAGE_SIZE), 1),
             SalesOrderService.MAX_PAGE_SIZE);
     SalesOrderService.OrderListPage result =
-        service.list(orgId, SalesOrderMapper.toOrderStatus(req.getParameter("status")), page, size);
+        service.list(
+            orgId,
+            SalesOrderMapper.toOrderStatus(req.getParameter("status")),
+            SalesOrderMapper.toOrderChannel(req.getParameter("channel")),
+            page,
+            size);
     var data = result.items().stream().map(SalesOrderMapper::toResponse).toList();
     writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
   }
@@ -379,6 +402,45 @@ public class SalesOrderHandler implements OrgResourceHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
     RenderedDocument doc = renderService.renderReceipt(orgId, orderId);
     writePdf(resp, doc.bytes(), doc.filename());
+  }
+
+  /**
+   * {@code GET /{id}/returnable} — what the receipt can still give back (VIEWER; {@code
+   * stories/counter_return.md}): the live invoice's lines with billed / returned / returnable and a
+   * display-only per-unit net refund, plus the tender and the refund mode. 409 unless the order is
+   * a CLOSED IN_STORE sale.
+   */
+  private void doReturnable(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID orderId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(resp, 200, ReturnableResponse.from(counterReturnService.returnable(orgId, orderId)));
+  }
+
+  /**
+   * {@code POST /{id}/return} — the counter return (MANAGER; {@code Idempotency-Key} required): a
+   * RETURN credit note against the sale's invoice, the refund (EXECUTED for cash, PENDING for a
+   * transfer) and the restock, in one transaction. 201 fresh, 200 on a replay of the same key.
+   * Above the org threshold the issuance's own OWNER gate answers 403 {@code APPROVAL_REQUIRED}.
+   */
+  private void doReturn(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID orderId)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
+    String idempotencyKey = req.getHeader(IDEMPOTENCY_HEADER);
+    if (idempotencyKey == null || idempotencyKey.isBlank()) {
+      throw new ValidationException(IDEMPOTENCY_HEADER + " header is required");
+    }
+    CounterReturnRequest body = readBody(req, CounterReturnRequest.class);
+    CounterReturnService.Returned returned =
+        counterReturnService.returnFromReceipt(
+            orgId,
+            orderId,
+            SalesOrderMapper.toReturnCommand(body),
+            idempotencyKey,
+            sc.toActorContext(),
+            sc.actorId(),
+            isOwnerOrAdmin(sc, orgId));
+    writeJson(resp, returned.replayed() ? 200 : 201, CounterReturnResponse.from(returned));
   }
 
   /** OWNER in the org (or system ADMIN) — gates an above-threshold cancellation refund. */

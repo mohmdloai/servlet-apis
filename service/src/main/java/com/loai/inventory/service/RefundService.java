@@ -209,67 +209,93 @@ public final class RefundService {
       throw new ValidationException("actor identity is required");
     }
     return rootDsl.transactionResult(
-        cfg -> {
-          DSLContext txDsl = DSL.using(cfg);
-          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        cfg ->
+            executeInTx(
+                DSL.using(cfg),
+                orgId,
+                refundId,
+                providerRefOverride,
+                actorId,
+                OffsetDateTime.now(ZoneOffset.UTC)));
+  }
 
-          RefundRepository refundRepo = refundRepoFactory.create(txDsl);
-          Refund refund =
-              refundRepo
-                  .findByIdForUpdate(orgId, refundId)
-                  .orElseThrow(() -> new NotFoundException("Refund", refundId));
-          if (refund.getStatus() != RefundStatus.PENDING) {
-            throw new ConflictException(
-                "refund " + refundId + " is " + refund.getStatus() + "; only PENDING can execute");
-          }
+  /**
+   * The body of {@link #execute} inside the caller's transaction — the counter return ({@code
+   * stories/counter_return.md}) hands the cash back the moment the note is issued, the situation
+   * {@link #createExecutedChangeInTx} already recognises for change: there is no PENDING window, so
+   * the DEBIT transaction, the FIFO allocation unwind and the SETTLED flip land atomically with the
+   * issuance and the restock. Same ledger rows as a desk execution, same guards.
+   */
+  public Executed executeInTx(
+      DSLContext txDsl,
+      UUID orgId,
+      UUID refundId,
+      String providerRefOverride,
+      UUID actorId,
+      OffsetDateTime now) {
+    if (actorId == null) {
+      throw new ValidationException("actor identity is required");
+    }
+    {
+      {
+        RefundRepository refundRepo = refundRepoFactory.create(txDsl);
+        Refund refund =
+            refundRepo
+                .findByIdForUpdate(orgId, refundId)
+                .orElseThrow(() -> new NotFoundException("Refund", refundId));
+        if (refund.getStatus() != RefundStatus.PENDING) {
+          throw new ConflictException(
+              "refund " + refundId + " is " + refund.getStatus() + "; only PENDING can execute");
+        }
 
-          // 1. DEBIT transaction, created VERIFIED. (provider, provider_ref) UNIQUE is the
-          //    double-execute backstop.
-          String normalizedOverride = Text.normalizeNumeric(providerRefOverride);
-          String providerRef =
-              normalizedOverride == null
-                  ? refund.getMethod().name() + "-" + refund.getId()
-                  : normalizedOverride;
-          PaymentTransaction debit =
-              PaymentTransaction.createVerifiedDebit(
-                  UUID.randomUUID(),
-                  orgId,
-                  refund.getMethod(),
-                  providerRef,
-                  refund.getAmount(),
-                  refund.getCurrency(),
-                  actorId,
-                  null,
-                  now);
-          PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
-          PaymentTransactionRepository.Recorded rec = txnRepo.insertIfAbsent(debit);
-          if (!rec.inserted()) {
-            throw new ConflictException(
-                "refund DEBIT transaction "
-                    + refund.getMethod()
-                    + "/"
-                    + providerRef
-                    + " already recorded");
-          }
+        // 1. DEBIT transaction, created VERIFIED. (provider, provider_ref) UNIQUE is the
+        //    double-execute backstop.
+        String normalizedOverride = Text.normalizeNumeric(providerRefOverride);
+        String providerRef =
+            normalizedOverride == null
+                ? refund.getMethod().name() + "-" + refund.getId()
+                : normalizedOverride;
+        PaymentTransaction debit =
+            PaymentTransaction.createVerifiedDebit(
+                UUID.randomUUID(),
+                orgId,
+                refund.getMethod(),
+                providerRef,
+                refund.getAmount(),
+                refund.getCurrency(),
+                actorId,
+                null,
+                now);
+        PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
+        PaymentTransactionRepository.Recorded rec = txnRepo.insertIfAbsent(debit);
+        if (!rec.inserted()) {
+          throw new ConflictException(
+              "refund DEBIT transaction "
+                  + refund.getMethod()
+                  + "/"
+                  + providerRef
+                  + " already recorded");
+        }
 
-          // 2. Move the source.
-          if (refund.isCreditNoteBacked()) {
-            executeCreditNoteBacked(txDsl, orgId, refund, now);
-          } else {
-            executeDirect(txDsl, orgId, refund, now);
-          }
+        // 2. Move the source.
+        if (refund.isCreditNoteBacked()) {
+          executeCreditNoteBacked(txDsl, orgId, refund, now);
+        } else {
+          executeDirect(txDsl, orgId, refund, now);
+        }
 
-          // 3. Link + stamp EXECUTED.
-          refund.execute(rec.transaction().getId(), now);
-          refundRepo.updateExecution(refund);
-          log.info(
-              "Executed refund {} orgId={} amount={} debitTxn={}",
-              refund.getId(),
-              orgId,
-              refund.getAmount(),
-              rec.transaction().getId());
-          return new Executed(refund, rec.transaction());
-        });
+        // 3. Link + stamp EXECUTED.
+        refund.execute(rec.transaction().getId(), now);
+        refundRepo.updateExecution(refund);
+        log.info(
+            "Executed refund {} orgId={} amount={} debitTxn={}",
+            refund.getId(),
+            orgId,
+            refund.getAmount(),
+            rec.transaction().getId());
+        return new Executed(refund, rec.transaction());
+      }
+    }
   }
 
   /**

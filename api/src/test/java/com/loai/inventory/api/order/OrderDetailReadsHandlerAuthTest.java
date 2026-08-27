@@ -87,6 +87,7 @@ class OrderDetailReadsHandlerAuthTest {
         invoiceAdminService,
         Mockito.mock(com.loai.inventory.service.InventoryService.class),
         Mockito.mock(com.loai.inventory.service.document.DocumentRenderService.class),
+        /* counterReturnService */ null,
         com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 

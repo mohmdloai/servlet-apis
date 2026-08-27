@@ -24,6 +24,7 @@ import com.lowagie.text.PageSize;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.Phrase;
 import com.lowagie.text.Rectangle;
+import com.lowagie.text.pdf.Barcode128;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
@@ -119,6 +120,9 @@ public final class DocumentRenderService {
     return font;
   }
 
+  /** Height the receipt's order-number barcode adds: ~10 mm of bars plus breathing room. */
+  private static final float RECEIPT_BARCODE_EXTRA_H = 40f;
+
   private static final Font TITLE = f(FontFactory.HELVETICA_BOLD, 18, null);
   private static final Font H2 = f(FontFactory.HELVETICA_BOLD, 12, null);
   private static final Font BODY = f(FontFactory.HELVETICA, 10, null);
@@ -139,7 +143,7 @@ public final class DocumentRenderService {
         build(
             PageSize.A4,
             36,
-            doc -> {
+            (doc, writer) -> {
               SalesInvoice inv = view.invoice();
               orgHeader(doc, org);
               documentTitle(
@@ -187,7 +191,7 @@ public final class DocumentRenderService {
         build(
             PageSize.A4,
             36,
-            doc -> {
+            (doc, writer) -> {
               orgHeader(doc, org);
               documentTitle(
                   doc,
@@ -210,15 +214,24 @@ public final class DocumentRenderService {
                   inv.invoice().getCustomerPhone(),
                   inv.invoice().getCustomerAddress());
               lineItems(doc, toCnRows(detail.lines()), cn.getCurrency());
-              totals(
-                  doc,
-                  cn.getCurrency(),
-                  new String[][] {
-                    {"Subtotal", money(cn.getSubtotal())},
-                    {"Tax", money(cn.getTaxTotal())},
-                    {"Credit total", money(cn.getTotal())},
-                  },
-                  2);
+              // V89: a counter return's note credits gross lines against a net invoice — the
+              // discount share is what brings the credit total down to what was paid. Only when
+              // there is one; a desk-issued note prints exactly as before.
+              boolean discounted = nz(cn.getDiscountTotal()).signum() > 0;
+              String[][] cnRows =
+                  discounted
+                      ? new String[][] {
+                        {"Subtotal", money(cn.getSubtotal())},
+                        {"Tax", money(cn.getTaxTotal())},
+                        {"Discount", money(cn.getDiscountTotal())},
+                        {"Credit total", money(cn.getTotal())},
+                      }
+                      : new String[][] {
+                        {"Subtotal", money(cn.getSubtotal())},
+                        {"Tax", money(cn.getTaxTotal())},
+                        {"Credit total", money(cn.getTotal())},
+                      };
+              totals(doc, cn.getCurrency(), cnRows, discounted ? 3 : 2);
             });
     return new RenderedDocument(fileName(cn.getCreditNoteNumber(), "credit-note"), bytes);
   }
@@ -255,12 +268,13 @@ public final class DocumentRenderService {
         220f
             + live.lines().size() * 16f
             + (discounted ? 13f : 0f)
+            + RECEIPT_BARCODE_EXTRA_H
             + (receiptLogo == null ? 0f : RECEIPT_LOGO_EXTRA_H);
     byte[] bytes =
         build(
             new Rectangle(width, height),
             10,
-            doc -> {
+            (doc, writer) -> {
               if (receiptLogo != null) {
                 receiptLogo.setAlignment(Element.ALIGN_CENTER);
                 doc.add(receiptLogo);
@@ -271,6 +285,11 @@ public final class DocumentRenderService {
               }
               receiptRule(doc);
               receiptCenter(doc, "RECEIPT", BODY_BOLD);
+              // The order number as a Code128 (stories/counter_return.md): the admin scanner
+              // reads it back to find the sale for a return, instead of a cashier typing
+              // SO-2026-00417 correctly while the customer waits. The number is still printed as
+              // text on the next line, so the barcode carries no caption of its own.
+              doc.add(orderNumberBarcode(writer, order.getOrderNumber()));
               receiptLine(doc, "Order", order.getOrderNumber());
               receiptLine(doc, "Invoice", inv.getInvoiceNumber());
               receiptLine(doc, "Date", fmtDate(inv.getIssuedAt()));
@@ -321,16 +340,16 @@ public final class DocumentRenderService {
   // ---- shared building blocks -----------------------------------------------------------------
 
   private interface Body {
-    void render(Document doc) throws DocumentException;
+    void render(Document doc, PdfWriter writer) throws DocumentException;
   }
 
   private static byte[] build(Rectangle pageSize, float margin, Body body) {
     Document doc = new Document(pageSize, margin, margin, margin, margin);
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     try {
-      PdfWriter.getInstance(doc, out);
+      PdfWriter writer = PdfWriter.getInstance(doc, out);
       doc.open();
-      body.render(doc);
+      body.render(doc, writer);
       doc.close();
     } catch (DocumentException e) {
       throw new IllegalStateException("Failed to render PDF document", e);
@@ -528,6 +547,17 @@ public final class DocumentRenderService {
       return "Discount (" + order.getCouponCode() + ")";
     }
     return "Discount";
+  }
+
+  /** A captionless Code128 of the order number, centred, ~10 mm tall, for the 80 mm slip. */
+  private static Image orderNumberBarcode(PdfWriter writer, String orderNumber) {
+    Barcode128 code = new Barcode128();
+    code.setCode(orderNumber);
+    code.setBarHeight(28f);
+    code.setFont(null);
+    Image img = code.createImageWithBarcode(writer.getDirectContent(), null, null);
+    img.setAlignment(Element.ALIGN_CENTER);
+    return img;
   }
 
   private static void receiptLine(Document doc, String left, String right)

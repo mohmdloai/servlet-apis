@@ -105,6 +105,7 @@ import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CategoryService;
 import com.loai.inventory.service.CollectionService;
+import com.loai.inventory.service.CounterReturnService;
 import com.loai.inventory.service.CouponService;
 import com.loai.inventory.service.CreditNoteService;
 import com.loai.inventory.service.CustomerPortalService;
@@ -343,6 +344,7 @@ public class AppConfig {
   public final FulfillmentService fulfillmentService;
   public final CreditNoteService creditNoteService;
   public final RefundService refundService;
+  public final CounterReturnService counterReturnService;
   public final OrderCancellationService orderCancellationService;
   public final DocumentRenderService documentRenderService;
 
@@ -796,6 +798,21 @@ public class AppConfig {
             salesInvoiceRepositoryFactory,
             refundRepositoryFactory,
             orgRepositoryFactory);
+    // The counter return composes credit-note issuance, the refund and the restock in one txn
+    // (stories/counter_return.md); built after both services it delegates to.
+    this.counterReturnService =
+        new CounterReturnService(
+            dsl,
+            salesOrderRepositoryFactory,
+            salesInvoiceRepositoryFactory,
+            creditNoteRepositoryFactory,
+            refundRepositoryFactory,
+            paymentRepositoryFactory,
+            paymentTransactionRepositoryFactory,
+            inventoryRepositoryFactory,
+            inventoryLogRepositoryFactory,
+            creditNoteService,
+            refundService);
     this.orderCancellationService =
         new OrderCancellationService(
             dsl,

@@ -51,12 +51,28 @@ public interface CreditNoteRepository {
    */
   void updateStatus(CreditNote note);
 
+  /** Persist {@code restocked_at} (+ {@code updated_at}) after a counter return restocked. */
+  void updateRestocked(CreditNote note);
+
   /**
    * Sum the {@code total} of every live (ISSUED or SETTLED) credit note already raised against
    * {@code salesInvoiceId} — VOID notes excluded. Used to cap cumulative crediting at the invoice's
    * grand total. Returns {@code 0} when none exist.
    */
   java.math.BigDecimal sumIssuedTotalByInvoice(UUID orgId, UUID salesInvoiceId);
+
+  /**
+   * Quantity already credited per product across the live (ISSUED or SETTLED) notes raised against
+   * {@code salesInvoiceId} — what a counter return may still take back is {@code billed − this}
+   * ({@code stories/counter_return.md}). Products with no credited line are absent from the map.
+   */
+  Map<UUID, Integer> creditedQuantityByProduct(UUID orgId, UUID salesInvoiceId);
+
+  /**
+   * The note a counter return already issued under {@code idempotencyKey}, for the replay path.
+   * Only counter returns write the key, so a desk-issued note is never found here.
+   */
+  Optional<CreditNote> findByIdempotencyKey(UUID orgId, String idempotencyKey);
 
   /**
    * Mint the next gapless credit-note number for {@code (orgId, year)} — {@code CN-YYYY-NNNN} —

@@ -253,6 +253,41 @@ class DocumentRenderServiceTest {
 
     assertEquals("CN-2026-0003.pdf", doc.filename());
     assertTrue(isPdf(doc.bytes()));
+    // A desk-issued note carries no discount share and prints exactly as before (V89).
+    String text = pdfText(doc.bytes());
+    assertFalse(text.contains("Discount"), text);
+    assertTrue(text.contains("Credit total"), text);
+  }
+
+  /**
+   * V89: a counter return's note credits gross lines against a net invoice — the discount share is
+   * printed so the credit total is explained: 100 gross, 10 share, 90 credited.
+   */
+  @Test
+  void renderCreditNote_printsDiscountRowWhenPresent() {
+    UUID cnId = UUID.randomUUID();
+    CreditNote cn = mock(CreditNote.class);
+    when(cn.getSalesInvoiceId()).thenReturn(INVOICE);
+    when(cn.getCreditNoteNumber()).thenReturn("CN-2026-0004");
+    when(cn.getStatus()).thenReturn(CreditNoteStatus.SETTLED);
+    when(cn.getSubtotal()).thenReturn(new BigDecimal("100.00"));
+    when(cn.getTaxTotal()).thenReturn(BigDecimal.ZERO);
+    when(cn.getDiscountTotal()).thenReturn(new BigDecimal("10.00"));
+    when(cn.getTotal()).thenReturn(new BigDecimal("90.00"));
+    when(cn.getCurrency()).thenReturn("EGP");
+    when(cn.getIssuedAt()).thenReturn(OffsetDateTime.now(ZoneOffset.UTC));
+    when(creditNoteService.get(ORG, cnId))
+        .thenReturn(new CreditNoteService.Detail(cn, List.of(), BigDecimal.ZERO));
+    when(invoiceAdminService.get(ORG, INVOICE))
+        .thenReturn(new InvoiceView(anInvoice(), List.of(aLine())));
+    when(orgService.getById(ORG)).thenReturn(orgWithProfile());
+
+    String text = pdfText(svc.renderCreditNote(ORG, cnId).bytes());
+
+    assertTrue(text.contains("Discount"), text);
+    assertTrue(text.contains("10.00"), text);
+    assertTrue(text.contains("Credit total"), text);
+    assertTrue(text.contains("90.00"), text);
   }
 
   @Test
@@ -283,6 +318,73 @@ class DocumentRenderServiceTest {
     assertFalse(text.contains("Discount"), text);
     assertTrue(text.contains("Tendered"), text);
     assertTrue(text.contains("Change"), text);
+  }
+
+  /**
+   * The order number as a Code128 on the slip ({@code stories/counter_return.md}): the barcode is
+   * drawn as filled bars into a form XObject — dozens of {@code re} rectangles that no text-only
+   * receipt ever had — and the number still prints as text beside it.
+   */
+  @Test
+  void renderReceipt_carriesOrderNumberBarcode() {
+    SalesOrder order = mock(SalesOrder.class);
+    when(order.getOrderNumber()).thenReturn("SO-2026-000417");
+    stubReceipt(anInvoice(), order, "120.00");
+
+    byte[] bytes = svc.renderReceipt(ORG, ORDER).bytes();
+
+    assertTrue(pdfText(bytes).contains("SO-2026-000417"));
+    int bars = filledRectangles(bytes);
+    assertTrue(bars >= 20, "expected the Code128 bars, found " + bars + " rectangles");
+  }
+
+  /**
+   * Filled-rectangle operators across the page and its XObjects — how a barcode's bars are drawn.
+   */
+  private static int filledRectangles(byte[] bytes) {
+    try {
+      com.lowagie.text.pdf.PdfReader reader = new com.lowagie.text.pdf.PdfReader(bytes);
+      StringBuilder all = new StringBuilder();
+      for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+        all.append(new String(reader.getPageContent(page), StandardCharsets.ISO_8859_1));
+        collectXObjectStreams(
+            reader.getPageN(page).getAsDict(com.lowagie.text.pdf.PdfName.RESOURCES), all);
+      }
+      // Barcode128 places every bar with its own `re` and fills once at the end, so count the
+      // rectangle operators, not `re f` pairs.
+      java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\sre\\s").matcher(all);
+      int n = 0;
+      while (m.find()) {
+        n++;
+      }
+      return n;
+    } catch (java.io.IOException e) {
+      throw new IllegalStateException("unreadable PDF", e);
+    }
+  }
+
+  private static void collectXObjectStreams(
+      com.lowagie.text.pdf.PdfDictionary resources, StringBuilder out) throws java.io.IOException {
+    if (resources == null) {
+      return;
+    }
+    com.lowagie.text.pdf.PdfDictionary xobjects =
+        resources.getAsDict(com.lowagie.text.pdf.PdfName.XOBJECT);
+    if (xobjects == null) {
+      return;
+    }
+    for (Object key : xobjects.getKeys()) {
+      com.lowagie.text.pdf.PdfObject o =
+          com.lowagie.text.pdf.PdfReader.getPdfObject(
+              xobjects.get((com.lowagie.text.pdf.PdfName) key));
+      if (o instanceof com.lowagie.text.pdf.PRStream stream) {
+        out.append(
+            new String(
+                com.lowagie.text.pdf.PdfReader.getStreamBytes(stream),
+                StandardCharsets.ISO_8859_1));
+        collectXObjectStreams(stream.getAsDict(com.lowagie.text.pdf.PdfName.RESOURCES), out);
+      }
+    }
   }
 
   /**

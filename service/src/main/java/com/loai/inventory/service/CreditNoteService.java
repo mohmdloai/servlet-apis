@@ -77,9 +77,23 @@ public final class CreditNoteService {
   public record LineSpec(
       UUID productId, String description, int quantity, BigDecimal unitPrice, BigDecimal taxRate) {}
 
-  /** Admin-supplied issuance command. */
+  /**
+   * Issuance command. The four-argument form is the admin's (gross lines, no discount, no key); the
+   * counter return ({@code stories/counter_return.md}) adds the credited lines' {@code
+   * discountTotal} share and the {@code idempotencyKey} it issues under.
+   */
   public record IssueCommand(
-      UUID salesInvoiceId, CreditNoteReason reason, String reasonNote, List<LineSpec> lines) {}
+      UUID salesInvoiceId,
+      CreditNoteReason reason,
+      String reasonNote,
+      List<LineSpec> lines,
+      BigDecimal discountTotal,
+      String idempotencyKey) {
+    public IssueCommand(
+        UUID salesInvoiceId, CreditNoteReason reason, String reasonNote, List<LineSpec> lines) {
+      this(salesInvoiceId, reason, reasonNote, lines, BigDecimal.ZERO, null);
+    }
+  }
 
   /** The issued credit note with its lines. */
   public record Issued(CreditNote creditNote, List<CreditNoteLine> lines) {}
@@ -90,136 +104,161 @@ public final class CreditNoteService {
    */
   public Issued issue(UUID orgId, IssueCommand cmd, boolean callerIsOwnerOrAdmin) {
     validate(cmd);
-
     return rootDsl.transactionResult(
-        cfg -> {
-          DSLContext txDsl = DSL.using(cfg);
-          CreditNoteRepository creditNoteRepo = creditNoteRepoFactory.create(txDsl);
-          SalesInvoiceRepository invoiceRepo = invoiceRepoFactory.create(txDsl);
-          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        cfg ->
+            issueInTx(
+                DSL.using(cfg),
+                orgId,
+                cmd,
+                callerIsOwnerOrAdmin,
+                OffsetDateTime.now(ZoneOffset.UTC)));
+  }
 
-          // Lock the invoice row for the rest of the txn so concurrent issuances against it
-          // serialize — the cumulative-credit cap below then sees every committed sibling note.
-          SalesInvoice invoice =
-              invoiceRepo
-                  .findByIdForUpdate(orgId, cmd.salesInvoiceId())
-                  .orElseThrow(() -> new NotFoundException("SalesInvoice", cmd.salesInvoiceId()));
-          if (invoice.getStatus() != InvoiceStatus.ISSUED
-              && invoice.getStatus() != InvoiceStatus.PAID) {
-            throw new ConflictException(
-                "cannot credit invoice "
-                    + invoice.getInvoiceNumber()
-                    + " in status "
-                    + invoice.getStatus()
-                    + "; must be ISSUED or PAID");
-          }
+  /**
+   * The body of {@link #issue}, inside the caller's transaction — so the counter return ({@code
+   * CounterReturnService}) can issue, refund, execute and restock as one unit of work while every
+   * rule here (the invoice row lock, the cumulative cap, the OWNER threshold gate, the gapless
+   * number) runs exactly as it does for a desk-issued note. {@code cmd} must already be validated.
+   */
+  public Issued issueInTx(
+      DSLContext txDsl,
+      UUID orgId,
+      IssueCommand cmd,
+      boolean callerIsOwnerOrAdmin,
+      OffsetDateTime now) {
+    {
+      CreditNoteRepository creditNoteRepo = creditNoteRepoFactory.create(txDsl);
+      SalesInvoiceRepository invoiceRepo = invoiceRepoFactory.create(txDsl);
 
-          UUID creditNoteId = UUID.randomUUID();
-          List<CreditNoteLine> lines = new ArrayList<>(cmd.lines().size());
-          BigDecimal subtotal = BigDecimal.ZERO;
-          BigDecimal taxTotal = BigDecimal.ZERO;
-          for (LineSpec spec : cmd.lines()) {
-            CreditNoteLine line =
-                CreditNoteLine.create(
-                    UUID.randomUUID(),
-                    creditNoteId,
-                    spec.productId(),
-                    spec.description(),
-                    spec.quantity(),
-                    spec.unitPrice(),
-                    spec.taxRate());
-            lines.add(line);
-            subtotal = subtotal.add(line.getLineSubtotal());
-            taxTotal = taxTotal.add(line.getLineTax());
-          }
-          BigDecimal total = subtotal.add(taxTotal);
+      // Lock the invoice row for the rest of the txn so concurrent issuances against it
+      // serialize — the cumulative-credit cap below then sees every committed sibling note.
+      SalesInvoice invoice =
+          invoiceRepo
+              .findByIdForUpdate(orgId, cmd.salesInvoiceId())
+              .orElseThrow(() -> new NotFoundException("SalesInvoice", cmd.salesInvoiceId()));
+      if (invoice.getStatus() != InvoiceStatus.ISSUED
+          && invoice.getStatus() != InvoiceStatus.PAID) {
+        throw new ConflictException(
+            "cannot credit invoice "
+                + invoice.getInvoiceNumber()
+                + " in status "
+                + invoice.getStatus()
+                + "; must be ISSUED or PAID");
+      }
 
-          // Credit notes for an invoice may not cumulatively exceed what it billed (gross grand
-          // total). The invoice row lock above serializes concurrent issuances, so this sum sees
-          // every committed sibling note — two issuances can't both slip past a stale total.
-          BigDecimal alreadyCredited =
-              creditNoteRepo.sumIssuedTotalByInvoice(orgId, invoice.getId());
-          BigDecimal creditedWithThis = alreadyCredited.add(total);
-          if (creditedWithThis.compareTo(invoice.getGrandTotal()) > 0) {
-            throw new ValidationException(
-                "credit notes for invoice "
-                    + invoice.getInvoiceNumber()
-                    + " would total "
-                    + creditedWithThis
-                    + " (already "
-                    + alreadyCredited
-                    + " + this "
-                    + total
-                    + "), exceeding invoice grand total "
-                    + invoice.getGrandTotal());
-          }
+      UUID creditNoteId = UUID.randomUUID();
+      List<CreditNoteLine> lines = new ArrayList<>(cmd.lines().size());
+      BigDecimal subtotal = BigDecimal.ZERO;
+      BigDecimal taxTotal = BigDecimal.ZERO;
+      for (LineSpec spec : cmd.lines()) {
+        CreditNoteLine line =
+            CreditNoteLine.create(
+                UUID.randomUUID(),
+                creditNoteId,
+                spec.productId(),
+                spec.description(),
+                spec.quantity(),
+                spec.unitPrice(),
+                spec.taxRate());
+        lines.add(line);
+        subtotal = subtotal.add(line.getLineSubtotal());
+        taxTotal = taxTotal.add(line.getLineTax());
+      }
+      // V89: a counter return credits gross lines against a net invoice, so its share of the
+      // invoice discount comes off here; a desk-issued note carries zero.
+      BigDecimal discountTotal =
+          cmd.discountTotal() == null ? BigDecimal.ZERO : cmd.discountTotal();
+      BigDecimal total = subtotal.add(taxTotal).subtract(discountTotal);
 
-          // Above-threshold escalation: returning this much money requires an OWNER. Gated on the
-          // invoice's CUMULATIVE credited total, not this one note — the same money source, the
-          // same bar. Checking the single note was structurable: N sub-threshold notes against one
-          // invoice (capped only by its grand total) refund an above-threshold sum with no OWNER
-          // ever involved. This reuses `creditedWithThis`, which the cap guard above already
-          // computed under the invoice's row lock, so concurrent issuances cannot both slip past a
-          // stale total. Trade-off, deliberate: separate small credits over an invoice's life
-          // cumulate, so a later one can be the first to need OWNER — the threshold is a ceiling on
-          // unattended payout per invoice, not per call. Same posture as OrderCancellationService.
-          BigDecimal threshold = orgThreshold(txDsl, orgId);
-          if (creditedWithThis.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
-            throw new ApprovalRequiredException(
-                "credit notes for invoice "
-                    + invoice.getInvoiceNumber()
-                    + " totalling "
-                    + creditedWithThis
-                    + " exceed approval threshold "
-                    + threshold
-                    + "; requires OWNER",
-                OrgRole.OWNER.name(),
-                threshold,
-                creditedWithThis);
-          }
+      // Credit notes for an invoice may not cumulatively exceed what it billed (gross grand
+      // total). The invoice row lock above serializes concurrent issuances, so this sum sees
+      // every committed sibling note — two issuances can't both slip past a stale total.
+      BigDecimal alreadyCredited = creditNoteRepo.sumIssuedTotalByInvoice(orgId, invoice.getId());
+      BigDecimal creditedWithThis = alreadyCredited.add(total);
+      if (creditedWithThis.compareTo(invoice.getGrandTotal()) > 0) {
+        throw new ValidationException(
+            "credit notes for invoice "
+                + invoice.getInvoiceNumber()
+                + " would total "
+                + creditedWithThis
+                + " (already "
+                + alreadyCredited
+                + " + this "
+                + total
+                + "), exceeding invoice grand total "
+                + invoice.getGrandTotal());
+      }
 
-          CreditNote note =
-              CreditNote.createDraft(
-                  creditNoteId,
-                  orgId,
-                  invoice.getCustomerId(),
-                  invoice.getId(),
-                  cmd.reason(),
-                  Text.normalizeText(cmd.reasonNote()),
-                  subtotal,
-                  taxTotal,
-                  invoice.getCurrency(),
-                  now);
+      // Above-threshold escalation: returning this much money requires an OWNER. Gated on the
+      // invoice's CUMULATIVE credited total, not this one note — the same money source, the
+      // same bar. Checking the single note was structurable: N sub-threshold notes against one
+      // invoice (capped only by its grand total) refund an above-threshold sum with no OWNER
+      // ever involved. This reuses `creditedWithThis`, which the cap guard above already
+      // computed under the invoice's row lock, so concurrent issuances cannot both slip past a
+      // stale total. Trade-off, deliberate: separate small credits over an invoice's life
+      // cumulate, so a later one can be the first to need OWNER — the threshold is a ceiling on
+      // unattended payout per invoice, not per call. Same posture as OrderCancellationService.
+      BigDecimal threshold = orgThreshold(txDsl, orgId);
+      if (creditedWithThis.compareTo(threshold) > 0 && !callerIsOwnerOrAdmin) {
+        throw new ApprovalRequiredException(
+            "credit notes for invoice "
+                + invoice.getInvoiceNumber()
+                + " totalling "
+                + creditedWithThis
+                + " exceed approval threshold "
+                + threshold
+                + "; requires OWNER",
+            OrgRole.OWNER.name(),
+            threshold,
+            creditedWithThis);
+      }
 
-          int year = now.getYear();
-          // The allocator is the single owner of the number: it both claims the gapless sequence
-          // and formats CN-YYYY-NNNN. This service never constructs a credit-note number itself.
-          String creditNoteNumber = creditNoteRepo.claimCreditNoteNumber(orgId, year);
-          note.issue(creditNoteNumber, now);
-          try {
-            creditNoteRepo.insert(note, lines);
-          } catch (DataAccessException e) {
-            // Same drift hazard as invoices: if credit_note_number_counter trails the credit_note
-            // table, the minted number is already taken and the (org_id, credit_note_number) unique
-            // index rejects the insert. Map it to a 409 that names the remedy, not an "Unexpected
-            // error" 500. Narrowed to the number constraint; any other violation still bubbles.
-            if (NumberSequenceConflicts.isUniqueViolationOn(e, CREDIT_NOTE_NUMBER_CONSTRAINT)) {
-              throw new ConflictException(
-                  "Credit-note number sequence is out of sync — contact support.");
-            }
-            throw e;
-          }
-
-          log.info(
-              "Issued credit note {} (id={}) orgId={} invoice={} reason={} total={}",
-              note.getCreditNoteNumber(),
+      CreditNote note =
+          CreditNote.createDraft(
               creditNoteId,
               orgId,
-              invoice.getInvoiceNumber(),
+              invoice.getCustomerId(),
+              invoice.getId(),
               cmd.reason(),
-              total);
-          return new Issued(note, lines);
-        });
+              Text.normalizeText(cmd.reasonNote()),
+              subtotal,
+              taxTotal,
+              discountTotal,
+              invoice.getCurrency(),
+              now);
+      if (cmd.idempotencyKey() != null) {
+        note.claimIdempotencyKey(cmd.idempotencyKey());
+      }
+
+      int year = now.getYear();
+      // The allocator is the single owner of the number: it both claims the gapless sequence
+      // and formats CN-YYYY-NNNN. This service never constructs a credit-note number itself.
+      String creditNoteNumber = creditNoteRepo.claimCreditNoteNumber(orgId, year);
+      note.issue(creditNoteNumber, now);
+      try {
+        creditNoteRepo.insert(note, lines);
+      } catch (DataAccessException e) {
+        // Same drift hazard as invoices: if credit_note_number_counter trails the credit_note
+        // table, the minted number is already taken and the (org_id, credit_note_number) unique
+        // index rejects the insert. Map it to a 409 that names the remedy, not an "Unexpected
+        // error" 500. Narrowed to the number constraint; any other violation still bubbles.
+        if (NumberSequenceConflicts.isUniqueViolationOn(e, CREDIT_NOTE_NUMBER_CONSTRAINT)) {
+          throw new ConflictException(
+              "Credit-note number sequence is out of sync — contact support.");
+        }
+        throw e;
+      }
+
+      log.info(
+          "Issued credit note {} (id={}) orgId={} invoice={} reason={} total={}",
+          note.getCreditNoteNumber(),
+          creditNoteId,
+          orgId,
+          invoice.getInvoiceNumber(),
+          cmd.reason(),
+          total);
+      return new Issued(note, lines);
+    }
   }
 
   /**

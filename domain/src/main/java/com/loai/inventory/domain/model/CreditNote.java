@@ -41,6 +41,23 @@ public final class CreditNote {
   private OffsetDateTime updatedAt;
 
   /**
+   * The credited lines' share of the invoice's discount (V89, {@code stories/counter_return.md}).
+   * Lines carry the invoice line's GROSS unit price, so on a discounted sale this is what brings
+   * {@code total} down to what the customer actually paid: {@code total = subtotal + taxTotal −
+   * discountTotal}. Zero on every desk-issued note (the admin form types gross lines against a
+   * gross cap of its own choosing).
+   */
+  private final BigDecimal discountTotal;
+
+  /**
+   * When a counter return put the goods back on the shelf; null when it did not (or never could).
+   */
+  private OffsetDateTime restockedAt;
+
+  /** The counter return's {@code Idempotency-Key}; null for a desk-issued note. */
+  private String idempotencyKey;
+
+  /**
    * Build a DRAFT credit note with frozen totals. {@code creditNoteNumber} is set at {@link
    * #issue}.
    */
@@ -55,20 +72,56 @@ public final class CreditNote {
       BigDecimal taxTotal,
       String currency,
       OffsetDateTime now) {
+    return createDraft(
+        id,
+        orgId,
+        customerId,
+        salesInvoiceId,
+        reason,
+        reasonNote,
+        subtotal,
+        taxTotal,
+        BigDecimal.ZERO,
+        currency,
+        now);
+  }
+
+  /**
+   * A DRAFT note whose lines credit gross prices while the customer paid net ({@code discountTotal}
+   * is their share of the invoice's discount — V89). {@code total = subtotal + tax − discount}, and
+   * it must stay positive: a return worth nothing is not a credit note.
+   */
+  public static CreditNote createDraft(
+      UUID id,
+      UUID orgId,
+      UUID customerId,
+      UUID salesInvoiceId,
+      CreditNoteReason reason,
+      String reasonNote,
+      BigDecimal subtotal,
+      BigDecimal taxTotal,
+      BigDecimal discountTotal,
+      String currency,
+      OffsetDateTime now) {
     Objects.requireNonNull(id, "id required");
     Objects.requireNonNull(orgId, "orgId required");
     Objects.requireNonNull(salesInvoiceId, "salesInvoiceId required");
     Objects.requireNonNull(reason, "reason required");
     Objects.requireNonNull(subtotal, "subtotal required");
     Objects.requireNonNull(taxTotal, "taxTotal required");
+    Objects.requireNonNull(discountTotal, "discountTotal required");
     Objects.requireNonNull(currency, "currency required");
     Objects.requireNonNull(now, "now required");
-    if (subtotal.signum() < 0 || taxTotal.signum() < 0) {
+    if (subtotal.signum() < 0 || taxTotal.signum() < 0 || discountTotal.signum() < 0) {
       throw new IllegalArgumentException("money fields must be >= 0");
     }
     BigDecimal sub = subtotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
     BigDecimal tax = taxTotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
-    BigDecimal tot = sub.add(tax);
+    BigDecimal disc = discountTotal.setScale(MONEY_SCALE, MONEY_ROUNDING);
+    if (disc.compareTo(sub) > 0) {
+      throw new IllegalArgumentException("discount cannot exceed subtotal");
+    }
+    BigDecimal tot = sub.add(tax).subtract(disc);
     if (tot.signum() <= 0) {
       throw new IllegalArgumentException("total must be > 0");
     }
@@ -82,6 +135,7 @@ public final class CreditNote {
         sub,
         tax,
         tot,
+        disc,
         currency,
         now,
         CreditNoteStatus.DRAFT,
@@ -107,7 +161,7 @@ public final class CreditNote {
       OffsetDateTime issuedAt,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {
-    return new CreditNote(
+    return rehydrate(
         id,
         orgId,
         customerId,
@@ -117,12 +171,61 @@ public final class CreditNote {
         subtotal,
         taxTotal,
         total,
+        BigDecimal.ZERO,
         currency,
-        createdAt,
-        status,
         creditNoteNumber,
+        status,
         issuedAt,
-        updatedAt);
+        createdAt,
+        updatedAt,
+        null,
+        null);
+  }
+
+  /**
+   * Reconstitute with the V89 columns — {@code discountTotal}, {@code restockedAt}, {@code
+   * idempotencyKey}.
+   */
+  public static CreditNote rehydrate(
+      UUID id,
+      UUID orgId,
+      UUID customerId,
+      UUID salesInvoiceId,
+      CreditNoteReason reason,
+      String reasonNote,
+      BigDecimal subtotal,
+      BigDecimal taxTotal,
+      BigDecimal total,
+      BigDecimal discountTotal,
+      String currency,
+      String creditNoteNumber,
+      CreditNoteStatus status,
+      OffsetDateTime issuedAt,
+      OffsetDateTime createdAt,
+      OffsetDateTime updatedAt,
+      OffsetDateTime restockedAt,
+      String idempotencyKey) {
+    CreditNote n =
+        new CreditNote(
+            id,
+            orgId,
+            customerId,
+            salesInvoiceId,
+            reason,
+            reasonNote,
+            subtotal,
+            taxTotal,
+            total,
+            discountTotal == null ? BigDecimal.ZERO : discountTotal,
+            currency,
+            createdAt,
+            status,
+            creditNoteNumber,
+            issuedAt,
+            updatedAt);
+    n.restockedAt = restockedAt;
+    n.idempotencyKey = idempotencyKey;
+    return n;
   }
 
   private CreditNote(
@@ -135,6 +238,7 @@ public final class CreditNote {
       BigDecimal subtotal,
       BigDecimal taxTotal,
       BigDecimal total,
+      BigDecimal discountTotal,
       String currency,
       OffsetDateTime createdAt,
       CreditNoteStatus status,
@@ -150,6 +254,7 @@ public final class CreditNote {
     this.subtotal = subtotal;
     this.taxTotal = taxTotal;
     this.total = total;
+    this.discountTotal = discountTotal;
     this.currency = currency;
     this.createdAt = createdAt;
     this.status = status;
@@ -207,6 +312,31 @@ public final class CreditNote {
     this.updatedAt = now;
   }
 
+  /**
+   * The counter return put this note's goods back on the shelf (V89). Stamped once, in the same
+   * transaction as the ledger rows and persisted through {@code
+   * CreditNoteRepository.updateRestocked} — so a committed note either says so or never did.
+   */
+  public void markRestocked(OffsetDateTime now) {
+    Objects.requireNonNull(now, "now required");
+    if (this.restockedAt != null) {
+      throw new IllegalStateException("credit note " + id + " already restocked");
+    }
+    this.restockedAt = now;
+  }
+
+  /** The counter return's {@code Idempotency-Key}, set before insert (DRAFT only). */
+  public void claimIdempotencyKey(String key) {
+    if (this.status != CreditNoteStatus.DRAFT) {
+      throw new InvalidOrderTransitionException(
+          "cannot set idempotency key on credit note " + id + " in status " + status);
+    }
+    if (key == null || key.isBlank()) {
+      throw new IllegalArgumentException("idempotencyKey required");
+    }
+    this.idempotencyKey = key;
+  }
+
   public UUID getId() {
     return id;
   }
@@ -241,6 +371,18 @@ public final class CreditNote {
 
   public BigDecimal getTotal() {
     return total;
+  }
+
+  public BigDecimal getDiscountTotal() {
+    return discountTotal;
+  }
+
+  public OffsetDateTime getRestockedAt() {
+    return restockedAt;
+  }
+
+  public String getIdempotencyKey() {
+    return idempotencyKey;
   }
 
   public String getCurrency() {
