@@ -69,6 +69,7 @@ class OrderStatusCountsHandlerAuthTest {
         Mockito.mock(com.loai.inventory.service.InvoiceAdminService.class),
         Mockito.mock(com.loai.inventory.service.InventoryService.class),
         Mockito.mock(com.loai.inventory.service.document.DocumentRenderService.class),
+        /* counterReturnService */ null,
         com.loai.inventory.api.config.ObjectMapperProvider.build());
   }
 

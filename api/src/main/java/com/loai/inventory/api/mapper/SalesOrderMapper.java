@@ -1,16 +1,19 @@
 package com.loai.inventory.api.mapper;
 
 import com.loai.inventory.api.dto.CancelOrderResponse;
+import com.loai.inventory.api.dto.CounterReturnRequest;
 import com.loai.inventory.api.dto.InStoreSaleResponse;
 import com.loai.inventory.api.dto.OrderStatusCountsResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.dto.SalesOrderResponse;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.CouponType;
+import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesOrder;
+import com.loai.inventory.service.CounterReturnService;
 import com.loai.inventory.service.OrderCancellationService.CancelResult;
 import com.loai.inventory.service.SalesOrderService.CustomerInput;
 import com.loai.inventory.service.SalesOrderService.DiscountInput;
@@ -96,6 +99,41 @@ public final class SalesOrderMapper {
     } catch (IllegalArgumentException e) {
       throw new ValidationException("Unknown order status: " + raw);
     }
+  }
+
+  /**
+   * Parse the worklist {@code channel} filter ({@code stories/counter_return.md}). Blank/absent ⇒
+   * null (all channels); an unknown value is a 400 naming the three.
+   */
+  public static OrderChannel toOrderChannel(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return OrderChannel.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException(
+          "Unknown order channel: " + raw + " (expected ONLINE, PHONE or IN_STORE)");
+    }
+  }
+
+  /** The counter-return body → command; {@code restock} defaults to true. */
+  public static CounterReturnService.ReturnCommand toReturnCommand(CounterReturnRequest req) {
+    if (req == null) {
+      throw new ValidationException("request body is required");
+    }
+    List<CounterReturnService.LineInput> lines =
+        req.getLines() == null
+            ? List.of()
+            : req.getLines().stream()
+                .map(
+                    l ->
+                        new CounterReturnService.LineInput(
+                            l == null ? null : l.getProductId(),
+                            l == null || l.getQuantity() == null ? 0 : l.getQuantity()))
+                .toList();
+    return new CounterReturnService.ReturnCommand(
+        lines, req.getRestock() == null || req.getRestock(), req.getReasonNote());
   }
 
   public static InStoreSaleResponse toInStoreResponse(InStoreSale sale) {

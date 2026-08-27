@@ -114,6 +114,7 @@ public class OrgServlet extends HttpServlet {
                     config.invoiceAdminService,
                     config.inventoryService,
                     config.documentRenderService,
+                    config.counterReturnService,
                     mapper)),
             Map.entry(
                 "payment-transactions",

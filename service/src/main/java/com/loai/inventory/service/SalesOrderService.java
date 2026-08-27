@@ -810,11 +810,21 @@ public class SalesOrderService {
    * Read-only on {@code rootDsl}.
    */
   public OrderListPage list(UUID orgId, OrderStatus status, int page, int size) {
+    return list(orgId, status, null, page, size);
+  }
+
+  /**
+   * {@link #list} narrowed by {@code channel} too ({@code ?channel=IN_STORE&status=CLOSED} is the
+   * day's counter sales — the third way a cashier finds a receipt, {@code
+   * stories/counter_return.md}). Ordering stays keyed on {@code status}.
+   */
+  public OrderListPage list(
+      UUID orgId, OrderStatus status, OrderChannel channel, int page, int size) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
     SalesOrderRepository repo = repoFactory.create(rootDsl);
-    List<SalesOrder> orders = repo.list(orgId, status, p * s, s);
-    long total = repo.count(orgId, status);
+    List<SalesOrder> orders = repo.list(orgId, status, channel, p * s, s);
+    long total = repo.count(orgId, status, channel);
     Map<UUID, List<SalesOrderLine>> linesByOrder =
         repo.findLinesByOrderIds(orders.stream().map(SalesOrder::getId).toList());
     List<Placed> items =

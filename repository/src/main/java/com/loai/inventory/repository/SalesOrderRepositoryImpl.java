@@ -158,7 +158,13 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
 
   @Override
   public List<SalesOrder> list(UUID orgId, OrderStatus status, int offset, int limit) {
-    var query = dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status));
+    return list(orgId, status, null, offset, limit);
+  }
+
+  @Override
+  public List<SalesOrder> list(
+      UUID orgId, OrderStatus status, OrderChannel channel, int offset, int limit) {
+    var query = dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status, channel));
     // Queue vs ledger: a status filter is a worklist — oldest first; no filter is the ledger —
     // newest first (mirrors the payment/refund worklists).
     var ordered =
@@ -170,7 +176,13 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
 
   @Override
   public long count(UUID orgId, OrderStatus status) {
-    return dsl.fetchCount(dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status)));
+    return count(orgId, status, null);
+  }
+
+  @Override
+  public long count(UUID orgId, OrderStatus status, OrderChannel channel) {
+    return dsl.fetchCount(
+        dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status, channel)));
   }
 
   @Override
@@ -203,6 +215,11 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   }
 
   private static org.jooq.Condition listConditions(UUID orgId, OrderStatus status) {
+    return listConditions(orgId, status, null);
+  }
+
+  private static org.jooq.Condition listConditions(
+      UUID orgId, OrderStatus status, OrderChannel channel) {
     org.jooq.Condition c = SALES_ORDER.ORG_ID.eq(orgId);
     if (status != null) {
       c =
@@ -210,6 +227,13 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
               SALES_ORDER.STATUS.eq(
                   com.loai.inventory.repository.generated.enums.OrderStatus.valueOf(
                       status.name())));
+    }
+    if (channel != null) {
+      c =
+          c.and(
+              SALES_ORDER.CHANNEL.eq(
+                  com.loai.inventory.repository.generated.enums.OrderChannel.valueOf(
+                      channel.name())));
     }
     return c;
   }

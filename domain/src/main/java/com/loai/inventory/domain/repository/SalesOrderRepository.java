@@ -1,6 +1,7 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Customer;
+import com.loai.inventory.domain.model.OrderChannel;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
@@ -84,8 +85,19 @@ public interface SalesOrderRepository {
    */
   List<SalesOrder> list(UUID orgId, OrderStatus status, int offset, int limit);
 
+  /**
+   * {@link #list} narrowed by {@code channel} as well ({@code ?channel=IN_STORE} — the day's
+   * counter sales, {@code stories/counter_return.md}). The queue-vs-ledger ordering stays keyed on
+   * {@code status} alone; a null {@code channel} is the unfiltered read.
+   */
+  List<SalesOrder> list(
+      UUID orgId, OrderStatus status, OrderChannel channel, int offset, int limit);
+
   /** Count of the filtered orders (drives the pager / tab badges). */
   long count(UUID orgId, OrderStatus status);
+
+  /** {@link #count} narrowed by {@code channel} as well. */
+  long count(UUID orgId, OrderStatus status, OrderChannel channel);
 
   /**
    * Live count of the org's orders per status in one grouped scan ({@code

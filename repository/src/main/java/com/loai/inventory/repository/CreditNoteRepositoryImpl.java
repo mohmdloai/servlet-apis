@@ -56,6 +56,10 @@ public final class CreditNoteRepositoryImpl implements CreditNoteRepository {
         .set(CREDIT_NOTE.ISSUED_AT, note.getIssuedAt())
         .set(CREDIT_NOTE.CREATED_AT, note.getCreatedAt())
         .set(CREDIT_NOTE.UPDATED_AT, note.getUpdatedAt())
+        // V89: the counter return's three facts (0 / null / null on a desk-issued note).
+        .set(CREDIT_NOTE.DISCOUNT_TOTAL, note.getDiscountTotal())
+        .set(CREDIT_NOTE.RESTOCKED_AT, note.getRestockedAt())
+        .set(CREDIT_NOTE.IDEMPOTENCY_KEY, note.getIdempotencyKey())
         .execute();
 
     if (!lines.isEmpty()) {
@@ -175,6 +179,44 @@ public final class CreditNoteRepositoryImpl implements CreditNoteRepository {
   }
 
   @Override
+  public void updateRestocked(CreditNote note) {
+    dsl.update(CREDIT_NOTE)
+        .set(CREDIT_NOTE.RESTOCKED_AT, note.getRestockedAt())
+        .set(CREDIT_NOTE.UPDATED_AT, note.getUpdatedAt())
+        .where(CREDIT_NOTE.ORG_ID.eq(note.getOrgId()).and(CREDIT_NOTE.ID.eq(note.getId())))
+        .execute();
+  }
+
+  @Override
+  public Map<UUID, Integer> creditedQuantityByProduct(UUID orgId, UUID salesInvoiceId) {
+    var qty = org.jooq.impl.DSL.sum(CREDIT_NOTE_LINE.QUANTITY);
+    return dsl.select(CREDIT_NOTE_LINE.PRODUCT_ID, qty)
+        .from(CREDIT_NOTE_LINE)
+        .join(CREDIT_NOTE)
+        .on(CREDIT_NOTE_LINE.CREDIT_NOTE_ID.eq(CREDIT_NOTE.ID))
+        .where(
+            CREDIT_NOTE
+                .ORG_ID
+                .eq(orgId)
+                .and(CREDIT_NOTE.SALES_INVOICE_ID.eq(salesInvoiceId))
+                .and(CREDIT_NOTE_LINE.PRODUCT_ID.isNotNull())
+                .and(
+                    CREDIT_NOTE.STATUS.in(
+                        com.loai.inventory.repository.generated.enums.CreditNoteStatus.ISSUED,
+                        com.loai.inventory.repository.generated.enums.CreditNoteStatus.SETTLED)))
+        .groupBy(CREDIT_NOTE_LINE.PRODUCT_ID)
+        .fetchMap(r -> r.value1(), r -> r.value2() == null ? 0 : r.value2().intValue());
+  }
+
+  @Override
+  public Optional<CreditNote> findByIdempotencyKey(UUID orgId, String idempotencyKey) {
+    return dsl.selectFrom(CREDIT_NOTE)
+        .where(CREDIT_NOTE.ORG_ID.eq(orgId).and(CREDIT_NOTE.IDEMPOTENCY_KEY.eq(idempotencyKey)))
+        .fetchOptional()
+        .map(this::toCreditNote);
+  }
+
+  @Override
   public String claimCreditNoteNumber(UUID orgId, int year) {
     dsl.insertInto(CREDIT_NOTE_NUMBER_COUNTER)
         .columns(
@@ -225,12 +267,15 @@ public final class CreditNoteRepositoryImpl implements CreditNoteRepository {
         r.getSubtotal(),
         r.getTaxTotal(),
         r.getTotal(),
+        r.getDiscountTotal(),
         r.getCurrency(),
         r.getCreditNoteNumber(),
         CreditNoteStatus.valueOf(r.getStatus().name()),
         r.getIssuedAt(),
         r.getCreatedAt(),
-        r.getUpdatedAt());
+        r.getUpdatedAt(),
+        r.getRestockedAt(),
+        r.getIdempotencyKey());
   }
 
   private CreditNoteLine toLine(CreditNoteLineRecord r) {
