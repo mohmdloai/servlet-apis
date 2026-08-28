@@ -120,11 +120,40 @@ public final class PaymentTransactionService {
       String customerNote,
       String verificationProof,
       OffsetDateTime occurredAt,
-      Set<UUID> acknowledgeClaimIds) {
+      Set<UUID> acknowledgeClaimIds,
+      UUID supersedesClaimId) {
 
     public VerifyCommand {
       acknowledgeClaimIds =
           acknowledgeClaimIds == null ? Set.of() : Set.copyOf(acknowledgeClaimIds);
+    }
+
+    /** The phase-1 shape: acknowledgements, no supersession. */
+    public VerifyCommand(
+        PaymentProvider provider,
+        String providerRef,
+        BigDecimal amount,
+        String currency,
+        UUID salesOrderId,
+        String orderNumber,
+        UUID claimedByCustomerId,
+        String customerNote,
+        String verificationProof,
+        OffsetDateTime occurredAt,
+        Set<UUID> acknowledgeClaimIds) {
+      this(
+          provider,
+          providerRef,
+          amount,
+          currency,
+          salesOrderId,
+          orderNumber,
+          claimedByCustomerId,
+          customerNote,
+          verificationProof,
+          occurredAt,
+          acknowledgeClaimIds,
+          null);
     }
 
     /** The pre-claims shape: nothing acknowledged. */
@@ -150,7 +179,8 @@ public final class PaymentTransactionService {
           customerNote,
           verificationProof,
           occurredAt,
-          Set.of());
+          Set.of(),
+          null);
     }
   }
 
@@ -564,6 +594,28 @@ public final class PaymentTransactionService {
           OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
           String currency = Text.normalizeCurrency(cmd.currency());
 
+          // 0. "Record a different transfer" from a claim: the claim's shopper and screenshot
+          //    travel to the row that will actually settle the order; the claim itself is
+          //    answered below, once the new row exists (stories/payment_claim_supersede.md).
+          PaymentTransaction superseded = null;
+          if (cmd.supersedesClaimId() != null) {
+            superseded =
+                txnRepo
+                    .findById(orgId, cmd.supersedesClaimId())
+                    .orElseThrow(
+                        () ->
+                            new NotFoundException(
+                                "payment transaction " + cmd.supersedesClaimId() + " not found"));
+            if (!superseded.isOpenClaim()) {
+              throw new ConflictException(
+                  "claim "
+                      + superseded.getProviderRef()
+                      + " is "
+                      + superseded.getVerificationStatus()
+                      + "; only a pending or not-found claim can be superseded");
+            }
+          }
+
           // 1. Idempotently record the claimed transaction (UNVERIFIED).
           PaymentTransaction claim =
               PaymentTransaction.createClaimed(
@@ -573,10 +625,14 @@ public final class PaymentTransactionService {
                   Text.normalizeNumeric(cmd.providerRef()),
                   cmd.amount(),
                   currency,
-                  cmd.claimedByCustomerId(),
+                  cmd.claimedByCustomerId() != null
+                      ? cmd.claimedByCustomerId()
+                      : superseded == null ? null : superseded.getClaimedByCustomerId(),
                   null, // an admin's free-form record is not a shopper claim
                   Text.normalizeText(cmd.customerNote()),
-                  null, // admin record path carries no shopper-uploaded proof key
+                  // The admin record path carries no shopper-uploaded proof key — unless it is
+                  // superseding a claim, whose screenshot is the evidence for THIS transfer.
+                  superseded == null ? null : superseded.getProofObjectKey(),
                   Text.normalizeText(cmd.verificationProof()),
                   cmd.occurredAt(),
                   now);
@@ -606,9 +662,34 @@ public final class PaymentTransactionService {
                     + " no longer awaiting payment)");
           }
 
-          // 3. The guard: a NEW reference against an order that has open shopper claims.
+          // 3. The guard: a NEW reference against an order that has open shopper claims. A
+          //    superseded claim is acknowledged by construction — the manager is answering it.
           if (rec.inserted() && !ref.isEmpty()) {
-            guardPendingClaims(txDsl, txnRepo, orgId, ref, txn, cmd.acknowledgeClaimIds());
+            Set<UUID> acknowledged = new HashSet<>(cmd.acknowledgeClaimIds());
+            if (superseded != null) {
+              acknowledged.add(superseded.getId());
+            }
+            guardPendingClaims(txDsl, txnRepo, orgId, ref, txn, acknowledged);
+          }
+
+          // 3b. Answer the superseded claim: NOT_FOUND, reference differs. Order first, then the
+          //     row — the lock order everything else here uses. A claim that was closed between
+          //     the read above and this lock is left as it is (nothing to answer any more).
+          if (rec.inserted() && superseded != null) {
+            if (superseded.getClaimedSalesOrderId() != null) {
+              paymentService.lockOrder(txDsl, orgId, superseded.getClaimedSalesOrderId());
+            }
+            PaymentTransaction locked =
+                txnRepo.findByIdForUpdate(orgId, superseded.getId()).orElse(null);
+            if (locked != null && locked.isOpenClaim()) {
+              locked.supersede(now);
+              txnRepo.update(locked);
+              log.info(
+                  "Claim {} ({}) superseded by {} — marked NOT_FOUND (reference differs)",
+                  locked.getId(),
+                  locked.getProviderRef(),
+                  txn.getProviderRef());
+            }
           }
 
           // 4. Verify (UNVERIFIED | NOT_FOUND → VERIFIED). When the reference IS a shopper's

@@ -40,7 +40,8 @@ public final class PaymentTransactionMapper {
         req.getOccurredAt(),
         req.getAcknowledgeClaimIds() == null
             ? Set.of()
-            : new HashSet<UUID>(req.getAcknowledgeClaimIds()));
+            : new HashSet<UUID>(req.getAcknowledgeClaimIds()),
+        req.getSupersedesClaimId());
   }
 
   /** The "Found it" body — absent body = the claim's own figures. */

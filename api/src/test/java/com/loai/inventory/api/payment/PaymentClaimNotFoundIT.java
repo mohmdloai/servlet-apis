@@ -325,6 +325,83 @@ class PaymentClaimNotFoundIT {
         PaymentClaimStatusResponse.from(service.latestClaimFor(other.id()).orElse(null)).isEmpty());
   }
 
+  @Test
+  void recordSupersedingAClaim_carriesShopperAndProof_answersTheClaim_andPaysTheOrder() {
+    UUID orgId = createOrg("acme");
+    UUID manager = createUser("sara@acme.test");
+    UUID customer = createCustomer(orgId);
+    Order order = seedPendingOrder(orgId, customer, "250.00", "0.00", null);
+    String proofKey =
+        com.loai.inventory.common.storage.ObjectStorage.paymentProofKeyPrefix(orgId, order.id())
+            + "receipt.png";
+    UUID claimId =
+        service
+            .claim(orgId, new ClaimCommand(order.id(), customer, "770099887766", proofKey, "typo?"))
+            .transaction()
+            .getId();
+
+    // The screenshot showed 7700 9988 7767 — one digit off what the shopper typed. The manager
+    // records the real reference FROM the claim: no guard (the claim is the one being answered),
+    // the shopper + screenshot travel to the new row, the claim is answered "reference differs".
+    VerifyResult result =
+        service.verify(
+            orgId,
+            new PaymentTransactionService.VerifyCommand(
+                com.loai.inventory.domain.model.PaymentProvider.INSTAPAY_MANUAL,
+                "770099887767",
+                new BigDecimal("250.00"),
+                "EGP",
+                order.id(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                java.util.Set.of(),
+                claimId),
+            manager);
+
+    assertEquals("MATCHED", result.reconciliationStatus().name());
+    assertEquals(customer, result.transaction().getClaimedByCustomerId(), "the shopper travels");
+    assertEquals(proofKey, result.transaction().getProofObjectKey(), "the screenshot travels");
+    assertNull(result.transaction().getClaimedSalesOrderId(), "the record is not a shopper claim");
+    assertEquals("PAID", orderStatus(order.id()));
+    // The superseded claim: answered (reference differs), then closed by the PAID flip.
+    assertEquals("ABANDONED", storedStatus(claimId));
+    assertEquals(
+        com.loai.inventory.domain.model.PaymentTransaction.REASON_REFERENCE_DIFFERS,
+        dsl.select(PAYMENT_TRANSACTION.NOT_FOUND_REASON)
+            .from(PAYMENT_TRANSACTION)
+            .where(PAYMENT_TRANSACTION.ID.eq(claimId))
+            .fetchOne(PAYMENT_TRANSACTION.NOT_FOUND_REASON));
+    assertEquals(0, notificationCount(), "no not-found mail — the shopper's order is paid");
+    assertEquals(2, txnCount(orgId));
+
+    // A VERIFIED claim cannot be superseded.
+    Order other = seedPendingOrder(orgId, customer, "100.00", "0.00", null);
+    UUID verified = fileClaim(orgId, other, customer);
+    service.verifyClaim(orgId, verified, null, manager);
+    assertThrows(
+        ConflictException.class,
+        () ->
+            service.verify(
+                orgId,
+                new PaymentTransactionService.VerifyCommand(
+                    com.loai.inventory.domain.model.PaymentProvider.INSTAPAY_MANUAL,
+                    nextRef(),
+                    new BigDecimal("100.00"),
+                    "EGP",
+                    other.id(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    java.util.Set.of(),
+                    verified),
+                manager));
+  }
+
   // helpers
 
   private String nextRef() {
@@ -398,6 +475,14 @@ class PaymentClaimNotFoundIT {
         .set(SALES_ORDER.EXPIRES_AT, expiresAt)
         .execute();
     return new Order(orderId, number);
+  }
+
+  private String orderStatus(UUID orderId) {
+    return dsl.select(SALES_ORDER.STATUS)
+        .from(SALES_ORDER)
+        .where(SALES_ORDER.ID.eq(orderId))
+        .fetchOne(SALES_ORDER.STATUS)
+        .getLiteral();
   }
 
   private OffsetDateTime orderExpiresAt(UUID orderId) {
