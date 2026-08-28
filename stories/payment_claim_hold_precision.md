@@ -1,6 +1,11 @@
 # Payment claims — the hold's clock at Postgres precision (CI hotfix)
 
-> Branch `170_fix/payment-claim-hold-micros` off `master` (after #169). PR #170 expected. No migration.
+> Branch `170_fix/payment-claim-hold-micros` off `master` (after #169). No migration.
+>
+> **History note.** The fix commit (`33e34d1`) reached `master` by a direct push on 2026-08-28 — the
+> branch had been created from `origin/master` with that remote as its upstream, so the first push went
+> there instead of to a `170_fix` branch. PR #170 carries this story amendment so the numbered branch
+> and its PR exist on the record like every other change; the code itself is already on master.
 
 **Symptom.** `PaymentClaimNotFoundIT.notFound_marksTheClaim_reArmsTheHoldSixHours_andTellsTheShopper`
 failed on CI (Linux) and on the master deploy while passing locally (macOS):
