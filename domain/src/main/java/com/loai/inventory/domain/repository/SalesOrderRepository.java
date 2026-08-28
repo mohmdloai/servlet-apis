@@ -53,6 +53,13 @@ public interface SalesOrderRepository {
   Map<UUID, String> findOrderNumbersByIds(UUID orgId, Collection<UUID> salesOrderIds);
 
   /**
+   * Batch load whole order aggregates (no lines) by id, scoped to {@code orgId} — one query per
+   * page for list reads that decorate rows with an order's status / totals / clock (the claims
+   * queue, {@code stories/payment_claim_verify.md}). Ids not in {@code orgId} are absent.
+   */
+  Map<UUID, SalesOrder> findByIds(UUID orgId, Collection<UUID> salesOrderIds);
+
+  /**
    * Persist the payment-related mutable state of an order: {@code status}, {@code prepaid_amount},
    * {@code updated_at}. Scoped by {@code (org_id, id)}.
    */

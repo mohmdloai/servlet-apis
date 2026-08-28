@@ -172,6 +172,11 @@ class OrderExpiryServiceIT extends ExpiryIntegrationTestBase {
             }
 
             @Override
+            public int extendExpiryForOrder(UUID salesOrderId, java.time.OffsetDateTime until) {
+              return real.extendExpiryForOrder(salesOrderId, until);
+            }
+
+            @Override
             public int markReleased(
                 UUID orgId, java.util.Collection<UUID> ids, String reason, OffsetDateTime now) {
               return real.markReleased(orgId, ids, reason, now);
@@ -208,7 +213,8 @@ class OrderExpiryServiceIT extends ExpiryIntegrationTestBase {
             dsl,
             salesOrderRepoFactory,
             new com.loai.inventory.service.ReservationService(
-                inventoryRepoFactory, poisonFactory, inventoryLogRepoFactory));
+                inventoryRepoFactory, poisonFactory, inventoryLogRepoFactory),
+            new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl());
 
     Summary summary = poisoned.sweep(200);
 

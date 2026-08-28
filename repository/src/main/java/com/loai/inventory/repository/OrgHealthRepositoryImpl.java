@@ -1,13 +1,16 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.PAYMENT;
+import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.USER_ORG_ROLE;
 
 import com.loai.inventory.domain.model.OrgHealth;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.repository.generated.enums.OrderStatus;
+import com.loai.inventory.repository.generated.enums.PaymentDirection;
 import com.loai.inventory.repository.generated.enums.PaymentStatus;
+import com.loai.inventory.repository.generated.enums.PaymentVerificationStatus;
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
@@ -48,7 +51,19 @@ public final class OrgHealthRepositoryImpl implements OrgHealthRepository {
             .fetchOne();
     long disputes = payments == null ? 0L : payments.get(disputed).longValue();
     long unallocated = payments == null ? 0L : payments.get(unallocatedField).longValue();
-    return new OrgHealth(members, pending, disputes, unallocated);
+    // The "To verify" queue depth: shopper claims (inbound) a manager has not yet decided on.
+    // Served by idx_txn_unverified (V22).
+    long claims =
+        dsl.fetchCount(
+            PAYMENT_TRANSACTION,
+            PAYMENT_TRANSACTION
+                .ORG_ID
+                .eq(orgId)
+                .and(PAYMENT_TRANSACTION.DIRECTION.eq(PaymentDirection.CREDIT))
+                .and(
+                    PAYMENT_TRANSACTION.VERIFICATION_STATUS.eq(
+                        PaymentVerificationStatus.UNVERIFIED)));
+    return new OrgHealth(members, pending, disputes, unallocated, claims);
   }
 
   @Override

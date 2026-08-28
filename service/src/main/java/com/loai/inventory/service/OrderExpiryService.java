@@ -1,6 +1,7 @@
 package com.loai.inventory.service;
 
 import com.loai.inventory.domain.model.ActorContext;
+import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.service.ReservationService.ReleaseResult;
@@ -38,14 +39,17 @@ public final class OrderExpiryService {
   private final DSLContext rootDsl;
   private final SalesOrderRepositoryFactory salesOrderRepoFactory;
   private final ReservationService reservationService;
+  private final PaymentTransactionRepositoryFactory txnRepoFactory;
 
   public OrderExpiryService(
       DSLContext rootDsl,
       SalesOrderRepositoryFactory salesOrderRepoFactory,
-      ReservationService reservationService) {
+      ReservationService reservationService,
+      PaymentTransactionRepositoryFactory txnRepoFactory) {
     this.rootDsl = rootDsl;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.reservationService = reservationService;
+    this.txnRepoFactory = txnRepoFactory;
   }
 
   /** Aggregate counts returned by one {@link #sweep(int)} pass. */
@@ -139,11 +143,19 @@ public final class OrderExpiryService {
               reservationService.releaseForOrder(
                   txDsl, orderId, RELEASE_REASON_EXPIRED, SWEEPER_ACTOR, now);
 
+          // Step 3 — the order is gone, so any open shopper claim on it can no longer be verified
+          // against it: close them ABANDONED (state-machines.md §D). The rule for WHEN an order
+          // expires is untouched — a claim moved the deadline at filing time (extendHold), which
+          // is the only way a claim ever influences this sweep.
+          int abandoned = txnRepoFactory.create(txDsl).abandonOpenClaims(orderId, null, now);
+
           log.info(
-              "Expired order {} — released {} reservation(s) across {} product(s)",
+              "Expired order {} — released {} reservation(s) across {} product(s), abandoned {}"
+                  + " open payment claim(s)",
               orderId,
               released.released(),
-              released.productsAffected());
+              released.productsAffected(),
+              abandoned);
           return new PerOrderResult(1, released.released(), released.productsAffected());
         });
   }

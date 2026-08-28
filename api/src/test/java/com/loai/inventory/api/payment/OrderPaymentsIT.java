@@ -140,7 +140,9 @@ class OrderPaymentsIT {
             new PaymentRepositoryFactoryImpl(),
             paymentService,
             refundService,
-            TestWiring.storage());
+            TestWiring.storage(),
+            new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.UserRepositoryFactoryImpl());
     cancellationService =
         new OrderCancellationService(
             dsl,
@@ -153,7 +155,8 @@ class OrderPaymentsIT {
                 new InventoryLogRepositoryFactoryImpl()),
             refundService,
             TestWiring.notificationService(dsl),
-            TestWiring.magicLinkService(dsl));
+            TestWiring.magicLinkService(dsl),
+            new PaymentTransactionRepositoryFactoryImpl());
   }
 
   @AfterAll

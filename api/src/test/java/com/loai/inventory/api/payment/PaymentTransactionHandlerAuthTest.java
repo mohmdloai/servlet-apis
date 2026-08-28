@@ -76,6 +76,7 @@ class PaymentTransactionHandlerAuthTest {
             null,
             null,
             null,
+            null,
             now,
             now);
     txn.verify(UUID.randomUUID(), now);
@@ -129,6 +130,85 @@ class PaymentTransactionHandlerAuthTest {
 
     assertEquals(201, resp.status, "MANAGER orphan resolution must succeed (201 Created)");
     verify(service).resolveOrphan(eq(ORG), eq(TXN), any(OrderRef.class), any());
+  }
+
+  // POST /{id}/verify — "Found it" on a shopper claim (stories/payment_claim_verify.md). Money-
+  // shaped like /resolve: MANAGER+. STAFF see the claim and ask a manager.
+
+  @Test
+  void verifyClaim_forbiddenForStaff_serviceNeverCalled() throws IOException {
+    PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+    PaymentTransactionHandler handler =
+        new PaymentTransactionHandler(
+            service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle(
+        "POST", reqWith(ctxWith(OrgRole.STAFF), "{}"), resp.mock, ORG, "/" + TXN + "/verify");
+
+    assertEquals(403, resp.status, "STAFF must be forbidden from verifying a claim");
+    verify(service, never()).verifyClaim(any(), any(), any(), any());
+  }
+
+  @Test
+  void verifyClaim_forbiddenForViewer_serviceNeverCalled() throws IOException {
+    PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+    PaymentTransactionHandler handler =
+        new PaymentTransactionHandler(
+            service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle(
+        "POST", reqWith(ctxWith(OrgRole.VIEWER), ""), resp.mock, ORG, "/" + TXN + "/verify");
+
+    assertEquals(403, resp.status);
+    verify(service, never()).verifyClaim(any(), any(), any(), any());
+  }
+
+  @Test
+  void verifyClaim_allowedForManager_emptyBodyIsFine_201() throws IOException {
+    PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+    VerifyResult result = aMatchedResult();
+    when(service.verifyClaim(eq(ORG), eq(TXN), any(), any())).thenReturn(result);
+    when(service.contextOf(eq(ORG), any()))
+        .thenReturn(new PaymentTransactionService.ClaimContext(null, null, "Sara"));
+    PaymentTransactionHandler handler =
+        new PaymentTransactionHandler(
+            service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    // No body at all — the claim carries the reference, the amount and the order already.
+    handler.handle(
+        "POST", reqWith(ctxWith(OrgRole.MANAGER), ""), resp.mock, ORG, "/" + TXN + "/verify");
+
+    assertEquals(201, resp.status, "MANAGER verify must succeed (201 Created)");
+    verify(service).verifyClaim(eq(ORG), eq(TXN), any(), any());
+    String body = resp.body.toString(StandardCharsets.UTF_8);
+    assertTrue(body.contains("\"verified_by_name\":\"Sara\""), body);
+  }
+
+  @Test
+  void verifyClaim_replay_is200() throws IOException {
+    PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+    VerifyResult fresh = aMatchedResult();
+    VerifyResult replay =
+        new VerifyResult(fresh.transaction(), fresh.reconciliationStatus(), null, null, true);
+    when(service.verifyClaim(eq(ORG), eq(TXN), any(), any())).thenReturn(replay);
+    when(service.contextOf(eq(ORG), any()))
+        .thenReturn(new PaymentTransactionService.ClaimContext(null, null, null));
+    PaymentTransactionHandler handler =
+        new PaymentTransactionHandler(
+            service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle(
+        "POST",
+        reqWith(ctxWith(OrgRole.MANAGER), "{\"amount\": 250}"),
+        resp.mock,
+        ORG,
+        "/" + TXN + "/verify");
+
+    assertEquals(200, resp.status, "an already-verified claim replays 200");
   }
 
   @Test

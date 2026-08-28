@@ -8,7 +8,10 @@ import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.repository.generated.tables.records.CustomerRecord;
 import java.time.OffsetDateTime;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -214,6 +217,19 @@ public final class CustomerRepositoryImpl implements CustomerRepository {
                     .eq(orgId)
                     .and(CUSTOMER.EMAIL.eq(email))
                     .and(CUSTOMER.ID.ne(excludeId))));
+  }
+
+  @Override
+  public Map<UUID, Customer> findByIds(UUID orgId, Collection<UUID> ids) {
+    if (ids.isEmpty()) {
+      return Map.of();
+    }
+    Map<UUID, Customer> out = new HashMap<>();
+    dsl.selectFrom(CUSTOMER)
+        .where(CUSTOMER.ORG_ID.eq(orgId).and(CUSTOMER.ID.in(ids)))
+        .fetch()
+        .forEach(r -> out.put(r.getId(), toCustomer(r)));
+    return out;
   }
 
   private Customer toCustomer(CustomerRecord r) {

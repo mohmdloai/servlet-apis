@@ -137,6 +137,25 @@ public final class InventoryReservationRepositoryImpl implements InventoryReserv
   }
 
   @Override
+  public int extendExpiryForOrder(UUID salesOrderId, OffsetDateTime until) {
+    return dsl.update(INVENTORY_RESERVATION)
+        .set(INVENTORY_RESERVATION.EXPIRES_AT, until)
+        .where(
+            INVENTORY_RESERVATION
+                .SALES_ORDER_LINE_ID
+                .in(
+                    dsl.select(SALES_ORDER_LINE.ID)
+                        .from(SALES_ORDER_LINE)
+                        .where(SALES_ORDER_LINE.SALES_ORDER_ID.eq(salesOrderId)))
+                .and(
+                    INVENTORY_RESERVATION.STATUS.eq(
+                        com.loai.inventory.repository.generated.enums.ReservationStatus.ACTIVE))
+                .and(INVENTORY_RESERVATION.EXPIRES_AT.isNotNull())
+                .and(INVENTORY_RESERVATION.EXPIRES_AT.lt(until)))
+        .execute();
+  }
+
+  @Override
   public int markConsumed(Collection<UUID> ids, OffsetDateTime now) {
     if (ids == null || ids.isEmpty()) {
       return 0;

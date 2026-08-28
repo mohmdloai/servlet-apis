@@ -171,7 +171,9 @@ class OrderPaidNotificationIT {
             new PaymentRepositoryFactoryImpl(),
             paymentService,
             refundService,
-            TestWiring.storage());
+            TestWiring.storage(),
+            new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.UserRepositoryFactoryImpl());
     ReservationService reservationService =
         new ReservationService(
             new InventoryRepositoryFactoryImpl(),

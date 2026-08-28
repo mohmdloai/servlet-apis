@@ -2,6 +2,7 @@ package com.loai.inventory.api.dto;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -10,6 +11,8 @@ import java.util.UUID;
  * <p>Jackson data carrier only (snake_case JSON ↔ camelCase Java via the global {@code
  * ObjectMapper}). Validation + provider parsing live in the service / mapper. The order is targeted
  * by either {@code sales_order_id} or {@code order_number}; both absent → ORPHAN (not an error).
+ * {@code acknowledge_claim_ids} answers the 409 {@code CLAIM_PENDING} guard: the open shopper
+ * claims on that order the manager checked the bank for and is deliberately recording past.
  */
 public class VerifyPaymentTransactionRequest {
 
@@ -23,8 +26,17 @@ public class VerifyPaymentTransactionRequest {
   private String customerNote;
   private String verificationProof;
   private OffsetDateTime occurredAt;
+  private List<UUID> acknowledgeClaimIds;
 
   public VerifyPaymentTransactionRequest() {}
+
+  public List<UUID> getAcknowledgeClaimIds() {
+    return acknowledgeClaimIds;
+  }
+
+  public void setAcknowledgeClaimIds(List<UUID> acknowledgeClaimIds) {
+    this.acknowledgeClaimIds = acknowledgeClaimIds;
+  }
 
   public String getProvider() {
     return provider;
