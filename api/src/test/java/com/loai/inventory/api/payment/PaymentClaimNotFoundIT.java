@@ -47,6 +47,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -185,7 +186,10 @@ class PaymentClaimNotFoundIT {
                 .toMinutes()
             < 2,
         "re-armed to now + 6h, was " + held);
-    assertEquals(held.toInstant(), result.heldUntil().toInstant());
+    // Postgres keeps timestamptz at µs; the response must agree with the row at that precision.
+    assertEquals(
+        held.toInstant().truncatedTo(ChronoUnit.MICROS),
+        result.heldUntil().toInstant().truncatedTo(ChronoUnit.MICROS));
     // The shopper is told, inside the same transaction.
     var notification =
         dsl.selectFrom(NOTIFICATION).where(NOTIFICATION.TYPE.eq("PAYMENT_NOT_FOUND")).fetchOne();

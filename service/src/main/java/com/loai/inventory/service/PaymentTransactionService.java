@@ -31,6 +31,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -73,6 +74,15 @@ public final class PaymentTransactionService {
 
   /** The grace a "can't find it" re-arms so the shopper can fix the reference and re-file. */
   public static final Duration NOT_FOUND_GRACE = Duration.ofHours(6);
+
+  /**
+   * The claim paths' clock, truncated to microseconds — Postgres keeps {@code timestamptz} at µs,
+   * so a hold written as {@code now + 6h} must be returned to the caller at the same precision it
+   * will read back later (the JDK clock is ns on Linux, µs on macOS; CI caught the drift).
+   */
+  private static OffsetDateTime claimClock() {
+    return OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
+  }
 
   private final DSLContext rootDsl;
   private final PaymentTransactionRepositoryFactory txnRepoFactory;
@@ -262,7 +272,7 @@ public final class PaymentTransactionService {
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
-          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+          OffsetDateTime now = claimClock();
 
           SalesOrder order =
               paymentService
@@ -378,7 +388,7 @@ public final class PaymentTransactionService {
           DSLContext txDsl = DSL.using(cfg);
           PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
           PaymentRepository paymentRepo = paymentRepoFactory.create(txDsl);
-          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+          OffsetDateTime now = claimClock();
 
           // Lock order → then claim. The sweeper and the cancel path both lock the order first and
           // then close its open claims; taking the claim row first here would be an AB/BA deadlock.
@@ -489,7 +499,7 @@ public final class PaymentTransactionService {
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
-          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+          OffsetDateTime now = claimClock();
 
           PaymentTransaction peek =
               txnRepo
