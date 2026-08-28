@@ -35,11 +35,19 @@ public record AdminOrgDetailResponse(
 
   /** The org-scoped aggregates a platform operator triages against. */
   public record Health(
-      long memberCount, long pendingPaymentOrders, long openDisputes, long unallocatedPayments) {
+      long memberCount,
+      long pendingPaymentOrders,
+      long openDisputes,
+      long unallocatedPayments,
+      long claimsToVerify) {
 
     public static Health from(OrgHealth h) {
       return new Health(
-          h.memberCount(), h.pendingPaymentOrders(), h.openDisputes(), h.unallocatedPayments());
+          h.memberCount(),
+          h.pendingPaymentOrders(),
+          h.openDisputes(),
+          h.unallocatedPayments(),
+          h.claimsToVerify());
     }
   }
 

@@ -122,7 +122,8 @@ class OrderCancellationIT {
             reservationService,
             refundService,
             com.loai.inventory.api.support.TestWiring.notificationService(dsl),
-            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl));
+            com.loai.inventory.api.support.TestWiring.magicLinkService(dsl),
+            new com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl());
   }
 
   @AfterAll

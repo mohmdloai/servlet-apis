@@ -80,7 +80,7 @@ class OrgAdminHandlerAuthTest {
   private PlatformOrgService.OrgWithHealth someOrg() {
     Org org =
         new Org(ORG, "Acme", "acme", true, null, 1440, OffsetDateTime.now(), OffsetDateTime.now());
-    return new PlatformOrgService.OrgWithHealth(org, new OrgHealth(0, 0, 0, 0), List.of());
+    return new PlatformOrgService.OrgWithHealth(org, new OrgHealth(0, 0, 0, 0, 0), List.of());
   }
 
   @Test

@@ -47,6 +47,14 @@ public interface InventoryReservationRepository {
   int clearExpiryForOrder(UUID salesOrderId);
 
   /**
+   * The other write site of V19's mirror contract: when a payment claim extends the order's hold
+   * ({@code SalesOrder#extendHold}), the ACTIVE reservations' {@code expires_at} display mirror
+   * must move with it, or the holds keep showing the old, earlier deadline. Only rows whose mirror
+   * is earlier than {@code until} are touched (monotonic, like the order). Returns rows moved.
+   */
+  int extendExpiryForOrder(UUID salesOrderId, java.time.OffsetDateTime until);
+
+  /**
    * Bulk-flip the given reservations to {@code CONSUMED}, stamping {@code consumed_at=now}. Filters
    * on {@code status='ACTIVE'} so a concurrently-released row is never consumed. Returns the number
    * of rows actually updated — the caller checks it equals the expected count.

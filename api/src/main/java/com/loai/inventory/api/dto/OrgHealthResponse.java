@@ -10,10 +10,18 @@ import com.loai.inventory.domain.model.OrgHealth;
  * {@code stories/org_health_rollup.md}.
  */
 public record OrgHealthResponse(
-    long memberCount, long pendingPaymentOrders, long openDisputes, long unallocatedPayments) {
+    long memberCount,
+    long pendingPaymentOrders,
+    long openDisputes,
+    long unallocatedPayments,
+    long claimsToVerify) {
 
   public static OrgHealthResponse from(OrgHealth h) {
     return new OrgHealthResponse(
-        h.memberCount(), h.pendingPaymentOrders(), h.openDisputes(), h.unallocatedPayments());
+        h.memberCount(),
+        h.pendingPaymentOrders(),
+        h.openDisputes(),
+        h.unallocatedPayments(),
+        h.claimsToVerify());
   }
 }

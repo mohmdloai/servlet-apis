@@ -2,6 +2,7 @@ package com.loai.inventory.api.dto;
 
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ApprovalRequiredException;
+import com.loai.inventory.common.exception.ClaimPendingException;
 import com.loai.inventory.common.exception.InsufficientStockException;
 import com.loai.inventory.common.exception.TooManyAttemptsException;
 import jakarta.servlet.http.HttpServletResponse;
@@ -46,6 +47,18 @@ public final class ApiErrors {
           e.getMessage(),
           ise.getShortages().stream()
               .map(s -> new ApiError.Shortage(s.productId(), s.requested(), s.available()))
+              .toList());
+    }
+    if (e instanceof ClaimPendingException cpe) {
+      return ApiError.ofClaimPending(
+          e.getStatusCode(),
+          e.getMessage(),
+          ClaimPendingException.KIND,
+          cpe.getClaims().stream()
+              .map(
+                  c ->
+                      new ApiError.PendingClaim(
+                          c.id(), c.providerRef(), c.amount(), c.filedAt(), c.hasProof()))
               .toList());
     }
     if (e instanceof ApprovalRequiredException are) {

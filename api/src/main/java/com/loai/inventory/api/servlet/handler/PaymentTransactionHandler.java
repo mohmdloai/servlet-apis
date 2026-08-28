@@ -8,6 +8,7 @@ import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PaymentTransactionResponse;
 import com.loai.inventory.api.dto.RefundOrphanRequest;
 import com.loai.inventory.api.dto.ResolveOrphanRequest;
+import com.loai.inventory.api.dto.VerifyClaimRequest;
 import com.loai.inventory.api.dto.VerifyPaymentTransactionRequest;
 import com.loai.inventory.api.mapper.PaymentTransactionMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -49,7 +50,13 @@ import org.slf4j.LoggerFactory;
  *       disposition context (the 1:1 payment and that payment's order, when they exist).
  *   <li>{@code POST /api/orgs/{orgId}/payment-transactions} — record-and-verify a manual InstaPay
  *       claim. {@code 201 Created} when this call processed it, {@code 200 OK} on an idempotent
- *       replay of an already-verified transaction.
+ *       replay of an already-verified transaction. {@code 409 CLAIM_PENDING} (with the claims) when
+ *       the order has open shopper claims and the reference is none of them — unless every claim id
+ *       is in {@code acknowledge_claim_ids} ({@code stories/payment_claim_verify.md}).
+ *   <li>{@code POST /api/orgs/{orgId}/payment-transactions/{id}/verify} — "Found it": verify one
+ *       shopper claim by id and reconcile it against the order the shopper named. Body optional
+ *       ({@code {amount?, occurred_at?, verification_proof?}}). {@code 201} on the verify, {@code
+ *       200} on a replay of an already-verified claim, {@code 409} on an ABANDONED one.
  *   <li>{@code POST /api/orgs/{orgId}/payment-transactions/{id}/resolve} — orphan resolution:
  *       attach an ORPHAN transaction's payment to an admin-chosen order. {@code 201 Created} when
  *       this call created the payment, {@code 200 OK} on an idempotent replay.
@@ -95,6 +102,10 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
           doPost(req, resp, orgId);
           return;
         }
+        if (parts.length == 2 && "verify".equals(parts[1])) {
+          doVerifyClaim(req, resp, orgId, parseId(parts[0]));
+          return;
+        }
         if (parts.length == 2 && "resolve".equals(parts[1])) {
           doResolve(req, resp, orgId, parseId(parts[0]));
           return;
@@ -132,7 +143,9 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
             boolParam(req, "has_payment"),
             PaymentTransactionMapper.toProviderFilter(req.getParameter("provider")),
             // ListFilter's canonical constructor trims (references arrive by copy-paste).
-            req.getParameter("provider_ref"));
+            req.getParameter("provider_ref"),
+            // The claims filed against one order — the order page's claim card.
+            uuidParam(req, "sales_order_id"));
     // Clamp here too so the envelope echoes the page/size actually served.
     int page = Math.max(intParam(req, "page", 0), 0);
     int size =
@@ -141,9 +154,23 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
             PaymentTransactionService.MAX_PAGE_SIZE);
 
     TransactionPage result = service.list(orgId, filter, page, size);
+    // Rows carry their batch-loaded claim context (customer + claimed order) but never the
+    // presigned proof URL and never the verifier's name — both are detail reads.
     List<PaymentTransactionResponse> data =
         result.items().stream()
-            .map(txn -> PaymentTransactionResponse.from(txn, null, null))
+            .map(
+                txn ->
+                    PaymentTransactionResponse.withContext(
+                        txn,
+                        null,
+                        null,
+                        txn.getClaimedByCustomerId() == null
+                            ? null
+                            : result.customers().get(txn.getClaimedByCustomerId()),
+                        txn.getClaimedSalesOrderId() == null
+                            ? null
+                            : result.claimedOrders().get(txn.getClaimedSalesOrderId()),
+                        null))
             .toList();
     writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
   }
@@ -160,11 +187,42 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
 
     TransactionDetail detail = service.get(orgId, id);
     resp.setHeader("Cache-Control", "private, no-store");
-    writeJson(
-        resp,
-        200,
-        PaymentTransactionResponse.withProof(
-            detail.transaction(), detail.payment(), detail.order(), detail.proofUrl()));
+    PaymentTransactionResponse out =
+        PaymentTransactionResponse.withContext(
+            detail.transaction(),
+            detail.payment(),
+            detail.order(),
+            detail.customer(),
+            detail.claimedOrder(),
+            detail.verifiedByName());
+    writeJson(resp, 200, withProof(out, detail.proofUrl()));
+  }
+
+  /** Attach the detail-only presigned proof URL to an already-built response. */
+  private static PaymentTransactionResponse withProof(
+      PaymentTransactionResponse out, String proofUrl) {
+    return PaymentTransactionResponse.attachProof(out, proofUrl);
+  }
+
+  /**
+   * {@code POST /{id}/verify} — "Found it" on one shopper claim (MANAGER). The body is optional:
+   * the claim already carries the reference, the amount and the order the shopper named.
+   */
+  private void doVerifyClaim(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID transactionId)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
+
+    VerifyClaimRequest body = readBodyOrNull(req, VerifyClaimRequest.class);
+
+    VerifyResult result =
+        service.verifyClaim(
+            orgId, transactionId, PaymentTransactionMapper.toClaimCommand(body), sc.actorId());
+
+    PaymentTransactionResponse out =
+        PaymentTransactionMapper.toResponse(result, service.contextOf(orgId, result.transaction()));
+    // 201 when this call verified the claim, 200 on an idempotent replay ("already verified by …").
+    writeJson(resp, result.replay() ? 200 : 201, out);
   }
 
   private void doPost(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
@@ -255,6 +313,19 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
       return Enum.valueOf(type, raw.trim().toUpperCase());
     } catch (IllegalArgumentException e) {
       throw new ValidationException("Unknown " + name + ": " + raw);
+    }
+  }
+
+  /** UUID query param; absent → null (no filter), malformed → 400. */
+  private static UUID uuidParam(HttpServletRequest req, String name) {
+    String raw = req.getParameter(name);
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(raw.trim());
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("Parameter '" + name + "' must be a UUID");
     }
   }
 

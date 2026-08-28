@@ -26,6 +26,7 @@ import com.loai.inventory.service.platform.OrgMilestoneService;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -116,6 +117,38 @@ public final class PaymentService {
           cleared,
           order.getOrderNumber());
     }
+  }
+
+  /**
+   * A shopper's payment claim keeps the order open ({@code stories/payment_claim_verify.md}): the
+   * hold moves to {@code max(expires_at, until)}, the ACTIVE reservations' V19 display mirror moves
+   * with it, and the sweeper — which knows nothing about claims — simply finds a later deadline.
+   * Locks the order ({@code FOR UPDATE}) so a concurrent expiry sweep serialises against it: the
+   * loser observes the committed state. A no-op (empty) when the order is not PENDING_PAYMENT — a
+   * paid, cancelled or already-expired order has no hold to extend, and the claim is still recorded
+   * against it (a verify later reconciles it as ORPHAN with the order's status shown). Runs in
+   * {@code txDsl}.
+   *
+   * @return the order with its (possibly unchanged) deadline, or empty when it has no hold
+   */
+  public Optional<SalesOrder> extendHoldForClaim(
+      DSLContext txDsl, UUID orgId, UUID orderId, OffsetDateTime until, OffsetDateTime now) {
+    SalesOrderRepository orderRepo = salesOrderRepoFactory.create(txDsl);
+    Optional<SalesOrder> found = orderRepo.findByIdForUpdate(orgId, orderId);
+    if (found.isEmpty() || found.get().getStatus() != OrderStatus.PENDING_PAYMENT) {
+      return Optional.empty();
+    }
+    SalesOrder order = found.get();
+    if (order.extendHold(until, now)) {
+      orderRepo.updatePaymentState(order);
+      int moved = reservationRepoFactory.create(txDsl).extendExpiryForOrder(order.getId(), until);
+      log.info(
+          "Extended hold on order {} to {} for a payment claim ({} reservation mirror(s) moved)",
+          order.getOrderNumber(),
+          until,
+          moved);
+    }
+    return Optional.of(order);
   }
 
   /** Target order for a transaction; at most one of the two fields is populated. */
@@ -388,6 +421,7 @@ public final class PaymentService {
             amount,
             order.getCurrency(),
             order.getCustomerId(),
+            null, // not a shopper claim — staff match the tender at the counter
             null,
             null, // no shopper-uploaded proof key on the in-store path
             null,
@@ -491,6 +525,23 @@ public final class PaymentService {
                         refundRepo.findByPaymentId(orgId, p.getId())))
             .toList();
     return new OrderPayments(order, payments);
+  }
+
+  /**
+   * Take the order's row lock ({@code FOR UPDATE}) ahead of a claim-row lock — the lock order the
+   * sweeper and the cancel path already use (order, then its open claims). Empty when the order is
+   * not in {@code orgId}. Runs in {@code txDsl}.
+   */
+  public Optional<SalesOrder> lockOrder(DSLContext txDsl, UUID orgId, UUID orderId) {
+    return salesOrderRepoFactory.create(txDsl).findByIdForUpdate(orgId, orderId);
+  }
+
+  /** Batch, non-locking read of whole orders by id (one query) for list decoration. */
+  public Map<UUID, SalesOrder> findOrders(DSLContext dsl, UUID orgId, Collection<UUID> orderIds) {
+    if (orderIds.isEmpty()) {
+      return Map.of();
+    }
+    return salesOrderRepoFactory.create(dsl).findByIds(orgId, orderIds);
   }
 
   /**

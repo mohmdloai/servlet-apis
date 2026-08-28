@@ -401,6 +401,24 @@ public class SalesOrder {
     this.updatedAt = now;
   }
 
+  /**
+   * A shopper's payment claim keeps the order open ({@code stories/payment_claim_verify.md}): the
+   * hold moves to {@code max(expires_at, until)} — monotonic, so a claim can only ever lengthen the
+   * window, never shorten it, and re-filing the same reference cannot stack. Only a {@code
+   * PENDING_PAYMENT} order has a hold to extend. Returns true when the deadline actually moved.
+   */
+  public boolean extendHold(OffsetDateTime until, OffsetDateTime now) {
+    requireStatus(OrderStatus.PENDING_PAYMENT);
+    Objects.requireNonNull(until, "until required");
+    Objects.requireNonNull(now, "now required");
+    if (this.expiresAt != null && !until.isAfter(this.expiresAt)) {
+      return false;
+    }
+    this.expiresAt = until;
+    this.updatedAt = now;
+    return true;
+  }
+
   public void markExpired(OffsetDateTime now) {
     requireStatus(OrderStatus.PENDING_PAYMENT);
     Objects.requireNonNull(now, "now required");

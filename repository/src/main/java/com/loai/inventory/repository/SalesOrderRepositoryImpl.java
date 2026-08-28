@@ -83,6 +83,19 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   }
 
   @Override
+  public Map<UUID, SalesOrder> findByIds(UUID orgId, Collection<UUID> salesOrderIds) {
+    if (salesOrderIds.isEmpty()) {
+      return Map.of();
+    }
+    Map<UUID, SalesOrder> out = new HashMap<>();
+    dsl.selectFrom(SALES_ORDER)
+        .where(SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.ID.in(salesOrderIds)))
+        .fetch()
+        .forEach(r -> out.put(r.getId(), toSalesOrder(r)));
+    return out;
+  }
+
+  @Override
   public Optional<SalesOrder> findByOrderNumber(UUID orgId, String orderNumber) {
     if (orderNumber == null || orderNumber.isBlank()) {
       return Optional.empty();

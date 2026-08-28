@@ -12,8 +12,21 @@ import java.util.UUID;
  * #verify}s it and the reconciliation pass stamps {@link #applyReconciliation a reconciliation
  * status}.
  *
- * <p>State machines (see V22): verification {@code UNVERIFIED → VERIFIED}; reconciliation is only
- * meaningful after VERIFIED.
+ * <p>Verification machine (state-machines.md §D, {@code stories/payment_claim_verify.md}):
+ *
+ * <pre>
+ *   [*] → UNVERIFIED            shopper files a claim (the order it names is stored)
+ *   UNVERIFIED → VERIFIED       manager finds the transfer → reconciliation (E)
+ *   UNVERIFIED → NOT_FOUND      manager cannot find it (reason kept; the shopper is told)
+ *   NOT_FOUND → VERIFIED        found after all (a late transfer, a second look)
+ *   NOT_FOUND → UNVERIFIED      the shopper re-files the same reference
+ *   UNVERIFIED|NOT_FOUND → ABANDONED   a sibling claim settled the order, or the order left
+ *                               PENDING_PAYMENT — reached by the system, never by a button
+ * </pre>
+ *
+ * <p>{@code providerRef} is the idempotency key and is never edited: a wrong reference is a
+ * NOT_FOUND on this row and a new row for the corrected one. Reconciliation is only meaningful
+ * after VERIFIED.
  */
 public class PaymentTransaction {
 
@@ -25,11 +38,12 @@ public class PaymentTransaction {
   private final PaymentProvider provider;
   private final String providerRef;
   private final PaymentDirection direction;
-  private final BigDecimal amount;
+  private BigDecimal amount;
   private final String currency;
-  private final OffsetDateTime occurredAt;
+  private OffsetDateTime occurredAt;
   private final OffsetDateTime recordedAt;
   private final UUID claimedByCustomerId;
+  private final UUID claimedSalesOrderId;
   private final String customerNote;
   private final String proofObjectKey;
   private final OffsetDateTime createdAt;
@@ -38,12 +52,17 @@ public class PaymentTransaction {
   private UUID verifiedBy;
   private OffsetDateTime verifiedAt;
   private String verificationProof;
+  private String notFoundReason;
+  private String rawPayload;
   private PaymentReconciliationStatus reconciliationStatus;
   private OffsetDateTime updatedAt;
 
   /**
    * A customer-claimed CREDIT transfer awaiting verification. Direction is fixed to {@code CREDIT}
-   * (money in) and status to {@code UNVERIFIED}; reconciliation is null until verified.
+   * (money in) and status to {@code UNVERIFIED}; reconciliation is null until verified. {@code
+   * claimedSalesOrderId} is the order the <em>shopper</em> said this transfer pays — set only on a
+   * row born as a shopper claim (null for an admin's free-form record and for in-store tenders,
+   * where staff match at the counter and nobody "claims" anything).
    */
   public static PaymentTransaction createClaimed(
       UUID id,
@@ -53,6 +72,7 @@ public class PaymentTransaction {
       BigDecimal amount,
       String currency,
       UUID claimedByCustomerId,
+      UUID claimedSalesOrderId,
       String customerNote,
       String proofObjectKey,
       String verificationProof,
@@ -81,6 +101,7 @@ public class PaymentTransaction {
         occurredAt == null ? now : occurredAt,
         now,
         claimedByCustomerId,
+        claimedSalesOrderId,
         customerNote,
         proofObjectKey,
         now,
@@ -88,6 +109,8 @@ public class PaymentTransaction {
         null,
         null,
         verificationProof,
+        null,
+        null,
         null,
         now);
   }
@@ -134,11 +157,14 @@ public class PaymentTransaction {
         null,
         null,
         null,
+        null,
         now,
         PaymentVerificationStatus.VERIFIED,
         verifiedBy,
         now,
         verificationProof,
+        null,
+        null,
         null,
         now);
   }
@@ -155,6 +181,7 @@ public class PaymentTransaction {
       OffsetDateTime occurredAt,
       OffsetDateTime recordedAt,
       UUID claimedByCustomerId,
+      UUID claimedSalesOrderId,
       String customerNote,
       String proofObjectKey,
       OffsetDateTime createdAt,
@@ -162,6 +189,8 @@ public class PaymentTransaction {
       UUID verifiedBy,
       OffsetDateTime verifiedAt,
       String verificationProof,
+      String notFoundReason,
+      String rawPayload,
       PaymentReconciliationStatus reconciliationStatus,
       OffsetDateTime updatedAt) {
     return new PaymentTransaction(
@@ -175,6 +204,7 @@ public class PaymentTransaction {
         occurredAt,
         recordedAt,
         claimedByCustomerId,
+        claimedSalesOrderId,
         customerNote,
         proofObjectKey,
         createdAt,
@@ -182,6 +212,8 @@ public class PaymentTransaction {
         verifiedBy,
         verifiedAt,
         verificationProof,
+        notFoundReason,
+        rawPayload,
         reconciliationStatus,
         updatedAt);
   }
@@ -197,6 +229,7 @@ public class PaymentTransaction {
       OffsetDateTime occurredAt,
       OffsetDateTime recordedAt,
       UUID claimedByCustomerId,
+      UUID claimedSalesOrderId,
       String customerNote,
       String proofObjectKey,
       OffsetDateTime createdAt,
@@ -204,6 +237,8 @@ public class PaymentTransaction {
       UUID verifiedBy,
       OffsetDateTime verifiedAt,
       String verificationProof,
+      String notFoundReason,
+      String rawPayload,
       PaymentReconciliationStatus reconciliationStatus,
       OffsetDateTime updatedAt) {
     this.id = id;
@@ -216,6 +251,7 @@ public class PaymentTransaction {
     this.occurredAt = occurredAt;
     this.recordedAt = recordedAt;
     this.claimedByCustomerId = claimedByCustomerId;
+    this.claimedSalesOrderId = claimedSalesOrderId;
     this.customerNote = customerNote;
     this.proofObjectKey = proofObjectKey;
     this.createdAt = createdAt;
@@ -223,22 +259,74 @@ public class PaymentTransaction {
     this.verifiedBy = verifiedBy;
     this.verifiedAt = verifiedAt;
     this.verificationProof = verificationProof;
+    this.notFoundReason = notFoundReason;
+    this.rawPayload = rawPayload;
     this.reconciliationStatus = reconciliationStatus;
     this.updatedAt = updatedAt;
   }
 
-  /** Admin confirms the real-world transfer happened. {@code UNVERIFIED → VERIFIED}. */
+  /**
+   * Admin confirms the real-world transfer happened. {@code UNVERIFIED → VERIFIED}, and also {@code
+   * NOT_FOUND → VERIFIED}: "can't find it" is retryable by design — a transfer that was not in the
+   * bank app at 09:00 may well be there at 11:00, and the manager taking a second look must not
+   * need the shopper to re-file first. Clears any not-found reason: the row's current truth is that
+   * the money is there.
+   */
   public void verify(UUID verifiedBy, OffsetDateTime now) {
     Objects.requireNonNull(verifiedBy, "verifiedBy required");
     Objects.requireNonNull(now, "now required");
-    if (verificationStatus != PaymentVerificationStatus.UNVERIFIED) {
-      throw new IllegalStateException(
-          "cannot verify transaction in status " + verificationStatus + "; expected UNVERIFIED");
-    }
+    requireOpenClaim("verify");
     this.verificationStatus = PaymentVerificationStatus.VERIFIED;
     this.verifiedBy = verifiedBy;
     this.verifiedAt = now;
+    this.notFoundReason = null;
     this.updatedAt = now;
+  }
+
+  /**
+   * The bank's numbers, applied just before {@link #verify}: a claim freezes the order's
+   * outstanding at filing time as its amount, but the manager confirms what the bank actually
+   * shows. Each {@code null} keeps the claim's own value. Allowed only while the claim is still
+   * open — a verified row's amount is a Payment's amount and never moves.
+   */
+  public void applyBankDetails(
+      BigDecimal amount, OffsetDateTime occurredAt, String verificationProof, OffsetDateTime now) {
+    Objects.requireNonNull(now, "now required");
+    requireOpenClaim("restate");
+    if (amount != null) {
+      if (amount.signum() <= 0) {
+        throw new IllegalArgumentException("amount must be > 0");
+      }
+      this.amount = amount.setScale(MONEY_SCALE, MONEY_ROUNDING);
+    }
+    if (occurredAt != null) {
+      this.occurredAt = occurredAt;
+    }
+    if (verificationProof != null) {
+      this.verificationProof = verificationProof;
+    }
+    this.updatedAt = now;
+  }
+
+  /**
+   * The system closes an open claim that can no longer be verified — a sibling claim settled the
+   * order, or the order was cancelled / expired ({@code UNVERIFIED|NOT_FOUND → ABANDONED},
+   * terminal). Never reached from a button.
+   */
+  public void abandon(OffsetDateTime now) {
+    Objects.requireNonNull(now, "now required");
+    requireOpenClaim("abandon");
+    this.verificationStatus = PaymentVerificationStatus.ABANDONED;
+    this.updatedAt = now;
+  }
+
+  /**
+   * Audit blob for the record path: when a manager records a free-form transfer against an order
+   * that has open claims and explicitly acknowledges them, the acknowledged ids are written here so
+   * the ledger shows the decision was deliberate. JSON text; persisted as {@code raw_payload}.
+   */
+  public void attachAudit(String rawPayloadJson) {
+    this.rawPayload = rawPayloadJson;
   }
 
   /** Record the outcome of reconciling this verified transaction against an order. */
@@ -251,6 +339,23 @@ public class PaymentTransaction {
     }
     this.reconciliationStatus = status;
     this.updatedAt = now;
+  }
+
+  /** True while the claim can still be verified: UNVERIFIED or NOT_FOUND. */
+  public boolean isOpenClaim() {
+    return verificationStatus == PaymentVerificationStatus.UNVERIFIED
+        || verificationStatus == PaymentVerificationStatus.NOT_FOUND;
+  }
+
+  private void requireOpenClaim(String verb) {
+    if (!isOpenClaim()) {
+      throw new IllegalStateException(
+          "cannot "
+              + verb
+              + " transaction in status "
+              + verificationStatus
+              + "; expected UNVERIFIED or NOT_FOUND");
+    }
   }
 
   public UUID getId() {
@@ -293,6 +398,11 @@ public class PaymentTransaction {
     return claimedByCustomerId;
   }
 
+  /** The order the shopper said this transfer pays (nullable — only a shopper claim sets it). */
+  public UUID getClaimedSalesOrderId() {
+    return claimedSalesOrderId;
+  }
+
   public String getCustomerNote() {
     return customerNote;
   }
@@ -320,6 +430,16 @@ public class PaymentTransaction {
 
   public String getVerificationProof() {
     return verificationProof;
+  }
+
+  /** Why the manager could not find the transfer — non-null only while NOT_FOUND. */
+  public String getNotFoundReason() {
+    return notFoundReason;
+  }
+
+  /** Raw audit JSON (nullable) — see {@link #attachAudit}. */
+  public String getRawPayload() {
+    return rawPayload;
   }
 
   public PaymentReconciliationStatus getReconciliationStatus() {

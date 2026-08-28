@@ -1,13 +1,22 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Customer;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 public interface CustomerRepository {
 
   Optional<Customer> findById(UUID orgId, UUID id);
+
+  /**
+   * Batch load by id, scoped to {@code orgId} — one query per page for list reads that name the
+   * customer on each row (the claims queue, {@code stories/payment_claim_verify.md}). Ids outside
+   * {@code orgId} are absent from the result.
+   */
+  Map<UUID, Customer> findByIds(UUID orgId, Collection<UUID> ids);
 
   /**
    * Learn this customer's language <b>only if we do not already know it</b> (slice L) — returns

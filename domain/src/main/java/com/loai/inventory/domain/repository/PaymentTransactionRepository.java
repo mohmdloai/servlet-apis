@@ -4,6 +4,7 @@ import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
 import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.PaymentVerificationStatus;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,18 +45,32 @@ public interface PaymentTransactionRepository {
    * the orphan queue is built on ({@code transaction.md} §Operational queries). {@code provider} /
    * {@code providerRef} are literal column matches ({@code providerRef} case-sensitive — it is the
    * provider's identifier, not user prose) for the support lookup "did we record this reference?"
-   * ({@code stories/lookup_transaction_by_reference.md}).
+   * ({@code stories/lookup_transaction_by_reference.md}). {@code claimedSalesOrderId} narrows to
+   * the claims filed against one order ({@code claimed_sales_order_id}) — the order page's
+   * "customer says they paid" card ({@code stories/payment_claim_verify.md}); it composes with
+   * {@code verificationStatus}.
    */
   record ListFilter(
       PaymentVerificationStatus verificationStatus,
       PaymentReconciliationStatus reconciliationStatus,
       Boolean hasPayment,
       PaymentProvider provider,
-      String providerRef) {
+      String providerRef,
+      UUID claimedSalesOrderId) {
 
     /** Normalizes {@code providerRef}: blank → null (no filter), otherwise trimmed. */
     public ListFilter {
       providerRef = providerRef == null || providerRef.isBlank() ? null : providerRef.trim();
+    }
+
+    /** The pre-claims five-predicate shape; no order filter. */
+    public ListFilter(
+        PaymentVerificationStatus verificationStatus,
+        PaymentReconciliationStatus reconciliationStatus,
+        Boolean hasPayment,
+        PaymentProvider provider,
+        String providerRef) {
+      this(verificationStatus, reconciliationStatus, hasPayment, provider, providerRef, null);
     }
 
     /** True when no predicate is set — the unfiltered ledger view. */
@@ -64,14 +79,27 @@ public interface PaymentTransactionRepository {
           && reconciliationStatus == null
           && hasPayment == null
           && provider == null
-          && providerRef == null;
+          && providerRef == null
+          && claimedSalesOrderId == null;
+    }
+
+    /**
+     * True when the view is a claims queue ({@code verification_status} UNVERIFIED or NOT_FOUND):
+     * these are ordered by the <em>claimed order's</em> clock, not by the transaction's own time.
+     */
+    public boolean isClaimsQueue() {
+      return verificationStatus == PaymentVerificationStatus.UNVERIFIED
+          || verificationStatus == PaymentVerificationStatus.NOT_FOUND;
     }
   }
 
   /**
    * Page through the org's transactions. Filtered queries are queue views ordered oldest-first
    * ({@code occurred_at ASC, id ASC}); an empty filter is the ledger view ordered newest-first
-   * ({@code recorded_at DESC, id DESC}). {@code id} tiebreaks keep pagination deterministic.
+   * ({@code recorded_at DESC, id DESC}). A claims queue ({@link ListFilter#isClaimsQueue}) is the
+   * exception: it is ordered by urgency — the claimed order's {@code expires_at ASC NULLS LAST},
+   * then {@code recorded_at ASC} — because what the queue can lose is the order, not the row.
+   * {@code id} tiebreaks keep pagination deterministic.
    */
   List<PaymentTransaction> list(UUID orgId, ListFilter filter, int offset, int limit);
 
@@ -80,4 +108,20 @@ public interface PaymentTransactionRepository {
 
   /** Read a transaction by id without locking, scoped to the org. */
   Optional<PaymentTransaction> findById(UUID orgId, UUID id);
+
+  /**
+   * The open claims (UNVERIFIED or NOT_FOUND) filed against one order, oldest first — the record
+   * path's pending-claim guard and the order page's claim card ({@code
+   * stories/payment_claim_verify.md}). Runs in the caller's transaction; not locking.
+   */
+  List<PaymentTransaction> findOpenClaimsByOrder(UUID orgId, UUID salesOrderId);
+
+  /**
+   * Close every open claim on {@code salesOrderId} except {@code exceptTransactionId} (nullable) as
+   * {@code ABANDONED}, stamping {@code updated_at = now}. One guarded UPDATE, so it is safe against
+   * a concurrent verify of the same rows (a row that just became VERIFIED no longer matches).
+   * Called when a sibling claim settles the order, and by expiry / cancellation. Returns the rows
+   * closed.
+   */
+  int abandonOpenClaims(UUID salesOrderId, UUID exceptTransactionId, OffsetDateTime now);
 }

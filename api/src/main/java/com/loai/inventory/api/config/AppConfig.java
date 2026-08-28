@@ -650,7 +650,11 @@ public class AppConfig {
             inventoryReservationRepositoryFactory,
             inventoryLogRepositoryFactory);
     this.orderExpiryService =
-        new OrderExpiryService(dsl, salesOrderRepositoryFactory, reservationService);
+        new OrderExpiryService(
+            dsl,
+            salesOrderRepositoryFactory,
+            reservationService,
+            paymentTransactionRepositoryFactory);
     this.numberSequenceReconciliationService =
         new NumberSequenceReconciliationService(dsl, numberSequenceReconciliationRepositoryFactory);
     // NotificationService + MagicLinkService are both constructed above — the ORDER_PAID producer
@@ -695,7 +699,9 @@ public class AppConfig {
             paymentRepositoryFactory,
             paymentService,
             refundService,
-            objectStorage);
+            objectStorage,
+            customerRepositoryFactory,
+            userRepositoryFactory);
     this.invoiceService =
         new InvoiceService(
             salesInvoiceRepositoryFactory,
@@ -822,7 +828,8 @@ public class AppConfig {
             reservationService,
             refundService,
             notificationService,
-            magicLinkService);
+            magicLinkService,
+            paymentTransactionRepositoryFactory);
     this.documentRenderService =
         new DocumentRenderService(
             orgService,

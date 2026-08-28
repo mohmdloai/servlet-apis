@@ -18,6 +18,7 @@ import com.loai.inventory.domain.repository.FulfillmentRepository;
 import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
+import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import java.math.BigDecimal;
@@ -91,6 +92,7 @@ public final class OrderCancellationService {
   private final RefundService refundService;
   private final NotificationService notificationService;
   private final MagicLinkService magicLinkService;
+  private final PaymentTransactionRepositoryFactory txnRepoFactory;
 
   public OrderCancellationService(
       DSLContext rootDsl,
@@ -100,7 +102,8 @@ public final class OrderCancellationService {
       ReservationService reservationService,
       RefundService refundService,
       NotificationService notificationService,
-      MagicLinkService magicLinkService) {
+      MagicLinkService magicLinkService,
+      PaymentTransactionRepositoryFactory txnRepoFactory) {
     this.rootDsl = rootDsl;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.paymentRepoFactory = paymentRepoFactory;
@@ -109,6 +112,7 @@ public final class OrderCancellationService {
     this.refundService = refundService;
     this.notificationService = notificationService;
     this.magicLinkService = magicLinkService;
+    this.txnRepoFactory = txnRepoFactory;
   }
 
   /**
@@ -258,6 +262,17 @@ public final class OrderCancellationService {
           // Payment. The order is now terminal (CANCELLED), so the stored cache is no longer read;
           // the true figure is derivable as SUM(payments) − SUM(EXECUTED refunds) if ever needed.
           orderRepo.updateCancelledState(order);
+
+          // Open shopper claims on a cancelled order can no longer be verified against it — close
+          // them ABANDONED (state-machines.md §D). A transfer that did arrive for this order is
+          // then a plain record → orphan queue → its refund exit.
+          int abandonedClaims = txnRepoFactory.create(txDsl).abandonOpenClaims(orderId, null, now);
+          if (abandonedClaims > 0) {
+            log.info(
+                "Abandoned {} open payment claim(s) on cancelled order {}",
+                abandonedClaims,
+                order.getOrderNumber());
+          }
 
           // ORDER_CANCELLED — raised last, once the cancel is fully assembled, so the message can
           // state the refund total and so an above-threshold cancel refused at the approval gate

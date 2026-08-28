@@ -85,7 +85,9 @@ class PaidOrderDeadlineIT extends ExpiryIntegrationTestBase {
             new PaymentRepositoryFactoryImpl(),
             paymentService,
             refundService,
-            TestWiring.storage());
+            TestWiring.storage(),
+            new com.loai.inventory.repository.CustomerRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.UserRepositoryFactoryImpl());
     staff = UUID.randomUUID();
     dsl.insertInto(APP_USER)
         .set(APP_USER.ID, staff)

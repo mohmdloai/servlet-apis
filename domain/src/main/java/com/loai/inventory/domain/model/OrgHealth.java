@@ -9,6 +9,12 @@ package com.loai.inventory.domain.model;
  * @param pendingPaymentOrders sales orders awaiting payment (status {@code PENDING_PAYMENT})
  * @param openDisputes payments currently in dispute (status {@code DISPUTED})
  * @param unallocatedPayments payments still carrying an unallocated balance
+ * @param claimsToVerify shopper payment claims awaiting a manager (CREDIT transactions in {@code
+ *     UNVERIFIED}) — the "To verify" queue depth ({@code stories/payment_claim_verify.md})
  */
 public record OrgHealth(
-    long memberCount, long pendingPaymentOrders, long openDisputes, long unallocatedPayments) {}
+    long memberCount,
+    long pendingPaymentOrders,
+    long openDisputes,
+    long unallocatedPayments,
+    long claimsToVerify) {}
