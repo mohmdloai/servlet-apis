@@ -317,6 +317,28 @@ public class PaymentTransaction {
   }
 
   /**
+   * The system reason a claim carries when a manager recorded the real transfer under another
+   * reference.
+   */
+  public static final String REASON_REFERENCE_DIFFERS = "REFERENCE_DIFFERS";
+
+  /**
+   * "Record a different transfer" from this claim ({@code stories/payment_claim_supersede.md}): the
+   * screenshot showed the right transfer under a reference that differs from what the shopper
+   * typed, so the manager records that reference and this claim is answered NOT_FOUND with the
+   * system reason {@link #REASON_REFERENCE_DIFFERS} — from UNVERIFIED or from an earlier NOT_FOUND
+   * (the note the manager left then is kept). The order is then paid through the new row, which
+   * closes this one ABANDONED in the same transaction; the reason survives on the row.
+   */
+  public void supersede(OffsetDateTime now) {
+    Objects.requireNonNull(now, "now required");
+    requireOpenClaim("supersede");
+    this.verificationStatus = PaymentVerificationStatus.NOT_FOUND;
+    this.notFoundReason = REASON_REFERENCE_DIFFERS;
+    this.updatedAt = now;
+  }
+
+  /**
    * The shopper re-files the same reference after a not-found: {@code NOT_FOUND → UNVERIFIED}, the
    * manager's answer cleared. The reference is unchanged (it is the idempotency key) — this is
    * "please look again", not a new claim.

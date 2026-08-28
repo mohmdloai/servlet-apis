@@ -28,7 +28,22 @@ public class VerifyPaymentTransactionRequest {
   private OffsetDateTime occurredAt;
   private List<UUID> acknowledgeClaimIds;
 
+  /**
+   * "Record a different transfer" from a claim card ({@code stories/payment_claim_supersede.md}):
+   * the claim whose screenshot showed THIS reference. The new row inherits its shopper and
+   * screenshot; the claim is answered NOT_FOUND (reference differs) in the same submit.
+   */
+  private UUID supersedesClaimId;
+
   public VerifyPaymentTransactionRequest() {}
+
+  public UUID getSupersedesClaimId() {
+    return supersedesClaimId;
+  }
+
+  public void setSupersedesClaimId(UUID supersedesClaimId) {
+    this.supersedesClaimId = supersedesClaimId;
+  }
 
   public List<UUID> getAcknowledgeClaimIds() {
     return acknowledgeClaimIds;
