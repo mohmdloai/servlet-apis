@@ -67,6 +67,7 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
             .set(PAYMENT_TRANSACTION.CUSTOMER_NOTE, txn.getCustomerNote())
             .set(PAYMENT_TRANSACTION.PROOF_OBJECT_KEY, txn.getProofObjectKey())
             .set(PAYMENT_TRANSACTION.NOT_FOUND_REASON, txn.getNotFoundReason())
+            .set(PAYMENT_TRANSACTION.NOT_FOUND_NOTE, txn.getNotFoundNote())
             .set(PAYMENT_TRANSACTION.RAW_PAYLOAD, toJsonb(txn.getRawPayload()))
             .onConflict(PAYMENT_TRANSACTION.PROVIDER, PAYMENT_TRANSACTION.PROVIDER_REF)
             .doNothing()
@@ -130,6 +131,7 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
         .set(PAYMENT_TRANSACTION.AMOUNT, txn.getAmount())
         .set(PAYMENT_TRANSACTION.OCCURRED_AT, txn.getOccurredAt())
         .set(PAYMENT_TRANSACTION.NOT_FOUND_REASON, txn.getNotFoundReason())
+        .set(PAYMENT_TRANSACTION.NOT_FOUND_NOTE, txn.getNotFoundNote())
         .set(PAYMENT_TRANSACTION.RAW_PAYLOAD, toJsonb(txn.getRawPayload()))
         .set(PAYMENT_TRANSACTION.UPDATED_AT, txn.getUpdatedAt())
         .where(
@@ -216,6 +218,16 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
         .execute();
   }
 
+  @Override
+  public Optional<PaymentTransaction> findLatestClaimByOrder(UUID salesOrderId) {
+    return dsl.selectFrom(PAYMENT_TRANSACTION)
+        .where(PAYMENT_TRANSACTION.CLAIMED_SALES_ORDER_ID.eq(salesOrderId))
+        .orderBy(PAYMENT_TRANSACTION.RECORDED_AT.desc(), PAYMENT_TRANSACTION.ID.desc())
+        .limit(1)
+        .fetchOptional()
+        .map(this::toPaymentTransaction);
+  }
+
   private static final List<com.loai.inventory.repository.generated.enums.PaymentVerificationStatus>
       OPEN_CLAIM_STATES =
           List.of(
@@ -298,6 +310,7 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
         r.getVerifiedAt(),
         r.getVerificationProof(),
         r.getNotFoundReason(),
+        r.getNotFoundNote(),
         r.getRawPayload() == null ? null : r.getRawPayload().data(),
         r.getReconciliationStatus() == null
             ? null

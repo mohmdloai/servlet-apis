@@ -114,8 +114,15 @@ public class PublicOrderServlet extends HttpServlet {
     }
     Placed p = placed.get();
     // Customer-safe view: a whitelisted body carrying no internal id, product_id, prepaid, or
-    // channel — the same guarantee the checkout confirmation upholds.
-    writeJson(resp, 200, PublicOrderResponse.forOrderView(p.order(), p.lines()));
+    // channel — the same guarantee the checkout confirmation upholds. Plus the shopper's latest
+    // claim (pending / confirmed / not found), so the "I've paid" beat survives a reload.
+    writeJson(
+        resp,
+        200,
+        PublicOrderResponse.forOrderView(
+            p.order(),
+            p.lines(),
+            paymentTransactionService.latestClaimFor(p.order().getId()).orElse(null)));
   }
 
   private void handlePaymentClaim(HttpServletRequest req, HttpServletResponse resp, String token)
@@ -131,11 +138,12 @@ public class PublicOrderServlet extends HttpServlet {
                 body.getReference(),
                 body.getProofObjectKey(),
                 body.getNote()));
-    // 201 on first record, 200 on an idempotent replay of the same reference.
+    // 201 on first record, 200 on an idempotent replay of the same reference (or on re-opening a
+    // claim the store could not find — the same reference, pending again).
     writeJson(
         resp,
         result.inserted() ? 201 : 200,
-        PaymentClaimResponse.from(result.transaction(), result.inserted()));
+        PaymentClaimResponse.from(result.transaction(), result.inserted(), result.reopened()));
   }
 
   private void handleProofPresign(HttpServletRequest req, HttpServletResponse resp, String token)

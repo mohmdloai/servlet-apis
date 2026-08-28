@@ -124,4 +124,11 @@ public interface PaymentTransactionRepository {
    * closed.
    */
   int abandonOpenClaims(UUID salesOrderId, UUID exceptTransactionId, OffsetDateTime now);
+
+  /**
+   * The latest shopper claim filed against {@code salesOrderId} in any state (newest {@code
+   * recorded_at}), for the customer-facing order reads ({@code payment_claim} — "is the store still
+   * looking, did they confirm, could they not find it"). Empty when no claim was ever filed.
+   */
+  Optional<PaymentTransaction> findLatestClaimByOrder(UUID salesOrderId);
 }

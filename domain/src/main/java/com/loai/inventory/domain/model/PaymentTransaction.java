@@ -53,6 +53,7 @@ public class PaymentTransaction {
   private OffsetDateTime verifiedAt;
   private String verificationProof;
   private String notFoundReason;
+  private String notFoundNote;
   private String rawPayload;
   private PaymentReconciliationStatus reconciliationStatus;
   private OffsetDateTime updatedAt;
@@ -112,6 +113,7 @@ public class PaymentTransaction {
         null,
         null,
         null,
+        null,
         now);
   }
 
@@ -166,6 +168,7 @@ public class PaymentTransaction {
         null,
         null,
         null,
+        null,
         now);
   }
 
@@ -190,6 +193,7 @@ public class PaymentTransaction {
       OffsetDateTime verifiedAt,
       String verificationProof,
       String notFoundReason,
+      String notFoundNote,
       String rawPayload,
       PaymentReconciliationStatus reconciliationStatus,
       OffsetDateTime updatedAt) {
@@ -213,6 +217,7 @@ public class PaymentTransaction {
         verifiedAt,
         verificationProof,
         notFoundReason,
+        notFoundNote,
         rawPayload,
         reconciliationStatus,
         updatedAt);
@@ -238,6 +243,7 @@ public class PaymentTransaction {
       OffsetDateTime verifiedAt,
       String verificationProof,
       String notFoundReason,
+      String notFoundNote,
       String rawPayload,
       PaymentReconciliationStatus reconciliationStatus,
       OffsetDateTime updatedAt) {
@@ -260,6 +266,7 @@ public class PaymentTransaction {
     this.verifiedAt = verifiedAt;
     this.verificationProof = verificationProof;
     this.notFoundReason = notFoundReason;
+    this.notFoundNote = notFoundNote;
     this.rawPayload = rawPayload;
     this.reconciliationStatus = reconciliationStatus;
     this.updatedAt = updatedAt;
@@ -280,6 +287,49 @@ public class PaymentTransaction {
     this.verifiedBy = verifiedBy;
     this.verifiedAt = now;
     this.notFoundReason = null;
+    this.notFoundNote = null;
+    this.updatedAt = now;
+  }
+
+  /**
+   * "Can't find it": the manager searched the bank app for the reference and found nothing — {@code
+   * UNVERIFIED → NOT_FOUND} with a reason ({@code NO_TRANSFER}, {@code DIFFERENT_ACCOUNT}, {@code
+   * OTHER}) and an optional note for the shopper. Retryable by design: the shopper re-files ({@link
+   * #reopen}) or the manager finds it after all ({@link #verify}). Only from UNVERIFIED — a claim
+   * already NOT_FOUND has been answered; a second answer is a second not-found call the service
+   * replays.
+   */
+  public void markNotFound(String reason, String note, OffsetDateTime now) {
+    Objects.requireNonNull(now, "now required");
+    if (reason == null || reason.isBlank()) {
+      throw new IllegalArgumentException("reason required");
+    }
+    if (verificationStatus != PaymentVerificationStatus.UNVERIFIED) {
+      throw new IllegalStateException(
+          "cannot mark transaction not found in status "
+              + verificationStatus
+              + "; expected UNVERIFIED");
+    }
+    this.verificationStatus = PaymentVerificationStatus.NOT_FOUND;
+    this.notFoundReason = reason;
+    this.notFoundNote = note;
+    this.updatedAt = now;
+  }
+
+  /**
+   * The shopper re-files the same reference after a not-found: {@code NOT_FOUND → UNVERIFIED}, the
+   * manager's answer cleared. The reference is unchanged (it is the idempotency key) — this is
+   * "please look again", not a new claim.
+   */
+  public void reopen(OffsetDateTime now) {
+    Objects.requireNonNull(now, "now required");
+    if (verificationStatus != PaymentVerificationStatus.NOT_FOUND) {
+      throw new IllegalStateException(
+          "cannot reopen transaction in status " + verificationStatus + "; expected NOT_FOUND");
+    }
+    this.verificationStatus = PaymentVerificationStatus.UNVERIFIED;
+    this.notFoundReason = null;
+    this.notFoundNote = null;
     this.updatedAt = now;
   }
 
@@ -435,6 +485,11 @@ public class PaymentTransaction {
   /** Why the manager could not find the transfer — non-null only while NOT_FOUND. */
   public String getNotFoundReason() {
     return notFoundReason;
+  }
+
+  /** The manager's free note for the shopper beside the reason (nullable; NOT_FOUND only). */
+  public String getNotFoundNote() {
+    return notFoundNote;
   }
 
   /** Raw audit JSON (nullable) — see {@link #attachAudit}. */

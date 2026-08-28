@@ -44,6 +44,7 @@ public class PaymentTransactionResponse {
   private String customerNote;
   private boolean hasProof;
   private String notFoundReason;
+  private String notFoundNote;
   private String verifiedByName;
   private String proofUrl;
   private CustomerSummary customer;
@@ -111,6 +112,7 @@ public class PaymentTransactionResponse {
     r.customerNote = txn.getCustomerNote();
     r.hasProof = txn.getProofObjectKey() != null && !txn.getProofObjectKey().isBlank();
     r.notFoundReason = txn.getNotFoundReason();
+    r.notFoundNote = txn.getNotFoundNote();
     r.payment = payment == null ? null : PaymentSummary.from(payment);
     r.order = order == null ? null : OrderSummary.from(order);
     return r;
@@ -190,6 +192,11 @@ public class PaymentTransactionResponse {
   /** Why the manager could not find the transfer — present only while NOT_FOUND. */
   public String getNotFoundReason() {
     return notFoundReason;
+  }
+
+  /** The manager's note to the shopper beside the reason — present only while NOT_FOUND. */
+  public String getNotFoundNote() {
+    return notFoundNote;
   }
 
   /** Display name (or email) of the user who verified it; detail + verify responses only. */

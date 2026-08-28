@@ -11,6 +11,7 @@ import java.math.BigDecimal;
  */
 public class PaymentClaimResponse {
   private boolean recorded;
+  private boolean reopened;
   private String reference;
   private BigDecimal amount;
   private String currency;
@@ -19,8 +20,18 @@ public class PaymentClaimResponse {
 
   /** {@code inserted} = this call recorded it (201); false = an idempotent replay (200). */
   public static PaymentClaimResponse from(PaymentTransaction txn, boolean inserted) {
+    return from(txn, inserted, false);
+  }
+
+  /**
+   * {@code reopened} = the shopper re-filed the reference of a claim the store could not find, and
+   * it is pending again ({@code stories/payment_claim_not_found.md}); a 200, not a new row.
+   */
+  public static PaymentClaimResponse from(
+      PaymentTransaction txn, boolean inserted, boolean reopened) {
     PaymentClaimResponse r = new PaymentClaimResponse();
     r.recorded = inserted;
+    r.reopened = reopened;
     r.reference = txn.getProviderRef();
     r.amount = txn.getAmount();
     r.currency = txn.getCurrency();
@@ -29,6 +40,10 @@ public class PaymentClaimResponse {
 
   public boolean isRecorded() {
     return recorded;
+  }
+
+  public boolean isReopened() {
+    return reopened;
   }
 
   public String getReference() {

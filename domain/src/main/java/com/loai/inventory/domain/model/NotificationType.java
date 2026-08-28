@@ -85,5 +85,17 @@ public enum NotificationType {
    * excess-refund conversation is the admin's) and on a DISPUTED payment (a merchant-initiated
    * flag, not news the shopper can act on).
    */
-  PAYMENT_NEEDS_ATTENTION
+  PAYMENT_NEEDS_ATTENTION,
+
+  /**
+   * The store looked for the shopper's claimed transfer and could not find it ({@code
+   * stories/payment_claim_not_found.md}) — "check the reference in your InstaPay app and send it
+   * again; your order is held until …". Customer recipient (feed + email); raised inside the
+   * not-found txn beside the claim's NOT_FOUND flip and the 6 h hold re-arm, so the message exists
+   * iff the decision commits. Payload carries {@code order_number}, {@code reference}, {@code
+   * reason} (NO_TRANSFER / DIFFERENT_ACCOUNT / OTHER), an optional {@code note} from the manager
+   * and {@code held_until} when the order still has a hold. Silent when the claim names no customer
+   * (nobody to tell).
+   */
+  PAYMENT_NOT_FOUND
 }
