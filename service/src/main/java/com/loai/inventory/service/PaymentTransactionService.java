@@ -184,8 +184,22 @@ public final class PaymentTransactionService {
       String proofObjectKey,
       String note) {}
 
-  /** Result of a claim: the recorded UNVERIFIED transaction and whether this call inserted it. */
-  public record ClaimResult(PaymentTransaction transaction, boolean inserted) {}
+  /**
+   * Result of a claim: the UNVERIFIED transaction, whether this call inserted it, and whether it
+   * re-opened a NOT_FOUND claim instead (the shopper re-filed the same reference after the store
+   * could not find it — "please look again"). Both false = an idempotent replay of an open claim.
+   */
+  public record ClaimResult(PaymentTransaction transaction, boolean inserted, boolean reopened) {
+
+    /** The pre-phase-2 shape. */
+    public ClaimResult(PaymentTransaction transaction, boolean inserted) {
+      this(transaction, inserted, false);
+    }
+  }
+
+  /** The reasons a manager can give for "can't find it" — the wire values of {@code reason}. */
+  public static final Set<String> NOT_FOUND_REASONS =
+      Set.of("NO_TRANSFER", "DIFFERENT_ACCOUNT", "OTHER");
 
   /**
    * Record a shopper-supplied payment claim as an {@code UNVERIFIED} CREDIT transaction that lands
@@ -266,13 +280,31 @@ public final class PaymentTransactionService {
             paymentService.extendHoldForClaim(
                 txDsl, orgId, order.getId(), now.plus(CLAIM_HOLD), now);
           }
+
+          // Re-filing the reference of a NOT_FOUND claim re-opens it: "please look again". Same
+          // row, same reference, no second hold (the not-found already re-armed one).
+          boolean reopened = false;
+          if (!rec.inserted()
+              && rec.transaction().getVerificationStatus() == PaymentVerificationStatus.NOT_FOUND
+              && order.getId().equals(rec.transaction().getClaimedSalesOrderId())) {
+            PaymentTransaction locked =
+                txnRepo.findByIdForUpdate(orgId, rec.transaction().getId()).orElse(null);
+            if (locked != null
+                && locked.getVerificationStatus() == PaymentVerificationStatus.NOT_FOUND) {
+              locked.reopen(now);
+              txnRepo.update(locked);
+              rec = new PaymentTransactionRepository.Recorded(locked, false);
+              reopened = true;
+            }
+          }
           log.info(
-              "Shopper payment claim orgId={} order={} ref={} inserted={}",
+              "Shopper payment claim orgId={} order={} ref={} inserted={} reopened={}",
               orgId,
               order.getOrderNumber(),
               reference,
-              rec.inserted());
-          return new ClaimResult(rec.transaction(), rec.inserted());
+              rec.inserted(),
+              reopened);
+          return new ClaimResult(rec.transaction(), rec.inserted(), reopened);
         });
   }
 
@@ -391,6 +423,120 @@ public final class PaymentTransactionService {
               verifiedBy);
           return new VerifyResult(txn, rec.status(), rec.payment(), rec.order(), false);
         });
+  }
+
+  /** Result of "can't find it": the NOT_FOUND claim, the re-armed deadline, and a replay flag. */
+  public record NotFoundResult(
+      PaymentTransaction transaction, SalesOrder order, OffsetDateTime heldUntil, boolean replay) {}
+
+  /**
+   * "Can't find it" — the manager searched the bank app for the claim's reference and found nothing
+   * ({@code stories/payment_claim_not_found.md}). UNVERIFIED → NOT_FOUND with a {@code reason}
+   * ({@link #NOT_FOUND_REASONS}) and an optional note for the shopper; the order's hold is re-armed
+   * to {@code max(expires_at, now + 6h)} so the shopper has time to fix the reference and re-file;
+   * the shopper is told (PAYMENT_NOT_FOUND, feed + email, magic link to the order). The reference
+   * is never edited — a corrected one is a new claim, and re-filing this one re-opens it.
+   *
+   * <p>Lock order: the claimed order first, then the row (as {@link #verifyClaim}). Idempotent: a
+   * claim already NOT_FOUND replays 200 with the answer on file (the second of two managers does
+   * not re-arm the hold or re-notify). VERIFIED / ABANDONED → 409: there is nothing left to find.
+   */
+  public NotFoundResult markClaimNotFound(
+      UUID orgId, UUID transactionId, String reason, String note, UUID actorId) {
+    if (transactionId == null) {
+      throw new ValidationException("transaction id is required");
+    }
+    if (actorId == null) {
+      throw new ValidationException("actor identity is required");
+    }
+    String code = reason == null ? null : reason.trim().toUpperCase();
+    if (code == null || !NOT_FOUND_REASONS.contains(code)) {
+      throw new ValidationException("reason must be one of " + NOT_FOUND_REASONS);
+    }
+    String cleanNote = Text.normalizeText(note);
+
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
+          OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+
+          PaymentTransaction peek =
+              txnRepo
+                  .findById(orgId, transactionId)
+                  .orElseThrow(
+                      () ->
+                          new NotFoundException(
+                              "payment transaction " + transactionId + " not found"));
+          Optional<SalesOrder> lockedOrder =
+              peek.getClaimedSalesOrderId() == null
+                  ? Optional.empty()
+                  : paymentService.lockOrder(txDsl, orgId, peek.getClaimedSalesOrderId());
+          PaymentTransaction txn =
+              txnRepo
+                  .findByIdForUpdate(orgId, transactionId)
+                  .orElseThrow(
+                      () ->
+                          new NotFoundException(
+                              "payment transaction " + transactionId + " not found"));
+
+          if (txn.getDirection() != PaymentDirection.CREDIT) {
+            throw new ValidationException("only CREDIT transactions can be marked not found");
+          }
+          if (txn.getVerificationStatus() == PaymentVerificationStatus.NOT_FOUND) {
+            log.info("Idempotent not-found replay for transaction {}", transactionId);
+            return new NotFoundResult(
+                txn,
+                lockedOrder.orElse(null),
+                lockedOrder.map(SalesOrder::getExpiresAt).orElse(null),
+                true);
+          }
+          if (txn.getVerificationStatus() != PaymentVerificationStatus.UNVERIFIED) {
+            throw new ConflictException(
+                "claim "
+                    + txn.getProviderRef()
+                    + " is "
+                    + txn.getVerificationStatus()
+                    + "; only a pending claim can be marked not found");
+          }
+
+          txn.markNotFound(code, cleanNote, now);
+          txnRepo.update(txn);
+
+          // Re-arm the hold so the shopper can fix the reference: max(current, now + 6h).
+          OffsetDateTime heldUntil = null;
+          SalesOrder order = lockedOrder.orElse(null);
+          if (order != null) {
+            Optional<SalesOrder> held =
+                paymentService.extendHoldForClaim(
+                    txDsl, orgId, order.getId(), now.plus(NOT_FOUND_GRACE), now);
+            if (held.isPresent()) {
+              order = held.get();
+              heldUntil = order.getExpiresAt();
+            }
+            paymentService.notifyClaimNotFound(
+                txDsl, orgId, order, txn, code, cleanNote, heldUntil, now);
+          }
+
+          log.info(
+              "Marked claim {} ({}) NOT_FOUND reason={} on order {} by {} (held until {})",
+              transactionId,
+              txn.getProviderRef(),
+              code,
+              order == null ? "-" : order.getOrderNumber(),
+              actorId,
+              heldUntil);
+          return new NotFoundResult(txn, order, heldUntil, false);
+        });
+  }
+
+  /**
+   * The latest claim a shopper filed against an order, for the customer-facing order reads ({@code
+   * payment_claim}: pending / confirmed / not found). Empty when none was ever filed. Read-only on
+   * {@code rootDsl}.
+   */
+  public Optional<PaymentTransaction> latestClaimFor(UUID orderId) {
+    return txnRepoFactory.create(rootDsl).findLatestClaimByOrder(orderId);
   }
 
   /**

@@ -211,6 +211,69 @@ class PaymentTransactionHandlerAuthTest {
     assertEquals(200, resp.status, "an already-verified claim replays 200");
   }
 
+  // POST /{id}/not-found — "Can't find it" (stories/payment_claim_not_found.md): MANAGER+.
+
+  @Test
+  void notFound_forbiddenForStaff_serviceNeverCalled() throws IOException {
+    PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+    PaymentTransactionHandler handler =
+        new PaymentTransactionHandler(
+            service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle(
+        "POST",
+        reqWith(ctxWith(OrgRole.STAFF), "{\"reason\":\"NO_TRANSFER\"}"),
+        resp.mock,
+        ORG,
+        "/" + TXN + "/not-found");
+
+    assertEquals(403, resp.status, "STAFF must be forbidden from marking a claim not found");
+    verify(service, never()).markClaimNotFound(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void notFound_allowedForManager_200() throws IOException {
+    PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    PaymentTransaction txn =
+        PaymentTransaction.createClaimed(
+            TXN,
+            ORG,
+            PaymentProvider.INSTAPAY_MANUAL,
+            "IPN-2",
+            new BigDecimal("250.00"),
+            "EGP",
+            null,
+            null,
+            null,
+            null,
+            null,
+            now,
+            now);
+    txn.markNotFound("NO_TRANSFER", "nothing arrived", now);
+    when(service.markClaimNotFound(
+            eq(ORG), eq(TXN), eq("NO_TRANSFER"), eq("nothing arrived"), any()))
+        .thenReturn(new PaymentTransactionService.NotFoundResult(txn, null, null, false));
+    PaymentTransactionHandler handler =
+        new PaymentTransactionHandler(
+            service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle(
+        "POST",
+        reqWith(
+            ctxWith(OrgRole.MANAGER), "{\"reason\":\"NO_TRANSFER\",\"note\":\"nothing arrived\"}"),
+        resp.mock,
+        ORG,
+        "/" + TXN + "/not-found");
+
+    assertEquals(200, resp.status);
+    String body = resp.body.toString(StandardCharsets.UTF_8);
+    assertTrue(body.contains("\"verification_status\":\"NOT_FOUND\""), body);
+    assertTrue(body.contains("\"not_found_note\":\"nothing arrived\""), body);
+  }
+
   @Test
   void resolve_unauthenticated_is401_serviceNeverCalled() throws IOException {
     PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);

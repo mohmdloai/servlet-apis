@@ -85,8 +85,10 @@ public final class WhatsAppTemplates {
               PAYMENT_NEEDS_ATTENTION,
               language,
               List.of(orderNumber, money(payload, "amount"), money(payload, "outstanding")));
-      // Not utility messages — see the class note.
-      case COMMENT_REPLIED, REVIEW_REQUESTED -> null;
+      // Not utility messages — see the class note. PAYMENT_NOT_FOUND is a utility message in
+      // spirit ("check your reference"), but it has no approved Meta template yet — the email +
+      // feed carry it (stories/payment_claim_not_found.md); a template is a later, approved add.
+      case COMMENT_REPLIED, REVIEW_REQUESTED, PAYMENT_NOT_FOUND -> null;
     };
   }
 

@@ -54,6 +54,10 @@ final class NotificationTemplates {
     return isArabic(locale) ? "أكمل الدفع" : "Complete your payment";
   }
 
+  private static String ctaCheckReference(String locale) {
+    return isArabic(locale) ? "راجع الرقم المرجعي" : "Check your reference";
+  }
+
   static Rendered render(NotificationType type, Map<String, Object> payload, String rawLocale) {
     // Apply the SAME floor emailHtml does. If the two disagreed, an unrecognised locale would
     // produce an English body inside an RTL Arabic wrapper — the body and its own direction
@@ -185,6 +189,53 @@ final class NotificationTemplates {
             ar ? "تم إلغاء الطلب " + orderNumber : "Order " + orderNumber + " was cancelled",
             body.toString(),
             ctaViewOrder(locale));
+      }
+      case PAYMENT_NOT_FOUND -> {
+        // The store looked and found nothing under the reference the shopper gave. The copy asks
+        // for one concrete thing — check the reference and send it again — and says the order is
+        // still held so the shopper knows nothing was lost. The manager's own note, when they
+        // wrote one, is quoted verbatim; the reason code is turned into a sentence, never shown
+        // raw.
+        String orderNumber = str(payload, "order_number");
+        String reference = str(payload, "reference");
+        String reason = str(payload, "reason");
+        Optional<String> note = opt(payload, "note").map(String::valueOf);
+        Optional<String> heldUntil = opt(payload, "held_until").map(String::valueOf);
+        StringBuilder body =
+            ar
+                ? new StringBuilder("راجع المتجر الرقم المرجعي ")
+                    .append(reference)
+                    .append(
+                        "DIFFERENT_ACCOUNT".equals(reason)
+                            ? " ويبدو أن التحويل أُرسل إلى حساب مختلف."
+                            : " ولم يجد تحويلًا بهذا الرقم.")
+                : new StringBuilder("The store checked reference ")
+                    .append(reference)
+                    .append(
+                        "DIFFERENT_ACCOUNT".equals(reason)
+                            ? " and it looks like the transfer went to a different account."
+                            : " and found no transfer with it.");
+        note.ifPresent(
+            n ->
+                body.append(ar ? " ملاحظة المتجر: \"" : " Store's note: \"")
+                    .append(n)
+                    .append("\""));
+        body.append(
+            ar
+                ? " راجع الرقم المرجعي في تطبيق إنستاباي وأرسله مرة أخرى"
+                : " Check the reference in your InstaPay app and send it again");
+        heldUntil.ifPresentOrElse(
+            until ->
+                body.append(ar ? " — طلبك محجوز حتى " : " — your order is held until ")
+                    .append(until)
+                    .append("."),
+            () -> body.append("."));
+        yield new Rendered(
+            ar
+                ? "لم نجد تحويلك للطلب " + orderNumber
+                : "We couldn't find your transfer for " + orderNumber,
+            body.toString(),
+            ctaCheckReference(locale));
       }
       case PAYMENT_NEEDS_ATTENTION -> {
         String orderNumber = str(payload, "order_number");

@@ -168,6 +168,13 @@ class NotificationTemplatesTest {
           Map.of("order_number", "SO-1", "carrier", "Bosta", "tracking_number", "EG-1");
       case ORDER_CANCELLED ->
           Map.of("order_number", "SO-1", "refund_total", "20.00", "currency", "EGP");
+      case PAYMENT_NOT_FOUND ->
+          Map.of(
+              "order_number", "SO-1",
+              "reference", "770099887766",
+              "reason", "NO_TRANSFER",
+              "note", "nothing arrived",
+              "held_until", "2026-07-14T09:12Z");
       case ORDER_PLACED, REVIEW_REQUESTED -> Map.of("order_number", "SO-1");
     };
   }

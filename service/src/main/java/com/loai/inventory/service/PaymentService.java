@@ -302,6 +302,51 @@ public final class PaymentService {
   }
 
   /**
+   * PAYMENT_NOT_FOUND producer ({@code stories/payment_claim_not_found.md}): "we looked for your
+   * transfer and could not find it — check the reference and send it again; your order is held
+   * until …". Runs inside the not-found txn, after the claim's NOT_FOUND flip and the hold re-arm
+   * are persisted, so the message exists iff the decision commits. Addressed to the customer who
+   * filed the claim (not the order's customer — on a claim they are the same person, and the claim
+   * is the row that knows). Silent when the claim names nobody. A fresh order-view magic link per
+   * message, as every customer email here.
+   */
+  public void notifyClaimNotFound(
+      DSLContext txDsl,
+      UUID orgId,
+      SalesOrder order,
+      PaymentTransaction claim,
+      String reason,
+      String note,
+      OffsetDateTime heldUntil,
+      OffsetDateTime now) {
+    if (claim.getClaimedByCustomerId() == null) {
+      return;
+    }
+    MagicLinkService.OrderViewLink viewLink =
+        magicLinkService.issueOrderViewLink(
+            txDsl, orgId, claim.getClaimedByCustomerId(), order.getId(), now);
+    Map<String, Object> payload = new java.util.HashMap<>();
+    payload.put("order_number", order.getOrderNumber());
+    payload.put("reference", claim.getProviderRef());
+    payload.put("reason", reason);
+    if (note != null) {
+      payload.put("note", note);
+    }
+    if (heldUntil != null) {
+      payload.put("held_until", heldUntil.toString());
+    }
+    notificationService.notify(
+        txDsl,
+        orgId,
+        NotificationRecipient.customer(claim.getClaimedByCustomerId()),
+        NotificationType.PAYMENT_NOT_FOUND,
+        payload,
+        "sales_order",
+        order.getId(),
+        viewLink.absolute());
+  }
+
+  /**
    * PAYMENT_NEEDS_ATTENTION producer ({@code stories/order_lifecycle_notifications.md}): "we got
    * your transfer, it's short by X, your items are still held". Raised on the <b>UNDERPAID</b>
    * branch only, inside {@code txDsl} and after the partial {@link Payment} and the order's new

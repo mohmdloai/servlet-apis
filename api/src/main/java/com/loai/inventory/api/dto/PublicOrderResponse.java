@@ -1,5 +1,6 @@
 package com.loai.inventory.api.dto;
 
+import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
 import com.loai.inventory.service.CustomerPortalService;
@@ -39,6 +40,13 @@ public class PublicOrderResponse {
   private String paymentInstructions;
   private String trackUrl;
 
+  /**
+   * The shopper's latest payment claim on this order — pending / confirmed / not found ({@code
+   * stories/payment_claim_not_found.md}) — so the storefront's "I've paid" beat survives a reload.
+   * Absent when no claim was filed (or the last one was closed by the system).
+   */
+  private PaymentClaimStatusResponse paymentClaim;
+
   private PublicOrderResponse() {}
 
   public static PublicOrderResponse from(CheckoutResult r) {
@@ -74,7 +82,14 @@ public class PublicOrderResponse {
    * payment details from the org profile it already loads.
    */
   public static PublicOrderResponse forOrderView(SalesOrder order, List<SalesOrderLine> lines) {
+    return forOrderView(order, lines, null);
+  }
+
+  /** {@link #forOrderView(SalesOrder, List)} plus the shopper's latest claim, when any. */
+  public static PublicOrderResponse forOrderView(
+      SalesOrder order, List<SalesOrderLine> lines, PaymentTransaction latestClaim) {
     PublicOrderResponse out = new PublicOrderResponse();
+    out.paymentClaim = PaymentClaimStatusResponse.from(latestClaim).orElse(null);
     out.orderNumber = order.getOrderNumber();
     out.status = order.getStatus().name();
     out.currency = order.getCurrency();
@@ -98,7 +113,13 @@ public class PublicOrderResponse {
    * omitted on the anonymous track view and the portal list rows.
    */
   public static PublicOrderResponse forPortalOrderDetail(CustomerPortalService.OrderDetail detail) {
-    PublicOrderResponse out = forOrderView(detail.order(), detail.lines());
+    return forPortalOrderDetail(detail, null);
+  }
+
+  /** {@link #forPortalOrderDetail(CustomerPortalService.OrderDetail)} plus the latest claim. */
+  public static PublicOrderResponse forPortalOrderDetail(
+      CustomerPortalService.OrderDetail detail, PaymentTransaction latestClaim) {
+    PublicOrderResponse out = forOrderView(detail.order(), detail.lines(), latestClaim);
     for (int i = 0; i < detail.lines().size(); i++) {
       SalesOrderLine line = detail.lines().get(i);
       Line dto = out.lines.get(i);
@@ -162,6 +183,10 @@ public class PublicOrderResponse {
 
   public String getTrackUrl() {
     return trackUrl;
+  }
+
+  public PaymentClaimStatusResponse getPaymentClaim() {
+    return paymentClaim;
   }
 
   /**

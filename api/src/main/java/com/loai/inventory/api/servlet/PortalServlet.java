@@ -428,7 +428,11 @@ public class PortalServlet extends HttpServlet {
     CustomerPortalService.OrderDetail detail =
         portalService.getOrderDetail(principal.orgId(), principal.customerId(), orderNumber);
     resp.setHeader("Cache-Control", "private, no-store");
-    writeJson(resp, 200, PublicOrderResponse.forPortalOrderDetail(detail));
+    writeJson(
+        resp,
+        200,
+        PublicOrderResponse.forPortalOrderDetail(
+            detail, paymentTransactionService.latestClaimFor(detail.order().getId()).orElse(null)));
   }
 
   // payment-proof claim (roadmap item 2) — the logged-in twin of the guest magic-link route
@@ -454,7 +458,7 @@ public class PortalServlet extends HttpServlet {
     writeJson(
         resp,
         result.inserted() ? 201 : 200,
-        PaymentClaimResponse.from(result.transaction(), result.inserted()));
+        PaymentClaimResponse.from(result.transaction(), result.inserted(), result.reopened()));
   }
 
   private void handleProofPresign(

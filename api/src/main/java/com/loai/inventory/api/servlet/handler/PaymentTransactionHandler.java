@@ -3,6 +3,7 @@ package com.loai.inventory.api.servlet.handler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
+import com.loai.inventory.api.dto.MarkClaimNotFoundRequest;
 import com.loai.inventory.api.dto.OrphanRefundResponse;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PaymentTransactionResponse;
@@ -21,6 +22,7 @@ import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListFilter;
 import com.loai.inventory.service.PaymentService.OrderRef;
 import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.PaymentTransactionService.NotFoundResult;
 import com.loai.inventory.service.PaymentTransactionService.OrphanRefundResult;
 import com.loai.inventory.service.PaymentTransactionService.TransactionDetail;
 import com.loai.inventory.service.PaymentTransactionService.TransactionPage;
@@ -57,6 +59,11 @@ import org.slf4j.LoggerFactory;
  *       shopper claim by id and reconcile it against the order the shopper named. Body optional
  *       ({@code {amount?, occurred_at?, verification_proof?}}). {@code 201} on the verify, {@code
  *       200} on a replay of an already-verified claim, {@code 409} on an ABANDONED one.
+ *   <li>{@code POST /api/orgs/{orgId}/payment-transactions/{id}/not-found} — "Can't find it": the
+ *       manager searched the bank for the claim's reference and found nothing. Body {@code {reason:
+ *       NO_TRANSFER|DIFFERENT_ACCOUNT|OTHER, note?}}. UNVERIFIED → NOT_FOUND, the order's hold
+ *       re-armed 6 h, the shopper notified. {@code 200} (also on a replay of an already-NOT_FOUND
+ *       claim), {@code 409} on a VERIFIED / ABANDONED one.
  *   <li>{@code POST /api/orgs/{orgId}/payment-transactions/{id}/resolve} — orphan resolution:
  *       attach an ORPHAN transaction's payment to an admin-chosen order. {@code 201 Created} when
  *       this call created the payment, {@code 200 OK} on an idempotent replay.
@@ -104,6 +111,10 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
         }
         if (parts.length == 2 && "verify".equals(parts[1])) {
           doVerifyClaim(req, resp, orgId, parseId(parts[0]));
+          return;
+        }
+        if (parts.length == 2 && "not-found".equals(parts[1])) {
+          doNotFound(req, resp, orgId, parseId(parts[0]));
           return;
         }
         if (parts.length == 2 && "resolve".equals(parts[1])) {
@@ -236,6 +247,25 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
 
     PaymentTransactionResponse out = PaymentTransactionMapper.toResponse(result);
     writeJson(resp, result.replay() ? 200 : 201, out);
+  }
+
+  /** {@code POST /{id}/not-found} — "Can't find it" on one shopper claim (MANAGER). */
+  private void doNotFound(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID transactionId)
+      throws IOException {
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.MANAGER);
+
+    MarkClaimNotFoundRequest body = readBody(req, MarkClaimNotFoundRequest.class);
+
+    NotFoundResult result =
+        service.markClaimNotFound(
+            orgId, transactionId, body.getReason(), body.getNote(), sc.actorId());
+
+    PaymentTransactionResponse out =
+        PaymentTransactionResponse.withContext(
+            result.transaction(), null, null, null, result.order(), null);
+    // The answer on file — 200 whether this call wrote it or a colleague did a moment ago.
+    writeJson(resp, 200, out);
   }
 
   /** {@code POST /{id}/resolve} — admin attaches an ORPHAN transaction's payment to an order. */
