@@ -73,22 +73,25 @@ not the last. The number is measured, not assumed: see Tests.
 OpenPDF calls. Adding a second drawer by copy-pasting the method is how the PDF and the printer
 slip start disagreeing about a discount label six months from now. So the slice splits it:
 
-- `ReceiptModel` — a plain value: `headerLines`, `logo` (bytes or null), `title`, `barcode`
-  (the order number), `meta` rows (Order / Invoice / Date / Customer), `lines` (`title`,
-  `qtyByPrice`, `amount`), `totals` rows (Subtotal / Tax / Discount(label) / TOTAL), `tenders`,
-  `tendered`, `change` (nullable), `footer`. Built by **one** method,
-  `receiptModel(orgId, salesOrderId)`, from the same reads `renderReceipt` uses now.
+- `SlipModel` — a plain value: `name` + `addressLines`, `logo` (bytes or null), `title`,
+  `barcode` (the order number), `meta` rows (Order / Invoice / Date / Customer), `lines`
+  (`title`, `qtyByPrice`, `amount`), `totals` rows (Subtotal / Tax / Discount(label)), `total`,
+  `tenders`, `tendered`, `change` (nullable), `settlement` (return slip only), `footer`. Built by
+  **one** method, `receiptModel(orgId, salesOrderId)`, from the same reads `renderReceipt` uses
+  now.
 - The existing OpenPDF painter, rewritten to walk the model. **Byte-identical output** to today for
   every existing test — the refactor is proven by the current `DocumentRenderServiceTest` cases
   passing unchanged.
-- `SlipRaster` — the new painter: Java2D onto a `TYPE_BYTE_BINARY` `BufferedImage` of the requested
-  width, height grown to content, then packed into ESC/POS.
+- `SlipRaster` — the new painter: Java2D with antialiasing onto a grayscale `BufferedImage` of the
+  requested width, height grown to content; `Escpos.encode` thresholds it to one bit at pack time
+  (antialiased-then-thresholded glyphs keep their shape better than binary rendering).
 
-The credit-note slip gets its own small `ReturnSlipModel` (credit-note number, original order
-number, date, returned lines, discount proration line when the sale was discounted, refund total,
-`refundMethod`: *Cash handed back* / *Pending transfer*) built from
-`CreditNoteService` + the linked refund — raster painter only; an 80 mm PDF of it is not asked
-for.
+The credit-note slip is the **same shape** — `returnSlipModel(orgId, creditNoteId)` fills a
+`SlipModel` with the credit-note number, the original order number (as barcode again, so the next
+return scans it too), date, returned lines, the discount share when the sale was discounted,
+`REFUND TOTAL`, and a `settlement` row (*Cash handed back* / *Pending transfer* / *InstaPay
+transfer*) from the note's first live refund via `CreditNoteService.refundsFor` — raster painter
+only; an 80 mm PDF of it is not asked for. A slip is a slip; one painter is enough.
 
 ### Java2D, a bundled font, headless
 
@@ -174,13 +177,15 @@ only for an issued one).
 
 ```
 DocumentRenderService
-  ReceiptModel     receiptModel(orgId, salesOrderId)         // one builder
+  SlipModel        receiptModel(orgId, salesOrderId)         // one builder
   RenderedDocument renderReceipt(orgId, salesOrderId)        // PDF painter over the model (unchanged output)
   RenderedDocument renderReceiptEscpos(orgId, salesOrderId, int width)
-  ReturnSlipModel  returnSlipModel(orgId, creditNoteId)
+  SlipModel        returnSlipModel(orgId, creditNoteId)
   RenderedDocument renderReturnSlipEscpos(orgId, creditNoteId, int width)
+CreditNoteService.refundsFor(orgId, creditNoteId)            // the note's refund rows, oldest first
 
-document/SlipRaster        // model → BufferedImage (TYPE_BYTE_BINARY), width-aware layout
+document/SlipModel         // the content, decided once
+document/SlipRaster        // model → BufferedImage (gray, thresholded at pack time), width-aware layout
 document/Escpos            // BufferedImage → bytes: INIT, bands, FEED, CUT  (pure, no I/O)
 document/SlipFont          // bundled family, loaded once; canDisplayUpTo guard in tests
 ```
@@ -221,30 +226,42 @@ guard):
   length after each header is `x·y`; no bytes between bands.
 - `renderReceiptEscpos_honoursWidth384` — `x` = 48; `width=500` → `ValidationException`.
 - `renderReceiptEscpos_arabicTitleHasGlyphs` — a line titled `دفتر ملاحظات`:
-  `SlipFont.canDisplayUpTo(title) == -1`, and the decoded band rows for that line contain ink
-  (a non-zero byte) — the assertion that would have failed under Helvetica.
-- `renderReceiptEscpos_bidiKeepsAmountOnTheRight` — on an Arabic title line, the rightmost 8
-  bytes of the `qty × price … amount` row are blank and the amount's ink sits inside the right
-  column; on a Latin line the same — the layout, not the script, owns the columns.
-- `renderReceiptEscpos_barcodeIsTheSameEncoderAsThePdf` — the barcode band's bar sequence equals
-  `new Barcode128(order number).createAwtImage(...)` thresholded at the same scale.
-- `renderReceiptEscpos_splitDiscountAndChangeRows` — the model carries one tender row per payment,
-  the discount row only when discounted, change only when positive — asserted on the **model**,
-  which is what both painters consume.
-- `renderReturnSlipEscpos_namesTheOriginalOrderAndTheRefundMethod` — cash → *Cash handed back*,
-  pending InstaPay → *Pending transfer*; a discounted sale's slip carries the proration line.
-- `slipFont_loadsHeadless` — `System.setProperty("java.awt.headless","true")` + a render succeeds.
+  `SlipFont.canDisplayUpTo(title) == -1` (and `!= -1` for a script the font lacks, so the guard
+  is real), and the slip carries markedly more ink than the same slip titled `.` — the assertion
+  that would have failed under Helvetica.
+- `slipRaster_arabicTitleSitsRight_latinTitleSitsLeft` — `isRtl` pinned; a slip whose only title is
+  `قلم` has a row whose ink sits entirely right of centre, a `Pen` slip has none; no ink in either
+  margin — the layout, not the script, owns the columns.
+- `renderReceiptEscpos_barcodeRowsScanAsBars` — some row flips black/white ≥ 40 times; the
+  modules come from `Barcode128.getBarsCode128Raw`, the PDF's own encoder.
+- `receiptModel_carriesTenderDiscountAndChangeRowsOnlyWhenTheyExist` — one tender row per
+  payment on a split, the discount row only when discounted, change only when positive — asserted
+  on the **model**, which is what both painters consume; the plain sale has none of them.
+- `returnSlipModel_namesTheOriginalOrderAndTheRefundMethod` — cash → *Cash handed back*, a
+  pending transfer after a cancelled row → *Pending transfer*, no refund → no row; a discounted
+  sale's slip carries the discount line; `returnSlip_draftNoteIs404`.
+- `slipPaintsHeadless` — the class sets `java.awt.headless=true` before any AWT use and asserts
+  `GraphicsEnvironment.isHeadless()`; every render above ran under it.
+- `renderReceiptEscpos_sizeStaysWithinTheBleBudget` — prints the size table and caps a slip at
+  120 KB.
 
 `EscposTest` (unit, `document/Escpos`): a 16×130 synthetic image → 3 bands (64, 64, 2); a
-1-pixel-wide ink column lands in the right byte/bit (MSB-first, 1 = black).
+1-pixel-wide ink column lands in the right byte/bit (MSB-first, 1 = black); gray thresholds at
+half; `width` parses 576/384 and 400s the rest.
 
-`api/.../sale/ReceiptEscposIT` (the `InStoreSaleIT` harness): 200 + `application/octet-stream` +
-init bytes for the sale's slip and the return's slip; VIEWER of another org → 404; `width=100` →
-400; an order with no invoice → 404; a DRAFT credit note → 404.
+`api/.../sale/ReceiptEscposHandlerTest` (handler, mocked renderer): VIEWER → 200 +
+`application/octet-stream` + `attachment` + `private, no-store` + the bytes; `width=384` reaches
+the renderer; `width=100` → 400 before anything renders; non-member → 403; the credit-note route
+the same.
 
-**Measured, recorded in `tools/seed/results/escpos-slip-size.md`** (per
-[[measurements-as-attached-docs]] — the file, not prose): byte size of a 1-, 3- and 10-line slip
-at 576 and 384, so the frontend pair can state a transfer time honestly.
+`api/.../sale/ReceiptEscposIT` (the `CounterReturnIT` harness, headless): a real cash sale of an
+Arabic-titled product → a banded 80 mm slip whose model carries the title, the barcode, Tendered
+and Change; the counter return that follows → a 58 mm return slip naming the note, the original
+order and *Cash handed back*; ids nothing was sold under → 404 for both.
+
+**Measured, recorded in `tools/seed/results/escpos-slip-size.md`** (the file, not prose): byte
+size of a 1-, 3- and 10-line slip at 576 and 384 — 59 / 70 / 108 KB at 80 mm — so the frontend
+pair can state a transfer time honestly.
 
 Regression green: `InStoreSaleIT`, `CounterReturnIT`, `SplitTenderIT`, `DocumentRenderServiceTest`.
 

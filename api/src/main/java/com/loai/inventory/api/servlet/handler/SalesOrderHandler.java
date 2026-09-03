@@ -33,6 +33,7 @@ import com.loai.inventory.service.SalesOrderService.InStoreSale;
 import com.loai.inventory.service.SalesOrderService.Placed;
 import com.loai.inventory.service.document.DocumentRenderService;
 import com.loai.inventory.service.document.DocumentRenderService.RenderedDocument;
+import com.loai.inventory.service.document.Escpos;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -154,6 +155,10 @@ public class SalesOrderHandler implements OrgResourceHandler {
       }
       if ("GET".equals(method) && parts.length == 2 && "receipt.pdf".equals(parts[1])) {
         doReceiptPdf(req, resp, orgId, parseId(parts[0]));
+        return;
+      }
+      if ("GET".equals(method) && parts.length == 2 && "receipt.escpos".equals(parts[1])) {
+        doReceiptEscpos(req, resp, orgId, parseId(parts[0]));
         return;
       }
       if ("GET".equals(method) && parts.length == 2 && "returnable".equals(parts[1])) {
@@ -405,6 +410,20 @@ public class SalesOrderHandler implements OrgResourceHandler {
   }
 
   /**
+   * {@code GET /{id}/receipt.escpos?width=576|384} — the same receipt as printer bytes: a raster
+   * slip an ESC/POS thermal printer executes as-is (VIEWER; {@code stories/escpos_receipt.md}). No
+   * drawer kick — that is the client's call. 404 without an issued invoice, 400 on another width.
+   */
+  private void doReceiptEscpos(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID orderId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    int width = Escpos.width(req.getParameter("width"));
+    RenderedDocument doc = renderService.renderReceiptEscpos(orgId, orderId, width);
+    writeOctets(resp, doc.bytes(), doc.filename());
+  }
+
+  /**
    * {@code GET /{id}/returnable} — what the receipt can still give back (VIEWER; {@code
    * stories/counter_return.md}): the live invoice's lines with billed / returned / returnable and a
    * display-only per-unit net refund, plus the tender and the refund mode. 409 unless the order is
@@ -516,6 +535,19 @@ public class SalesOrderHandler implements OrgResourceHandler {
     resp.setContentType("application/pdf");
     resp.setContentLength(bytes.length);
     resp.setHeader("Content-Disposition", "inline; filename=\"" + filename + "\"");
+    resp.getOutputStream().write(bytes);
+  }
+
+  /**
+   * Raw printer bytes: never inlined by a browser, never cached — a slip is fetched to be sent on.
+   */
+  private void writeOctets(HttpServletResponse resp, byte[] bytes, String filename)
+      throws IOException {
+    resp.setStatus(200);
+    resp.setContentType("application/octet-stream");
+    resp.setContentLength(bytes.length);
+    resp.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+    resp.setHeader("Cache-Control", "private, no-store");
     resp.getOutputStream().write(bytes);
   }
 

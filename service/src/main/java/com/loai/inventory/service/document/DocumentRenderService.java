@@ -4,9 +4,12 @@ import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.CreditNote;
 import com.loai.inventory.domain.model.CreditNoteLine;
+import com.loai.inventory.domain.model.CreditNoteStatus;
 import com.loai.inventory.domain.model.InvoiceStatus;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.model.Refund;
+import com.loai.inventory.domain.model.RefundStatus;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -36,6 +39,7 @@ import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -49,9 +53,11 @@ import org.slf4j.LoggerFactory;
  * the header comes from the org billing profile (V51); an org with none set still renders (header
  * falls back to {@code org.name}).
  *
- * <p>v1 uses OpenPDF with the built-in base-14 fonts (Latin/English, zero font assets). The
+ * <p>The PDFs use OpenPDF with the built-in base-14 fonts (Latin/English, zero font assets); the
  * HTML-engine + embedded-Arabic-font upgrade is documented in the story and slots behind this same
- * class without changing callers.
+ * class without changing callers. The 80 mm slip has a second output ({@code
+ * stories/escpos_receipt.md}): the same {@link SlipModel} painted as an ESC/POS raster with the
+ * bundled Arabic-capable {@link SlipFont}, for the counter's thermal printer.
  */
 public final class DocumentRenderService {
 
@@ -237,8 +243,15 @@ public final class DocumentRenderService {
     return new RenderedDocument(fileName(cn.getCreditNoteNumber(), "credit-note"), bytes);
   }
 
-  /** An 80mm thermal receipt for a sale (framed for in-store; carries tender + change). */
-  public RenderedDocument renderReceipt(UUID orgId, UUID salesOrderId) {
+  // ---- the 80 mm slip: one model, two painters (stories/escpos_receipt.md) -------------------
+
+  /**
+   * The in-store receipt's content, decided once — what the PDF and the ESC/POS raster both print:
+   * seller header, the order number as barcode, Order / Invoice / Date / Customer, one line per
+   * invoice line, Subtotal / Tax / Discount-when-there-is-one, TOTAL, a row per tender on a split
+   * sale, Tendered, Change-when-positive. 404 when the order has no issued invoice.
+   */
+  public SlipModel receiptModel(UUID orgId, UUID salesOrderId) {
     InvoiceAdminService.OrderInvoices oi = invoiceAdminService.listForOrder(orgId, salesOrderId);
     SalesOrder order = oi.order();
     InvoiceView live =
@@ -248,6 +261,7 @@ public final class DocumentRenderService {
             .orElseThrow(
                 () -> new NotFoundException("no issued invoice for order " + salesOrderId));
     SalesInvoice inv = live.invoice();
+    String cur = inv.getCurrency();
 
     List<PaymentService.PaymentWithRefunds> tenders =
         paymentService.listForOrder(orgId, salesOrderId).payments();
@@ -256,25 +270,80 @@ public final class DocumentRenderService {
       tender = tender.add(nz(pw.payment().getAmount()));
     }
     BigDecimal change = tender.subtract(nz(inv.getGrandTotal()));
-    final BigDecimal tenderF = tender;
-    final BigDecimal changeF = change;
-    // A split sale (stories/split_tender.md) prints one line per tender above the Tendered sum;
-    // a single-tender slip is byte-identical to before.
-    boolean split = tenders.size() > 1;
-
     Org org = org(orgId);
-    Image receiptLogo = logoImage(org, RECEIPT_LOGO_MAX_W, RECEIPT_LOGO_MAX_H);
+
+    List<SlipModel.Row> meta = new ArrayList<>();
+    meta.add(new SlipModel.Row("Order", order.getOrderNumber()));
+    meta.add(new SlipModel.Row("Invoice", inv.getInvoiceNumber()));
+    meta.add(new SlipModel.Row("Date", fmtDate(inv.getIssuedAt())));
+    if (!blank(inv.getCustomerName())) {
+      meta.add(new SlipModel.Row("Customer", inv.getCustomerName()));
+    }
+
+    List<SlipModel.Line> lines =
+        live.lines().stream()
+            .map(
+                l ->
+                    new SlipModel.Line(
+                        l.getDescription(),
+                        l.getQuantity() + " x " + money(l.getUnitPrice()),
+                        money(l.getLineTotal()) + " " + cur))
+            .toList();
+
+    List<SlipModel.Row> totals = new ArrayList<>();
+    totals.add(new SlipModel.Row("Subtotal", money(inv.getSubtotal()) + " " + cur));
+    totals.add(new SlipModel.Row("Tax", money(inv.getTaxTotal()) + " " + cur));
+    // Only when there is one: until the counter discount (V88) this was always zero and the slip
+    // printed nothing — a discounted receipt would otherwise show a subtotal and a total that
+    // disagree with no line between them.
+    if (nz(inv.getDiscountTotal()).signum() > 0) {
+      totals.add(
+          new SlipModel.Row(discountLabel(order), "-" + money(inv.getDiscountTotal()) + " " + cur));
+    }
+
+    // A split sale (stories/split_tender.md) prints one line per tender above the Tendered sum;
+    // a single-tender slip carries none, so it stays byte-identical to before.
+    List<SlipModel.Row> tenderRows = new ArrayList<>();
+    if (tenders.size() > 1) {
+      for (PaymentService.PaymentWithRefunds pw : tenders) {
+        tenderRows.add(
+            new SlipModel.Row(
+                tenderLabel(pw.transaction().getProvider()),
+                money(pw.payment().getAmount()) + " " + cur));
+      }
+    }
+
+    return new SlipModel(
+        headerName(org),
+        orgAddressLines(org),
+        logoBytes(org),
+        "RECEIPT",
+        order.getOrderNumber(),
+        meta,
+        lines,
+        totals,
+        new SlipModel.Row("TOTAL", money(inv.getGrandTotal()) + " " + cur),
+        tenderRows,
+        new SlipModel.Row("Tendered", money(tender) + " " + cur),
+        change.signum() > 0 ? new SlipModel.Row("Change", money(change) + " " + cur) : null,
+        null,
+        "Thank you!");
+  }
+
+  /** An 80mm thermal receipt for a sale as a PDF (framed for in-store; carries tender + change). */
+  public RenderedDocument renderReceipt(UUID orgId, UUID salesOrderId) {
+    SlipModel m = receiptModel(orgId, salesOrderId);
+    Image receiptLogo = pdfLogo(m.logo(), RECEIPT_LOGO_MAX_W, RECEIPT_LOGO_MAX_H);
 
     // 80mm ≈ 226.77 pt wide; height sized to content so the slip isn't mostly blank. A discounted
     // sale draws one more totals row (V88), so it gets one more row of height; a split sale one
     // per tender.
-    boolean discounted = nz(inv.getDiscountTotal()).signum() > 0;
     float width = 226.77f;
     float height =
         220f
-            + live.lines().size() * 16f
-            + (discounted ? 13f : 0f)
-            + (split ? tenders.size() * 13f : 0f)
+            + m.lines().size() * 16f
+            + (m.totals().size() - 2) * 13f
+            + m.tenders().size() * 13f
             + RECEIPT_BARCODE_EXTRA_H
             + (receiptLogo == null ? 0f : RECEIPT_LOGO_EXTRA_H);
     byte[] bytes =
@@ -286,60 +355,152 @@ public final class DocumentRenderService {
                 receiptLogo.setAlignment(Element.ALIGN_CENTER);
                 doc.add(receiptLogo);
               }
-              receiptCenter(doc, headerName(org), H2);
-              for (String line : orgAddressLines(org)) {
+              receiptCenter(doc, m.name(), H2);
+              for (String line : m.addressLines()) {
                 receiptCenter(doc, line, MUTED_BODY);
               }
               receiptRule(doc);
-              receiptCenter(doc, "RECEIPT", BODY_BOLD);
+              receiptCenter(doc, m.title(), BODY_BOLD);
               // The order number as a Code128 (stories/counter_return.md): the admin scanner
               // reads it back to find the sale for a return, instead of a cashier typing
               // SO-2026-00417 correctly while the customer waits. The number is still printed as
               // text on the next line, so the barcode carries no caption of its own.
-              doc.add(orderNumberBarcode(writer, order.getOrderNumber()));
-              receiptLine(doc, "Order", order.getOrderNumber());
-              receiptLine(doc, "Invoice", inv.getInvoiceNumber());
-              receiptLine(doc, "Date", fmtDate(inv.getIssuedAt()));
-              if (inv.getCustomerName() != null && !inv.getCustomerName().isBlank()) {
-                receiptLine(doc, "Customer", inv.getCustomerName());
+              doc.add(orderNumberBarcode(writer, m.barcode()));
+              for (SlipModel.Row r : m.meta()) {
+                receiptLine(doc, r.label(), r.value());
               }
               receiptRule(doc);
-              for (SalesInvoiceLine l : live.lines()) {
-                doc.add(new Paragraph(l.getDescription(), BODY));
-                receiptLine(
-                    doc,
-                    l.getQuantity() + " x " + money(l.getUnitPrice()),
-                    money(l.getLineTotal()) + " " + inv.getCurrency());
+              for (SlipModel.Line l : m.lines()) {
+                doc.add(new Paragraph(l.title(), BODY));
+                receiptLine(doc, l.qtyByPrice(), l.amount());
               }
               receiptRule(doc);
-              receiptLine(doc, "Subtotal", money(inv.getSubtotal()) + " " + inv.getCurrency());
-              receiptLine(doc, "Tax", money(inv.getTaxTotal()) + " " + inv.getCurrency());
-              // Only when there is one: until the counter discount (V88) this was always zero and
-              // the slip printed nothing — a discounted receipt would otherwise show a subtotal
-              // and a total that disagree with no line between them.
-              if (discounted) {
-                receiptLine(
-                    doc,
-                    discountLabel(order),
-                    "-" + money(inv.getDiscountTotal()) + " " + inv.getCurrency());
+              for (SlipModel.Row r : m.totals()) {
+                receiptLine(doc, r.label(), r.value());
               }
-              receiptTotal(doc, "TOTAL", money(inv.getGrandTotal()) + " " + inv.getCurrency());
-              if (split) {
-                for (PaymentService.PaymentWithRefunds pw : tenders) {
-                  receiptLine(
-                      doc,
-                      tenderLabel(pw.transaction().getProvider()),
-                      money(pw.payment().getAmount()) + " " + inv.getCurrency());
-                }
+              receiptTotal(doc, m.total().label(), m.total().value());
+              for (SlipModel.Row r : m.tenders()) {
+                receiptLine(doc, r.label(), r.value());
               }
-              receiptLine(doc, "Tendered", money(tenderF) + " " + inv.getCurrency());
-              if (changeF.signum() > 0) {
-                receiptLine(doc, "Change", money(changeF) + " " + inv.getCurrency());
+              if (m.tendered() != null) {
+                receiptLine(doc, m.tendered().label(), m.tendered().value());
+              }
+              if (m.change() != null) {
+                receiptLine(doc, m.change().label(), m.change().value());
               }
               receiptRule(doc);
-              receiptCenter(doc, "Thank you!", MUTED_BODY);
+              receiptCenter(doc, m.footer(), MUTED_BODY);
             });
-    return new RenderedDocument(fileName(order.getOrderNumber(), "receipt"), bytes);
+    return new RenderedDocument(fileName(m.barcode(), "receipt", ".pdf"), bytes);
+  }
+
+  /**
+   * The same receipt as ESC/POS bytes for a thermal printer {@code width} dots wide ({@link
+   * Escpos#WIDTH_80MM} / {@link Escpos#WIDTH_58MM}): the slip painted as a raster, in bands, with
+   * init, feed and cut — and no drawer kick, which is the client's call.
+   */
+  public RenderedDocument renderReceiptEscpos(UUID orgId, UUID salesOrderId, int width) {
+    SlipModel m = receiptModel(orgId, salesOrderId);
+    byte[] bytes = Escpos.encode(SlipRaster.paint(m, width));
+    return new RenderedDocument(fileName(m.barcode(), "receipt", ".escpos"), bytes);
+  }
+
+  /**
+   * The counter return's slip ({@code stories/counter_return.md} refund, printed): the note and the
+   * original order (as barcode again — the next return scans it too), the returned lines, Subtotal
+   * / Tax / the discount share when the sale was discounted, REFUND TOTAL, and how the money went
+   * back. 404 for a DRAFT note — a slip is only for an issued one.
+   */
+  public SlipModel returnSlipModel(UUID orgId, UUID creditNoteId) {
+    return returnSlip(orgId, creditNoteId).model();
+  }
+
+  /** The return slip as ESC/POS bytes; see {@link #renderReceiptEscpos}. */
+  public RenderedDocument renderReturnSlipEscpos(UUID orgId, UUID creditNoteId, int width) {
+    ReturnSlip slip = returnSlip(orgId, creditNoteId);
+    byte[] bytes = Escpos.encode(SlipRaster.paint(slip.model(), width));
+    return new RenderedDocument(fileName(slip.number(), "return", ".escpos"), bytes);
+  }
+
+  private record ReturnSlip(String number, SlipModel model) {}
+
+  private ReturnSlip returnSlip(UUID orgId, UUID creditNoteId) {
+    CreditNoteService.Detail detail = creditNoteService.get(orgId, creditNoteId);
+    CreditNote cn = detail.creditNote();
+    if (cn.getStatus() == CreditNoteStatus.DRAFT) {
+      throw new NotFoundException("credit note not issued: " + creditNoteId);
+    }
+    InvoiceView inv = invoiceAdminService.get(orgId, cn.getSalesInvoiceId());
+    SalesOrder order =
+        invoiceAdminService.listForOrder(orgId, inv.invoice().getSalesOrderId()).order();
+    Org org = org(orgId);
+    String cur = cn.getCurrency();
+
+    List<SlipModel.Row> meta = new ArrayList<>();
+    meta.add(new SlipModel.Row("Credit note", cn.getCreditNoteNumber()));
+    meta.add(new SlipModel.Row("Order", order.getOrderNumber()));
+    meta.add(new SlipModel.Row("Invoice", inv.invoice().getInvoiceNumber()));
+    meta.add(new SlipModel.Row("Date", fmtDate(cn.getIssuedAt())));
+    if (!blank(inv.invoice().getCustomerName())) {
+      meta.add(new SlipModel.Row("Customer", inv.invoice().getCustomerName()));
+    }
+
+    List<SlipModel.Line> lines =
+        detail.lines().stream()
+            .map(
+                l ->
+                    new SlipModel.Line(
+                        l.getDescription(),
+                        l.getQuantity() + " x " + money(l.getUnitPrice()),
+                        money(l.getLineTotal()) + " " + cur))
+            .toList();
+
+    List<SlipModel.Row> totals = new ArrayList<>();
+    totals.add(new SlipModel.Row("Subtotal", money(cn.getSubtotal()) + " " + cur));
+    totals.add(new SlipModel.Row("Tax", money(cn.getTaxTotal()) + " " + cur));
+    // V89: a counter return credits gross lines against a net invoice — the discount share is what
+    // brings the refund down to what was paid. Only when there is one.
+    if (nz(cn.getDiscountTotal()).signum() > 0) {
+      totals.add(new SlipModel.Row("Discount", "-" + money(cn.getDiscountTotal()) + " " + cur));
+    }
+
+    SlipModel model =
+        new SlipModel(
+            headerName(org),
+            orgAddressLines(org),
+            logoBytes(org),
+            cn.getStatus() == CreditNoteStatus.VOID ? "RETURN (VOID)" : "RETURN",
+            order.getOrderNumber(),
+            meta,
+            lines,
+            totals,
+            new SlipModel.Row("REFUND TOTAL", money(cn.getTotal()) + " " + cur),
+            List.of(),
+            null,
+            null,
+            settlement(creditNoteService.refundsFor(orgId, creditNoteId)),
+            "Thank you!");
+    return new ReturnSlip(cn.getCreditNoteNumber(), model);
+  }
+
+  /**
+   * How the refund went back, from the note's first live refund row: cash handed over at the
+   * counter, a transfer already sent, or one still pending ({@code stories/counter_return.md}'s two
+   * paths). A cancelled row never speaks; a note with no refund prints no row.
+   */
+  private static SlipModel.Row settlement(List<Refund> refunds) {
+    for (Refund r : refunds) {
+      if (r.getStatus() == RefundStatus.CANCELLED) {
+        continue;
+      }
+      if (r.getStatus() == RefundStatus.EXECUTED) {
+        return new SlipModel.Row(
+            "Refunded",
+            r.getMethod() == PaymentProvider.CASH ? "Cash handed back" : "InstaPay transfer");
+      }
+      return new SlipModel.Row("Refund", "Pending transfer");
+    }
+    return null;
   }
 
   private Org org(UUID orgId) {
@@ -356,8 +517,13 @@ public final class DocumentRenderService {
 
   /** A safe download filename from a document number: {@code INV-2026-0007.pdf}. */
   private static String fileName(String number, String fallback) {
+    return fileName(number, fallback, ".pdf");
+  }
+
+  /** The same, with the extension the body actually is ({@code .pdf} / {@code .escpos}). */
+  private static String fileName(String number, String fallback, String ext) {
     String base = blank(number) ? fallback : number.replaceAll("[^A-Za-z0-9._-]", "_");
-    return base + ".pdf";
+    return base + ext;
   }
 
   // ---- shared building blocks -----------------------------------------------------------------
@@ -401,20 +567,35 @@ public final class DocumentRenderService {
    * text only. Never throws: a broken logo must not break a finance document download.
    */
   private Image logoImage(Org org, float maxWidth, float maxHeight) {
+    return pdfLogo(logoBytes(org), maxWidth, maxHeight);
+  }
+
+  /** The raw logo bytes, or {@code null} when the org has none or storage can't produce them. */
+  private byte[] logoBytes(Org org) {
     String key = org.getLogoObjectKey();
     if (blank(key)) {
       return null;
     }
     try {
       byte[] bytes = logoSource.fetch(key);
-      if (bytes == null || bytes.length == 0) {
-        return null;
-      }
+      return bytes == null || bytes.length == 0 ? null : bytes;
+    } catch (Exception e) {
+      log.warn("Logo unavailable for document header (key={}): {}", key, e.toString());
+      return null;
+    }
+  }
+
+  /** {@code bytes} as an OpenPDF image scaled to fit, or {@code null} when they don't decode. */
+  private static Image pdfLogo(byte[] bytes, float maxWidth, float maxHeight) {
+    if (bytes == null) {
+      return null;
+    }
+    try {
       Image img = Image.getInstance(bytes);
       img.scaleToFit(maxWidth, maxHeight);
       return img;
     } catch (Exception e) {
-      log.warn("Logo unavailable for document header (key={}): {}", key, e.toString());
+      log.warn("Logo not decodable for document header: {}", e.toString());
       return null;
     }
   }

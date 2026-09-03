@@ -15,6 +15,7 @@ import com.loai.inventory.service.CreditNoteService.Detail;
 import com.loai.inventory.service.CreditNoteService.Issued;
 import com.loai.inventory.service.document.DocumentRenderService;
 import com.loai.inventory.service.document.DocumentRenderService.RenderedDocument;
+import com.loai.inventory.service.document.Escpos;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -92,6 +93,15 @@ public class CreditNoteHandler implements OrgResourceHandler {
         return;
       }
 
+      if (parts.length == 2 && "receipt.escpos".equals(parts[1])) {
+        if ("GET".equals(method)) {
+          doReceiptEscpos(req, resp, orgId, creditNoteId);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+
       if (parts.length == 2 && "void".equals(parts[1]) && "POST".equals(method)) {
         doVoid(req, resp, orgId, creditNoteId);
         return;
@@ -127,6 +137,19 @@ public class CreditNoteHandler implements OrgResourceHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
     RenderedDocument doc = renderService.renderCreditNote(orgId, id);
     writePdf(resp, doc.bytes(), doc.filename());
+  }
+
+  /**
+   * {@code GET /{id}/receipt.escpos?width=576|384} — the counter return's 80 mm slip as printer
+   * bytes (VIEWER; {@code stories/escpos_receipt.md}): note + original order, the returned lines,
+   * the refund total and how it went back. 404 for a DRAFT or unknown note, 400 on another width.
+   */
+  private void doReceiptEscpos(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id) throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    int width = Escpos.width(req.getParameter("width"));
+    RenderedDocument doc = renderService.renderReturnSlipEscpos(orgId, id, width);
+    writeOctets(resp, doc.bytes(), doc.filename());
   }
 
   /**
@@ -215,6 +238,19 @@ public class CreditNoteHandler implements OrgResourceHandler {
     resp.setContentType("application/pdf");
     resp.setContentLength(bytes.length);
     resp.setHeader("Content-Disposition", "inline; filename=\"" + filename + "\"");
+    resp.getOutputStream().write(bytes);
+  }
+
+  /**
+   * Raw printer bytes: never inlined by a browser, never cached — a slip is fetched to be sent on.
+   */
+  private void writeOctets(HttpServletResponse resp, byte[] bytes, String filename)
+      throws IOException {
+    resp.setStatus(200);
+    resp.setContentType("application/octet-stream");
+    resp.setContentLength(bytes.length);
+    resp.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+    resp.setHeader("Cache-Control", "private, no-store");
     resp.getOutputStream().write(bytes);
   }
 

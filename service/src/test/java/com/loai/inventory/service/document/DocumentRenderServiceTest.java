@@ -1,16 +1,26 @@
 package com.loai.inventory.service.document;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.CreditNote;
+import com.loai.inventory.domain.model.CreditNoteLine;
 import com.loai.inventory.domain.model.CreditNoteStatus;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.Payment;
+import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.model.PaymentTransaction;
+import com.loai.inventory.domain.model.Refund;
+import com.loai.inventory.domain.model.RefundStatus;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -21,10 +31,12 @@ import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentService.PaymentWithRefunds;
 import com.loai.inventory.service.document.DocumentRenderService.RenderedDocument;
+import java.awt.GraphicsEnvironment;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -34,6 +46,12 @@ import org.junit.jupiter.api.Test;
  * filename derived from the document number, and an org with no billing profile still renders.
  */
 class DocumentRenderServiceTest {
+
+  static {
+    // The runtime image has no display: the raster slip must paint under the same flag it ships
+    // with (Dockerfile JAVA_OPTS), or a fontconfig/X11 lookup slips through CI and fails in prod.
+    System.setProperty("java.awt.headless", "true");
+  }
 
   private static final UUID ORG = UUID.randomUUID();
   private static final UUID INVOICE = UUID.randomUUID();
@@ -563,5 +581,387 @@ class DocumentRenderServiceTest {
     RenderedDocument doc = withLogo.renderReceipt(ORG, ORDER);
 
     assertTrue(isPdf(doc.bytes()));
+  }
+
+  // ---- ESC/POS slip (stories/escpos_receipt.md) ----------------------------------------------
+
+  private static SalesOrder anOrder(String number) {
+    SalesOrder o = mock(SalesOrder.class);
+    when(o.getOrderNumber()).thenReturn(number);
+    return o;
+  }
+
+  private static SalesInvoiceLine aLine(String description) {
+    return SalesInvoiceLine.create(
+        UUID.randomUUID(),
+        INVOICE,
+        UUID.randomUUID(),
+        description,
+        2,
+        new BigDecimal("50.00"),
+        new BigDecimal("0.20"));
+  }
+
+  private void stubReceiptLines(
+      SalesInvoice inv, SalesOrder order, String tender, List<SalesInvoiceLine> lines) {
+    when(invoiceAdminService.listForOrder(ORG, ORDER))
+        .thenReturn(
+            new InvoiceAdminService.OrderInvoices(order, List.of(new InvoiceView(inv, lines))));
+    Payment payment = mock(Payment.class);
+    when(payment.getAmount()).thenReturn(new BigDecimal(tender));
+    when(paymentService.listForOrder(ORG, ORDER))
+        .thenReturn(
+            new PaymentService.OrderPayments(
+                order, List.of(new PaymentWithRefunds(payment, null, List.of()))));
+    when(orgService.getById(ORG)).thenReturn(orgWithProfile());
+  }
+
+  private static List<String> labels(List<SlipModel.Row> rows) {
+    return rows.stream().map(SlipModel.Row::label).toList();
+  }
+
+  @Test
+  void renderReceiptEscpos_beginsWithInitAndEndsWithFeedAndCut() {
+    stubReceipt(anInvoice(), anOrder("SO-2026-000201"), "150.00");
+
+    RenderedDocument doc = svc.renderReceiptEscpos(ORG, ORDER, Escpos.WIDTH_80MM);
+
+    assertEquals("SO-2026-000201.escpos", doc.filename());
+    byte[] b = doc.bytes();
+    assertArrayEquals(new byte[] {0x1B, 0x40}, Arrays.copyOfRange(b, 0, 2));
+    assertArrayEquals(
+        new byte[] {0x1B, 0x64, 0x04, 0x1D, 0x56, 0x42, 0x00},
+        Arrays.copyOfRange(b, b.length - 7, b.length));
+  }
+
+  /** Every band is 72 bytes wide and 64 rows tall but the last; nothing sits between them. */
+  @Test
+  void renderReceiptEscpos_bandsTileTheSlipExactly() {
+    stubReceipt(anInvoice(), anOrder("SO-2026-000202"), "150.00");
+
+    byte[] b = svc.renderReceiptEscpos(ORG, ORDER, Escpos.WIDTH_80MM).bytes();
+
+    EscposTestSupport.Parsed p = EscposTestSupport.parse(b);
+    assertTrue(p.bands().size() >= 5, "a slip is several bands, got " + p.bands().size());
+    int rows = 0;
+    for (int i = 0; i < p.bands().size(); i++) {
+      EscposTestSupport.Band band = p.bands().get(i);
+      assertEquals(72, band.bytesPerRow());
+      assertTrue(band.rows() > 0 && band.rows() <= 64, "band rows " + band.rows());
+      if (i < p.bands().size() - 1) {
+        assertEquals(64, band.rows(), "only the last band may be short");
+      }
+      rows += band.rows();
+    }
+    assertEquals(b.length - 7, p.tailOffset(), "nothing between the last band and feed+cut");
+    assertTrue(rows > 300 && rows < 1400, "content-sized, not a page: " + rows + " rows");
+  }
+
+  @Test
+  void renderReceiptEscpos_honoursWidth384() {
+    stubReceipt(anInvoice(), anOrder("SO-2026-000203"), "150.00");
+
+    byte[] b = svc.renderReceiptEscpos(ORG, ORDER, Escpos.WIDTH_58MM).bytes();
+
+    for (EscposTestSupport.Band band : EscposTestSupport.parse(b).bands()) {
+      assertEquals(48, band.bytesPerRow());
+    }
+  }
+
+  /** The assertion Helvetica would fail: an Arabic title leaves ink, and the font knows it can. */
+  @Test
+  void renderReceiptEscpos_arabicTitleHasGlyphs() {
+    assertEquals(-1, SlipFont.canDisplayUpTo("دفتر ملاحظات EGP 50.00"));
+    assertNotEquals(
+        -1,
+        SlipFont.canDisplayUpTo("日本語"),
+        "the guard is real: a script the font lacks is reported");
+
+    stubReceiptLines(anInvoice(), anOrder("SO-1"), "150.00", List.of(aLine("دفتر ملاحظات")));
+    int arabic =
+        EscposTestSupport.ink(
+            EscposTestSupport.bitmap(svc.renderReceiptEscpos(ORG, ORDER, 576).bytes()));
+    stubReceiptLines(anInvoice(), anOrder("SO-1"), "150.00", List.of(aLine(".")));
+    int dot =
+        EscposTestSupport.ink(
+            EscposTestSupport.bitmap(svc.renderReceiptEscpos(ORG, ORDER, 576).bytes()));
+
+    assertTrue(arabic > dot + 300, "an Arabic title must leave ink: " + arabic + " vs " + dot);
+  }
+
+  /**
+   * The layout owns the columns: an Arabic title is placed at the right edge by its own direction,
+   * a Latin one at the left, and neither bleeds into the margins.
+   */
+  @Test
+  void slipRaster_arabicTitleSitsRight_latinTitleSitsLeft() {
+    assertTrue(SlipRaster.isRtl("قلم"));
+    assertFalse(SlipRaster.isRtl("Pen"));
+    assertFalse(SlipRaster.isRtl("EGP 450.00"));
+    assertFalse(SlipRaster.isRtl(""));
+
+    boolean[][] arabic =
+        EscposTestSupport.bitmap(Escpos.encode(SlipRaster.paint(slip("قلم"), 576)));
+    boolean[][] latin = EscposTestSupport.bitmap(Escpos.encode(SlipRaster.paint(slip("Pen"), 576)));
+
+    assertTrue(hasRowEntirelyRightOfCentre(arabic), "the Arabic title row is flush right");
+    assertFalse(hasRowEntirelyRightOfCentre(latin), "a Latin title row starts at the left margin");
+    for (boolean[][] bitmap : List.of(arabic, latin)) {
+      for (boolean[] row : bitmap) {
+        int first = EscposTestSupport.firstInk(row);
+        if (first >= 0) {
+          assertTrue(first >= SlipRaster.MARGIN, "ink in the left margin at " + first);
+          assertTrue(
+              EscposTestSupport.lastInk(row) < 576 - SlipRaster.MARGIN, "ink in the right margin");
+        }
+      }
+    }
+  }
+
+  private static boolean hasRowEntirelyRightOfCentre(boolean[][] bitmap) {
+    for (boolean[] row : bitmap) {
+      int first = EscposTestSupport.firstInk(row);
+      if (first > row.length / 2) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static SlipModel slip(String title) {
+    return new SlipModel(
+        "Acme",
+        List.of(),
+        null,
+        "RECEIPT",
+        null,
+        List.of(new SlipModel.Row("Order", "SO-1")),
+        List.of(new SlipModel.Line(title, "1 x 10.00", "10.00 EGP")),
+        List.of(new SlipModel.Row("Subtotal", "10.00 EGP")),
+        new SlipModel.Row("TOTAL", "10.00 EGP"),
+        List.of(),
+        new SlipModel.Row("Tendered", "10.00 EGP"),
+        null,
+        null,
+        "Thanks");
+  }
+
+  /** The order number's Code128 is drawn as bars: some row flips black/white dozens of times. */
+  @Test
+  void renderReceiptEscpos_barcodeRowsScanAsBars() {
+    stubReceipt(anInvoice(), anOrder("SO-2026-000123"), "150.00");
+
+    boolean[][] bitmap = EscposTestSupport.bitmap(svc.renderReceiptEscpos(ORG, ORDER, 576).bytes());
+
+    int most = 0;
+    for (boolean[] row : bitmap) {
+      most = Math.max(most, EscposTestSupport.transitions(row));
+    }
+    assertTrue(most >= 40, "a barcode row has dozens of transitions, best row had " + most);
+    byte[] modules = SlipRaster.barcodeModules("SO-2026-000123");
+    assertTrue(modules.length > 30, "Code128 modules: " + modules.length);
+  }
+
+  /** The model — what both painters consume — carries a row only when the sale has the thing. */
+  @Test
+  void receiptModel_carriesTenderDiscountAndChangeRowsOnlyWhenTheyExist() {
+    // A 10% counter discount on the 120.00 invoice, paid InstaPay 100 + cash 50 → change 40.
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    SalesInvoice inv =
+        SalesInvoice.createDraft(
+            INVOICE,
+            ORG,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new BigDecimal("100.00"),
+            new BigDecimal("20.00"),
+            BigDecimal.ZERO,
+            new BigDecimal("10.00"),
+            "EGP",
+            "Nadia",
+            "nadia@example.com",
+            null,
+            null,
+            now);
+    inv.issue("INV-2026-0009", now);
+    SalesOrder order = anOrder("SO-2026-000300");
+    when(order.getCounterDiscountType()).thenReturn(CouponType.PERCENT);
+    when(order.getCounterDiscountValue()).thenReturn(new BigDecimal("10.00"));
+    when(invoiceAdminService.listForOrder(ORG, ORDER))
+        .thenReturn(
+            new InvoiceAdminService.OrderInvoices(
+                order, List.of(new InvoiceView(inv, List.of(aLine())))));
+    Payment transfer = mock(Payment.class);
+    when(transfer.getAmount()).thenReturn(new BigDecimal("100.00"));
+    PaymentTransaction transferTxn = mock(PaymentTransaction.class);
+    when(transferTxn.getProvider()).thenReturn(PaymentProvider.INSTAPAY_IN_STORE);
+    Payment notes = mock(Payment.class);
+    when(notes.getAmount()).thenReturn(new BigDecimal("50.00"));
+    PaymentTransaction notesTxn = mock(PaymentTransaction.class);
+    when(notesTxn.getProvider()).thenReturn(PaymentProvider.CASH);
+    when(paymentService.listForOrder(ORG, ORDER))
+        .thenReturn(
+            new PaymentService.OrderPayments(
+                order,
+                List.of(
+                    new PaymentWithRefunds(transfer, transferTxn, List.of()),
+                    new PaymentWithRefunds(notes, notesTxn, List.of()))));
+    when(orgService.getById(ORG)).thenReturn(orgWithProfile());
+
+    SlipModel m = svc.receiptModel(ORG, ORDER);
+
+    assertEquals("RECEIPT", m.title());
+    assertEquals("SO-2026-000300", m.barcode());
+    assertEquals("Acme Stationery LLC", m.name());
+    assertEquals(List.of("Order", "Invoice", "Date", "Customer"), labels(m.meta()));
+    assertEquals(List.of("Subtotal", "Tax", "Discount (10%)"), labels(m.totals()));
+    assertEquals("-10.00 EGP", m.totals().get(2).value());
+    assertEquals(new SlipModel.Row("TOTAL", money(inv.getGrandTotal()) + " EGP"), m.total());
+    assertEquals(List.of("InstaPay", "Cash"), labels(m.tenders()));
+    assertEquals("100.00 EGP", m.tenders().get(0).value());
+    assertEquals(new SlipModel.Row("Tendered", "150.00 EGP"), m.tendered());
+    assertEquals(
+        new SlipModel.Row(
+            "Change", money(new BigDecimal("150.00").subtract(inv.getGrandTotal())) + " EGP"),
+        m.change());
+    assertNull(m.settlement());
+    assertEquals("Blue pen", m.lines().get(0).title());
+    assertEquals("2 x 50.00", m.lines().get(0).qtyByPrice());
+
+    // The plain sale: one exact tender, no discount → no tender rows, no discount, no change.
+    stubReceipt(anInvoice(), anOrder("SO-2026-000301"), "120.00");
+    SlipModel plain = svc.receiptModel(ORG, ORDER);
+    assertEquals(List.of("Subtotal", "Tax"), labels(plain.totals()));
+    assertTrue(plain.tenders().isEmpty());
+    assertNull(plain.change());
+    assertEquals(List.of("Order", "Invoice", "Date", "Customer"), labels(plain.meta()));
+  }
+
+  private static String money(BigDecimal b) {
+    return b.setScale(2, java.math.RoundingMode.HALF_EVEN).toPlainString();
+  }
+
+  /**
+   * The return slip names the note, the original order (as barcode too), and how money went back.
+   */
+  @Test
+  void returnSlipModel_namesTheOriginalOrderAndTheRefundMethod() {
+    UUID cnId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    CreditNote cn = mock(CreditNote.class);
+    when(cn.getStatus()).thenReturn(CreditNoteStatus.SETTLED);
+    when(cn.getSalesInvoiceId()).thenReturn(INVOICE);
+    when(cn.getCreditNoteNumber()).thenReturn("CN-2026-0003");
+    when(cn.getIssuedAt()).thenReturn(now);
+    when(cn.getSubtotal()).thenReturn(new BigDecimal("100.00"));
+    when(cn.getTaxTotal()).thenReturn(BigDecimal.ZERO);
+    when(cn.getDiscountTotal()).thenReturn(new BigDecimal("10.00"));
+    when(cn.getTotal()).thenReturn(new BigDecimal("90.00"));
+    when(cn.getCurrency()).thenReturn("EGP");
+    CreditNoteLine line = mock(CreditNoteLine.class);
+    when(line.getDescription()).thenReturn("دفتر");
+    when(line.getQuantity()).thenReturn(1);
+    when(line.getUnitPrice()).thenReturn(new BigDecimal("100.00"));
+    when(line.getLineTotal()).thenReturn(new BigDecimal("100.00"));
+    when(creditNoteService.get(ORG, cnId))
+        .thenReturn(new CreditNoteService.Detail(cn, List.of(line), new BigDecimal("90.00")));
+    SalesInvoice inv = mock(SalesInvoice.class);
+    when(inv.getSalesOrderId()).thenReturn(orderId);
+    when(inv.getInvoiceNumber()).thenReturn("INV-2026-0007");
+    when(inv.getCustomerName()).thenReturn("Nadia");
+    when(invoiceAdminService.get(ORG, INVOICE)).thenReturn(new InvoiceView(inv, List.of()));
+    SalesOrder original = anOrder("SO-2026-000300");
+    when(invoiceAdminService.listForOrder(ORG, orderId))
+        .thenReturn(new InvoiceAdminService.OrderInvoices(original, List.of()));
+    when(orgService.getById(ORG)).thenReturn(orgWithProfile());
+    Refund cash = mock(Refund.class);
+    when(cash.getStatus()).thenReturn(RefundStatus.EXECUTED);
+    when(cash.getMethod()).thenReturn(PaymentProvider.CASH);
+    when(creditNoteService.refundsFor(ORG, cnId)).thenReturn(List.of(cash));
+
+    SlipModel m = svc.returnSlipModel(ORG, cnId);
+
+    assertEquals("RETURN", m.title());
+    assertEquals("SO-2026-000300", m.barcode());
+    assertEquals(List.of("Credit note", "Order", "Invoice", "Date", "Customer"), labels(m.meta()));
+    assertEquals("CN-2026-0003", m.meta().get(0).value());
+    assertEquals("SO-2026-000300", m.meta().get(1).value());
+    assertEquals(List.of("Subtotal", "Tax", "Discount"), labels(m.totals()));
+    assertEquals("-10.00 EGP", m.totals().get(2).value());
+    assertEquals(new SlipModel.Row("REFUND TOTAL", "90.00 EGP"), m.total());
+    assertEquals(new SlipModel.Row("Refunded", "Cash handed back"), m.settlement());
+    assertEquals("دفتر", m.lines().get(0).title());
+    assertEquals("1 x 100.00", m.lines().get(0).qtyByPrice());
+    assertNull(m.tendered());
+    assertNull(m.change());
+    assertTrue(m.tenders().isEmpty());
+
+    // A cancelled row never speaks; the pending transfer after it does.
+    Refund cancelled = mock(Refund.class);
+    when(cancelled.getStatus()).thenReturn(RefundStatus.CANCELLED);
+    Refund pending = mock(Refund.class);
+    when(pending.getStatus()).thenReturn(RefundStatus.PENDING);
+    when(creditNoteService.refundsFor(ORG, cnId)).thenReturn(List.of(cancelled, pending));
+    assertEquals(
+        new SlipModel.Row("Refund", "Pending transfer"),
+        svc.returnSlipModel(ORG, cnId).settlement());
+
+    // No refund yet → no row at all.
+    when(creditNoteService.refundsFor(ORG, cnId)).thenReturn(List.of());
+    assertNull(svc.returnSlipModel(ORG, cnId).settlement());
+
+    RenderedDocument doc = svc.renderReturnSlipEscpos(ORG, cnId, Escpos.WIDTH_58MM);
+    assertEquals("CN-2026-0003.escpos", doc.filename());
+    for (EscposTestSupport.Band band : EscposTestSupport.parse(doc.bytes()).bands()) {
+      assertEquals(48, band.bytesPerRow());
+    }
+  }
+
+  @Test
+  void returnSlip_draftNoteIs404() {
+    UUID cnId = UUID.randomUUID();
+    CreditNote cn = mock(CreditNote.class);
+    when(cn.getStatus()).thenReturn(CreditNoteStatus.DRAFT);
+    when(creditNoteService.get(ORG, cnId))
+        .thenReturn(new CreditNoteService.Detail(cn, List.of(), BigDecimal.ZERO));
+
+    assertThrows(NotFoundException.class, () -> svc.returnSlipModel(ORG, cnId));
+    assertThrows(NotFoundException.class, () -> svc.renderReturnSlipEscpos(ORG, cnId, 576));
+  }
+
+  /** The slip paints under the flag the image ships with; the static block above set it. */
+  @Test
+  void slipPaintsHeadless() {
+    assertTrue(GraphicsEnvironment.isHeadless(), "java.awt.headless must be in force");
+    stubReceipt(anInvoice(), anOrder("SO-2026-000204"), "120.00");
+    assertTrue(svc.renderReceiptEscpos(ORG, ORDER, 576).bytes().length > 1000);
+  }
+
+  /**
+   * The transfer budget the frontend pair states honestly: a slip is tens of KB, never hundreds, at
+   * either width. The numbers this prints are the ones recorded in {@code
+   * tools/seed/results/escpos-slip-size.md}.
+   */
+  @Test
+  void renderReceiptEscpos_sizeStaysWithinTheBleBudget() {
+    for (int n : new int[] {1, 3, 10}) {
+      List<SalesInvoiceLine> lines = new java.util.ArrayList<>();
+      for (int i = 0; i < n; i++) {
+        lines.add(aLine(i % 2 == 0 ? "دفتر ملاحظات A5 مسطر" : "Blue ballpoint pen 0.7"));
+      }
+      for (int width : new int[] {Escpos.WIDTH_80MM, Escpos.WIDTH_58MM}) {
+        stubReceiptLines(anInvoice(), anOrder("SO-2026-000417"), "150.00", lines);
+        byte[] b = svc.renderReceiptEscpos(ORG, ORDER, width).bytes();
+        int rows = 0;
+        for (EscposTestSupport.Band band : EscposTestSupport.parse(b).bands()) {
+          rows += band.rows();
+        }
+        System.out.printf(
+            "escpos-size lines=%d width=%d rows=%d bytes=%d%n", n, width, rows, b.length);
+        assertTrue(b.length < 120_000, n + " lines at " + width + " → " + b.length + " bytes");
+      }
+    }
   }
 }
