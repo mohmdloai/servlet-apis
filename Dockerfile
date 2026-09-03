@@ -35,7 +35,9 @@ ENV BUILD_COMMIT=${BUILD_COMMIT}
 EXPOSE 8080
 
 # JVM tuning: honour container memory limits; sane defaults overridable via JAVA_OPTS.
-ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseContainerSupport"
+# Headless AWT: the ESC/POS slip is painted with Java2D (stories/escpos_receipt.md) and the
+# image ships no display and no system fonts — the slip's font is bundled on the classpath.
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseContainerSupport -Djava.awt.headless=true"
 
 # Embedded Tomcat writes a scratch dir under ./target/tomcat (relative to WORKDIR).
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -cp 'classes:lib/*' com.loai.inventory.api.EmbeddedTomcatLauncher"]

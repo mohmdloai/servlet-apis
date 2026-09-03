@@ -12,6 +12,7 @@ import com.loai.inventory.domain.model.CreditNoteStatus;
 import com.loai.inventory.domain.model.InvoiceStatus;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.Refund;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.repository.CreditNoteRepository;
 import com.loai.inventory.domain.repository.CreditNoteRepositoryFactory;
@@ -269,6 +270,15 @@ public final class CreditNoteService {
    */
   public record Detail(
       CreditNote creditNote, List<CreditNoteLine> lines, BigDecimal refundedTotal) {}
+
+  /**
+   * The refund rows written against a credit note, oldest first — what the return slip reads to say
+   * how the money went back ({@code stories/escpos_receipt.md}). Empty for a desk-issued note that
+   * has no refund yet.
+   */
+  public List<Refund> refundsFor(UUID orgId, UUID creditNoteId) {
+    return refundRepoFactory.create(rootDsl).findByCreditNoteId(orgId, creditNoteId);
+  }
 
   /** Read a credit note (with lines and its EXECUTED-refund total) for the GET endpoint. */
   public Detail get(UUID orgId, UUID id) {
