@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.InitInventoryRequest;
+import com.loai.inventory.api.dto.InventoryAdjustRequest;
 import com.loai.inventory.api.dto.InventoryQtyRequest;
 import com.loai.inventory.api.dto.InventoryResponse;
 import com.loai.inventory.api.dto.PageResponse;
@@ -16,6 +17,7 @@ import com.loai.inventory.domain.model.Inventory;
 import com.loai.inventory.domain.model.InventoryStockFilter;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
+import com.loai.inventory.domain.model.StockReason;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InventoryService.LogPage;
 import com.loai.inventory.service.InventoryService.OverviewPage;
@@ -203,6 +205,22 @@ public class InventoryHandler implements OrgResourceHandler {
               + "reserve, release, confirm-sale, restock, adjust");
     }
 
+    // adjust has its own body (stories/stocktake_count.md): the shared qty shape plus an optional
+    // reason, parsed here against the pair the service allows so a bad value never reaches it.
+    if (path.action.equals("adjust")) {
+      InventoryAdjustRequest body = readBody(req, InventoryAdjustRequest.class);
+      Inventory result =
+          inventoryService.adjust(
+              orgId,
+              path.productId,
+              body.getQty(),
+              parseAdjustReason(body.getReason()),
+              actor,
+              req.getHeader("Idempotency-Key"));
+      writeJson(resp, 200, InventoryResponse.from(result));
+      return;
+    }
+
     InventoryQtyRequest body = readBody(req, InventoryQtyRequest.class);
     Inventory result =
         switch (path.action) {
@@ -213,11 +231,29 @@ public class InventoryHandler implements OrgResourceHandler {
           case "restock" ->
               inventoryService.restock(
                   orgId, path.productId, body.getQty(), actor, req.getHeader("Idempotency-Key"));
-          case "adjust" -> inventoryService.adjust(orgId, path.productId, body.getQty(), actor);
           default -> throw new ValidationException("Unknown action: " + path.action);
         };
 
     writeJson(resp, 200, InventoryResponse.from(result));
+  }
+
+  /**
+   * Absent ⇒ {@code ADJUSTMENT}; otherwise exactly one of {@link InventoryService#ADJUST_REASONS}.
+   */
+  private static StockReason parseAdjustReason(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return StockReason.ADJUSTMENT;
+    }
+    StockReason reason;
+    try {
+      reason = StockReason.valueOf(raw.trim());
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("reason must be one of: ADJUSTMENT, STOCKTAKE");
+    }
+    if (!InventoryService.ADJUST_REASONS.contains(reason)) {
+      throw new ValidationException("reason must be one of: ADJUSTMENT, STOCKTAKE");
+    }
+    return reason;
   }
 
   private void doDelete(
