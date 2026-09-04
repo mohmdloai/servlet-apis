@@ -61,8 +61,16 @@ public final class InventoryMapper {
    */
   public static List<InventoryOverviewRow> toOverviewRows(
       List<InventoryRepository.OverviewRow> rows, java.util.Map<java.util.UUID, String> imageUrls) {
+    return toOverviewRows(rows, imageUrls, false);
+  }
+
+  /** As above, writing each row's {@code cost_price} iff the caller has manager authority. */
+  public static List<InventoryOverviewRow> toOverviewRows(
+      List<InventoryRepository.OverviewRow> rows,
+      java.util.Map<java.util.UUID, String> imageUrls,
+      boolean costVisible) {
     return rows.stream()
-        .map(row -> InventoryOverviewRow.from(row, imageUrls.get(row.productId())))
+        .map(row -> InventoryOverviewRow.from(row, imageUrls.get(row.productId()), costVisible))
         .toList();
   }
 

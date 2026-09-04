@@ -10,6 +10,14 @@ public class Product {
   private String name;
   private String description;
   private BigDecimal basePrice;
+
+  /**
+   * What a unit cost the merchant (V92). {@code null} means "not costed" — a different fact from
+   * {@code 0.00} — and every consumer treats it that way (no cost-derived figure is ever computed
+   * from a null cost, and none is reported as zero in its place).
+   */
+  private BigDecimal costPrice;
+
   private String sku;
   private String barcode;
   private OffsetDateTime createdAt;
@@ -76,6 +84,14 @@ public class Product {
 
   public void setBasePrice(BigDecimal basePrice) {
     this.basePrice = basePrice;
+  }
+
+  public BigDecimal getCostPrice() {
+    return costPrice;
+  }
+
+  public void setCostPrice(BigDecimal costPrice) {
+    this.costPrice = costPrice;
   }
 
   public String getSku() {

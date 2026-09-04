@@ -11,9 +11,15 @@ import static com.loai.inventory.repository.generated.Tables.SALES_INVOICE;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.report.AgingBand;
+import com.loai.inventory.domain.model.report.InventoryValuation;
+import com.loai.inventory.domain.model.report.ProfitTotals;
 import com.loai.inventory.domain.model.report.RevenuePoint;
 import com.loai.inventory.domain.model.report.SalesPoint;
 import com.loai.inventory.domain.model.report.TopProduct;
@@ -35,6 +41,7 @@ import com.loai.inventory.service.ReportService.SalesReport;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -121,7 +128,7 @@ class ReportReadsIT {
             + " sales_order_line, sales_order, inventory, product, org RESTART IDENTITY CASCADE");
   }
 
-  // ── G1 · revenue ────────────────────────────────────────────────────────────
+  // G1 · revenue
 
   @Test
   void revenue_sumsInvoicedCollectedRefunded_excludingVoidDraftPending() {
@@ -163,7 +170,7 @@ class ReportReadsIT {
     assertEquals(day(3), s.get(1).period());
   }
 
-  // ── G2 · sales by channel ──────────────────────────────────────────────────
+  // G2 · sales by channel
 
   @Test
   void sales_groupsByChannel_onlyMoneyCommittedStatuses() {
@@ -202,7 +209,7 @@ class ReportReadsIT {
     assertEquals(1, r.totalOrders(), "the order stamped exactly at `to` is excluded");
   }
 
-  // ── G3 · top products ──────────────────────────────────────────────────────
+  // G3 · top products
 
   @Test
   void topProducts_rankByRevenueAndQuantity_excludingNonSaleLines() {
@@ -231,7 +238,7 @@ class ReportReadsIT {
     assertEquals(2, reports.topProducts(org, FROM, TO, "revenue", "2").items().size());
   }
 
-  // ── G4 · AR aging ──────────────────────────────────────────────────────────
+  // G4 · AR aging
 
   @Test
   void arAging_bucketsByAge_excludesFullyPaidAndVoid() {
@@ -261,7 +268,7 @@ class ReportReadsIT {
     assertBand(custom.bands().get(2), "45+", 1, "300.00"); // age 100
   }
 
-  // ── G5 · inventory valuation ───────────────────────────────────────────────
+  // G5 · inventory valuation
 
   @Test
   void inventoryValuation_retailValueOverTrackedProductsOnly() {
@@ -281,7 +288,181 @@ class ReportReadsIT {
     assertEquals(1, r.valuation().outOfStock());
   }
 
-  // ── org isolation ───────────────────────────────────────────────────────────
+  // G5 · cost value (stories/product_cost_and_margin.md)
+
+  @Test
+  void valuation_costValueOverCostedOnly_andCoverage() {
+    UUID org = createOrg("acme");
+    UUID a = product(org, "A", "100.00", "60.00"); // 10 × 60 = 600
+    UUID b = product(org, "B", "50.00", "20.00"); // 2 × 20 = 40
+    UUID c = product(org, "C", "20.00", null); // uncosted, 5 units
+    inventory(org, a, 10);
+    inventory(org, b, 2);
+    inventory(org, c, 5);
+
+    InventoryValuation v = reports.inventoryValuation(org).valuation();
+    assertEquals(3, v.trackedProducts());
+    assertEquals(17, v.totalUnits());
+    assertMoney("1200.00", v.retailValue(), "retail over every tracked product"); // 1000+100+100
+    assertMoney("640.00", v.costValue(), "cost over the costed products only");
+    assertEquals(1, v.uncostedProducts());
+    assertEquals(5, v.uncostedUnits());
+  }
+
+  @Test
+  void valuation_noCostedProduct_costValueIsNull_neverZero() {
+    UUID org = createOrg("acme");
+    UUID a = product(org, "A", "100.00", null);
+    UUID b = product(org, "B", "50.00", null);
+    inventory(org, a, 3);
+    inventory(org, b, 4);
+
+    InventoryValuation v = reports.inventoryValuation(org).valuation();
+    assertNull(v.costValue(), "no costed product → null (the key stays off the wire)");
+    assertEquals(2, v.uncostedProducts());
+    assertEquals(7, v.uncostedUnits());
+    // A costed product with zero stock is a real 0.00, not "unknown".
+    UUID c = product(org, "C", "10.00", "4.00");
+    inventory(org, c, 0);
+    assertMoney("0.00", reports.inventoryValuation(org).valuation().costValue(), "costed, empty");
+  }
+
+  // G3/G6 · profit (stories/product_cost_and_margin.md)
+
+  @Test
+  void topProducts_costFieldsOverCostedLinesOnly() {
+    UUID org = createOrg("acme");
+    UUID nb = product(org, "Notebook", "50.00", "30.00");
+    UUID pen = product(org, "Pen", "5.00", null);
+    // Sold 5 BEFORE costing (snapshot null) and 3 AFTER (snapshot 30.00), no tax, no discount.
+    UUID before = order(org, OrderStatus.CLOSED, "250.00", "0.00", "250.00", D1);
+    costedLine(before, nb, 5, "50.00", "0", null);
+    UUID after = order(org, OrderStatus.CLOSED, "160.00", "0.00", "160.00", D2);
+    costedLine(after, nb, 3, "50.00", "0", "30.00");
+    costedLine(after, pen, 2, "5.00", "0", null);
+
+    List<TopProduct> rows = reports.topProducts(org, FROM, TO, "revenue", null).items();
+    TopProduct notebook = rows.stream().filter(r -> r.productId().equals(nb)).findFirst().get();
+    assertEquals(8, notebook.quantity(), "every unit sold");
+    assertMoney("400.00", notebook.revenue(), "revenue is untouched");
+    assertEquals(3, notebook.costedQuantity(), "only the units sold under a cost snapshot");
+    assertMoney("150.00", notebook.costedNetSales(), "net sales on the costed lines");
+    assertMoney("90.00", notebook.cost(), "3 × 30");
+    assertMoney("60.00", notebook.grossProfit(), "150 − 90");
+
+    TopProduct p = rows.stream().filter(r -> r.productId().equals(pen)).findFirst().get();
+    assertEquals(2, p.quantity());
+    assertEquals(0, p.costedQuantity());
+    assertNull(p.costedNetSales());
+    assertNull(p.cost());
+    assertNull(p.grossProfit());
+  }
+
+  @Test
+  void topProducts_netSalesExcludesTaxAndProratesTheOrderDiscount() {
+    UUID org = createOrg("acme");
+    UUID a = product(org, "A", "100.00", "60.00");
+    UUID b = product(org, "B", "100.00", "40.00");
+    // 14 % tax; goods subtotal 300, a 10 % counter discount = 30 on the ORDER.
+    UUID sale = order(org, OrderStatus.CLOSED, "300.00", "30.00", "307.80", D1);
+    costedLine(sale, a, 2, "100.00", "0.14", "60.00"); // subtotal 200, tax 28, total 228
+    costedLine(sale, b, 1, "100.00", "0.14", "40.00"); // subtotal 100, tax 14, total 114
+
+    List<TopProduct> rows = reports.topProducts(org, FROM, TO, "revenue", null).items();
+    TopProduct ra = rows.stream().filter(r -> r.productId().equals(a)).findFirst().get();
+    TopProduct rb = rows.stream().filter(r -> r.productId().equals(b)).findFirst().get();
+    // revenue stays tax-inclusive and pre-discount: the shipped field.
+    assertMoney("228.00", ra.revenue(), "A revenue");
+    assertMoney("114.00", rb.revenue(), "B revenue");
+    // net sales: ex-tax, minus the discount prorated by subtotal share (200/300 → 20, 100/300 →
+    // 10).
+    assertMoney("180.00", ra.costedNetSales(), "A net sales");
+    assertMoney("90.00", rb.costedNetSales(), "B net sales");
+    assertMoney("120.00", ra.cost(), "A cost");
+    assertMoney("60.00", ra.grossProfit(), "A profit");
+    assertMoney("40.00", rb.cost(), "B cost");
+    assertMoney("50.00", rb.grossProfit(), "B profit");
+
+    // And the window total is the same arithmetic one grain up.
+    ProfitTotals t = reports.profit(org, FROM, TO).totals();
+    assertEquals(3, t.quantity());
+    assertEquals(3, t.costedQuantity());
+    assertMoney("270.00", t.costedNetSales(), "Σ net sales");
+    assertMoney("160.00", t.cost(), "Σ cost");
+    assertMoney("110.00", t.grossProfit(), "Σ profit");
+  }
+
+  @Test
+  void topProducts_byProfit_ordersDescWithUncostedLast_andIs400OnUnknownBy() {
+    UUID org = createOrg("acme");
+    UUID low = product(org, "Low", "10.00", "9.00"); // profit 1 × 10 = 10
+    UUID high = product(org, "High", "10.00", "2.00"); // profit 8 × 5 = 40
+    UUID none = product(org, "None", "10.00", null); // uncosted → last
+    UUID sale = order(org, OrderStatus.PAID, "160.00", "0.00", "160.00", D1);
+    costedLine(sale, low, 10, "10.00", "0", "9.00");
+    costedLine(sale, high, 5, "10.00", "0", "2.00");
+    costedLine(sale, none, 1, "10.00", "0", null);
+
+    var report = reports.topProducts(org, FROM, TO, "profit", null);
+    assertEquals("profit", report.by());
+    assertEquals(
+        List.of(high, low, none), report.items().stream().map(TopProduct::productId).toList());
+    // Revenue order is different (Low's 100 beats High's 50), so the sort really keyed on profit.
+    assertEquals(
+        List.of(low, high, none),
+        reports.topProducts(org, FROM, TO, "revenue", null).items().stream()
+            .map(TopProduct::productId)
+            .toList());
+    assertThrows(
+        ValidationException.class, () -> reports.topProducts(org, FROM, TO, "margin", null));
+  }
+
+  @Test
+  void profit_totalEqualsSumOfRows_excludesNonSales_emptyWindowIsZerosAndNulls() {
+    UUID org = createOrg("acme");
+    UUID a = product(org, "A", "20.00", "12.00");
+    UUID b = product(org, "B", "30.00", "10.00");
+    UUID c = product(org, "C", "5.00", null);
+    UUID s1 = order(org, OrderStatus.CLOSED, "100.00", "10.00", "90.00", D1);
+    costedLine(s1, a, 5, "20.00", "0", "12.00");
+    UUID s2 = order(org, OrderStatus.FULFILLED, "95.00", "0.00", "95.00", D2);
+    costedLine(s2, b, 3, "30.00", "0", "10.00");
+    costedLine(s2, c, 1, "5.00", "0", null);
+    // Never counted: not money-committed.
+    UUID pending = order(org, OrderStatus.PENDING_PAYMENT, "999.00", "0.00", "999.00", D2);
+    costedLine(pending, a, 99, "20.00", "0", "12.00");
+    UUID cancelled = order(org, OrderStatus.CANCELLED, "999.00", "0.00", "999.00", D2);
+    costedLine(cancelled, b, 99, "30.00", "0", "10.00");
+
+    ProfitTotals t = reports.profit(org, FROM, TO).totals();
+    List<TopProduct> rows = reports.topProducts(org, FROM, TO, "revenue", "50").items();
+    assertEquals(rows.stream().mapToLong(TopProduct::quantity).sum(), t.quantity());
+    assertEquals(rows.stream().mapToLong(TopProduct::costedQuantity).sum(), t.costedQuantity());
+    assertEquals(0, sum(rows, TopProduct::costedNetSales).compareTo(t.costedNetSales()));
+    assertEquals(0, sum(rows, TopProduct::cost).compareTo(t.cost()));
+    assertEquals(0, sum(rows, TopProduct::grossProfit).compareTo(t.grossProfit()));
+    // The numbers themselves: A net 100−10=90, cost 60 → 30; B net 90, cost 30 → 60.
+    assertEquals(9, t.quantity());
+    assertEquals(8, t.costedQuantity());
+    assertMoney("180.00", t.costedNetSales(), "Σ costed net sales");
+    assertMoney("90.00", t.cost(), "Σ cost");
+    assertMoney("90.00", t.grossProfit(), "Σ profit");
+
+    ProfitTotals empty =
+        reports.profit(org, "2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z").totals();
+    assertEquals(0, empty.quantity());
+    assertEquals(0, empty.costedQuantity());
+    assertNull(empty.costedNetSales());
+    assertNull(empty.cost());
+    assertNull(empty.grossProfit());
+  }
+
+  private static BigDecimal sum(
+      List<TopProduct> rows, java.util.function.Function<TopProduct, BigDecimal> f) {
+    return rows.stream().map(f).filter(x -> x != null).reduce(BigDecimal.ZERO, BigDecimal::add);
+  }
+
+  // org isolation
 
   @Test
   void reports_areOrgScoped() {
@@ -306,7 +487,7 @@ class ReportReadsIT {
     assertEquals(0, new BigDecimal("30.00").compareTo(val.valuation().retailValue()));
   }
 
-  // ── seed helpers ─────────────────────────────────────────────────────────────
+  // seed helpers
 
   private UUID createOrg(String slug) {
     UUID id = UUID.randomUUID();
@@ -369,6 +550,61 @@ class ReportReadsIT {
         .set(SALES_ORDER_LINE.LINE_SUBTOTAL, total)
         .set(SALES_ORDER_LINE.LINE_TOTAL, total)
         .execute();
+  }
+
+  private UUID product(UUID org, String name, String basePrice, String costPrice) {
+    UUID id = product(org, name, basePrice);
+    dsl.update(PRODUCT)
+        .set(PRODUCT.COST_PRICE, costPrice == null ? null : new BigDecimal(costPrice))
+        .where(PRODUCT.ID.eq(id))
+        .execute();
+    return id;
+  }
+
+  /** An order whose goods subtotal and order-level discount are set — what proration reads. */
+  private UUID order(
+      UUID org,
+      OrderStatus status,
+      String subtotal,
+      String discountTotal,
+      String grandTotal,
+      OffsetDateTime placedAt) {
+    UUID id = order(org, OrderChannel.IN_STORE, status, grandTotal, placedAt);
+    dsl.update(SALES_ORDER)
+        .set(SALES_ORDER.SUBTOTAL, new BigDecimal(subtotal))
+        .set(SALES_ORDER.DISCOUNT_TOTAL, new BigDecimal(discountTotal))
+        .where(SALES_ORDER.ID.eq(id))
+        .execute();
+    return id;
+  }
+
+  /**
+   * A line with a real price/tax split and an optional cost snapshot — the V92 shape. {@code
+   * unitCost == null} models a sale placed before the product was costed.
+   */
+  private void costedLine(
+      UUID orderId, UUID productId, int qty, String unitPrice, String taxRate, String unitCost) {
+    BigDecimal price = new BigDecimal(unitPrice);
+    BigDecimal subtotal = price.multiply(BigDecimal.valueOf(qty)).setScale(2);
+    BigDecimal tax = subtotal.multiply(new BigDecimal(taxRate)).setScale(2, RoundingMode.HALF_EVEN);
+    dsl.insertInto(SALES_ORDER_LINE)
+        .set(SALES_ORDER_LINE.ID, UUID.randomUUID())
+        .set(SALES_ORDER_LINE.SALES_ORDER_ID, orderId)
+        .set(SALES_ORDER_LINE.PRODUCT_ID, productId)
+        .set(SALES_ORDER_LINE.DESCRIPTION, "line")
+        .set(SALES_ORDER_LINE.QUANTITY, qty)
+        .set(SALES_ORDER_LINE.UNIT_PRICE, price)
+        .set(SALES_ORDER_LINE.UNIT_COST, unitCost == null ? null : new BigDecimal(unitCost))
+        .set(SALES_ORDER_LINE.TAX_RATE, new BigDecimal(taxRate))
+        .set(SALES_ORDER_LINE.LINE_SUBTOTAL, subtotal)
+        .set(SALES_ORDER_LINE.LINE_TAX, tax)
+        .set(SALES_ORDER_LINE.LINE_TOTAL, subtotal.add(tax))
+        .execute();
+  }
+
+  private static void assertMoney(String expected, BigDecimal actual, String what) {
+    assertNotNull(actual, what + " must be present");
+    assertEquals(0, new BigDecimal(expected).compareTo(actual), what + " = " + actual);
   }
 
   /** Every invoice needs its own fulfillment (fulfillment_id is UNIQUE NOT NULL). */
@@ -444,7 +680,7 @@ class ReportReadsIT {
         .execute();
   }
 
-  // ── assertion helpers ──────────────────────────────────────────────────────
+  // assertion helpers
 
   private static void assertPoint(
       RevenuePoint p, OffsetDateTime period, String invoiced, String collected, String refunded) {

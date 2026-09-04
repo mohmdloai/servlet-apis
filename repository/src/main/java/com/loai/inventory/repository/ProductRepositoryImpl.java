@@ -144,6 +144,7 @@ public class ProductRepositoryImpl implements ProductRepository {
             .set(PRODUCT.NAME, product.getName())
             .set(PRODUCT.DESCRIPTION, product.getDescription())
             .set(PRODUCT.BASE_PRICE, product.getBasePrice())
+            .set(PRODUCT.COST_PRICE, product.getCostPrice())
             .set(PRODUCT.SKU, product.getSku())
             .set(PRODUCT.BARCODE, product.getBarcode())
             .returning()
@@ -168,6 +169,7 @@ public class ProductRepositoryImpl implements ProductRepository {
             .set(PRODUCT.NAME, product.getName())
             .set(PRODUCT.DESCRIPTION, product.getDescription())
             .set(PRODUCT.BASE_PRICE, product.getBasePrice())
+            .set(PRODUCT.COST_PRICE, product.getCostPrice())
             .set(PRODUCT.SKU, product.getSku())
             .set(PRODUCT.BARCODE, product.getBarcode())
             .set(PRODUCT.UPDATED_AT, OffsetDateTime.now())
@@ -194,15 +196,18 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   private Product toProduct(ProductRecord r) {
-    return new Product(
-        r.getId(),
-        r.getOrgId(),
-        r.getName(),
-        r.getDescription(),
-        r.getBasePrice(),
-        r.getSku(),
-        r.getBarcode(),
-        r.getCreatedAt(),
-        r.getUpdatedAt());
+    Product p =
+        new Product(
+            r.getId(),
+            r.getOrgId(),
+            r.getName(),
+            r.getDescription(),
+            r.getBasePrice(),
+            r.getSku(),
+            r.getBarcode(),
+            r.getCreatedAt(),
+            r.getUpdatedAt());
+    p.setCostPrice(r.getCostPrice());
+    return p;
   }
 }

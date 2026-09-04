@@ -12,6 +12,13 @@ public class ProductResponse {
   private String name;
   private String description;
   private BigDecimal basePrice;
+
+  /**
+   * What a unit cost the merchant (V92). Written only when the caller has manager authority AND the
+   * product is costed — below MANAGER the key is absent, never {@code null} or {@code 0}.
+   */
+  private BigDecimal costPrice;
+
   private String sku;
   private String barcode;
   private OffsetDateTime createdAt;
@@ -19,13 +26,25 @@ public class ProductResponse {
 
   private ProductResponse() {}
 
+  /** The pre-V92 shape: no cost crosses. Use this wherever the caller's authority is unknown. */
   public static ProductResponse from(Product p) {
+    return from(p, false);
+  }
+
+  /**
+   * @param costVisible the caller's {@code AuthzHelper.hasManagerAuthority} decision, made once per
+   *     request by the handler. Cost is MANAGER-plane data (stories/product_cost_and_margin.md): a
+   *     cashier's product list must not carry the shop's markups. There is deliberately no overload
+   *     that guesses.
+   */
+  public static ProductResponse from(Product p, boolean costVisible) {
     ProductResponse r = new ProductResponse();
     r.id = p.getId();
     r.orgId = p.getOrgId();
     r.name = p.getName();
     r.description = p.getDescription();
     r.basePrice = p.getBasePrice();
+    r.costPrice = costVisible ? p.getCostPrice() : null;
     r.sku = p.getSku();
     r.barcode = p.getBarcode();
     r.createdAt = p.getCreatedAt();
@@ -51,6 +70,10 @@ public class ProductResponse {
 
   public BigDecimal getBasePrice() {
     return basePrice;
+  }
+
+  public BigDecimal getCostPrice() {
+    return costPrice;
   }
 
   public String getSku() {

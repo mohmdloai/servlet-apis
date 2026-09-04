@@ -5,12 +5,15 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.ArAgingReportResponse;
 import com.loai.inventory.api.dto.InventoryValuationResponse;
+import com.loai.inventory.api.dto.ProfitReportResponse;
 import com.loai.inventory.api.dto.RevenueReportResponse;
 import com.loai.inventory.api.dto.SalesReportResponse;
 import com.loai.inventory.api.dto.TopProductsReportResponse;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
+import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.domain.model.OrgRole;
+import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.ReportService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -22,13 +25,17 @@ import org.slf4j.LoggerFactory;
 /**
  * Handles {@code GET /api/orgs/{orgId}/reports/*} — the read-only dashboard aggregates ({@code
  * stories/reporting_reads.md}): {@code revenue}, {@code sales}, {@code top-products}, {@code
- * ar-aging}, {@code inventory-valuation}.
+ * ar-aging}, {@code inventory-valuation}, and since V92 {@code profit}.
  *
  * <p><b>VIEWER+</b>: every figure a VIEWER could already compute by paging the money/inventory
- * lists, so gating higher would be theater. {@code requireOrgAccess} enforces membership +
- * suspension (platform-ADMIN bypass preserved). GET only — any mutating verb on any {@code
- * /reports/*} path is 405 (append-only, like {@code /api/admin/audit}). An unknown report name is a
- * 404. All 400s (bad window/bucket/channel/by/limit/buckets) come from {@link ReportService}.
+ * lists, so gating higher would be theater. <b>The exception is cost</b>
+ * (stories/product_cost_and_margin.md): a cashier cannot page the shop's markups from anywhere, so
+ * {@code /profit}, {@code ?by=profit} and every cost-derived field on the other reads need manager
+ * authority — the read is refused (403) or the field omitted, never zeroed. {@code
+ * requireOrgAccess} enforces membership + suspension (platform-ADMIN bypass preserved). GET only —
+ * any mutating verb on any {@code /reports/*} path is 405 (append-only, like {@code
+ * /api/admin/audit}). An unknown report name is a 404. All 400s (bad
+ * window/bucket/channel/by/limit/buckets) come from {@link ReportService}.
  */
 public class ReportsHandler implements OrgResourceHandler {
 
@@ -66,7 +73,13 @@ public class ReportsHandler implements OrgResourceHandler {
         writeError(resp, 405, "Method not allowed");
         return;
       }
-      AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+      SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+      // Cost and everything derived from it is MANAGER-plane data
+      // (stories/product_cost_and_margin.md): decided once here. The two cost-only asks — the
+      // whole /profit read and ?by=profit — are refused with a 403 before any query runs; on the
+      // other two reads the repository computes the cost figures regardless and this flag decides
+      // whether the mapper writes them.
+      boolean costVisible = AuthzHelper.hasManagerAuthority(sc, orgId);
 
       switch (report) {
         case "revenue" ->
@@ -90,17 +103,32 @@ public class ReportsHandler implements OrgResourceHandler {
                         req.getParameter("to"),
                         req.getParameter("bucket"),
                         req.getParameter("channel"))));
-        case "top-products" ->
-            writeJson(
-                resp,
-                200,
-                TopProductsReportResponse.from(
-                    service.topProducts(
-                        orgId,
-                        req.getParameter("from"),
-                        req.getParameter("to"),
-                        req.getParameter("by"),
-                        req.getParameter("limit"))));
+        case "top-products" -> {
+          if (ReportService.isProfitSort(req.getParameter("by")) && !costVisible) {
+            throw new AuthorizationException("by=profit needs MANAGER");
+          }
+          writeJson(
+              resp,
+              200,
+              TopProductsReportResponse.from(
+                  service.topProducts(
+                      orgId,
+                      req.getParameter("from"),
+                      req.getParameter("to"),
+                      req.getParameter("by"),
+                      req.getParameter("limit")),
+                  costVisible));
+        }
+        case "profit" -> {
+          if (!costVisible) {
+            throw new AuthorizationException("Cost figures need MANAGER");
+          }
+          writeJson(
+              resp,
+              200,
+              ProfitReportResponse.from(
+                  service.profit(orgId, req.getParameter("from"), req.getParameter("to"))));
+        }
         case "ar-aging" ->
             writeJson(
                 resp,
@@ -108,7 +136,9 @@ public class ReportsHandler implements OrgResourceHandler {
                 ArAgingReportResponse.from(service.arAging(orgId, req.getParameter("buckets"))));
         case "inventory-valuation" ->
             writeJson(
-                resp, 200, InventoryValuationResponse.from(service.inventoryValuation(orgId)));
+                resp,
+                200,
+                InventoryValuationResponse.from(service.inventoryValuation(orgId), costVisible));
         default -> writeError(resp, 404, "Unknown report: " + report);
       }
     } catch (AppException e) {
@@ -121,7 +151,7 @@ public class ReportsHandler implements OrgResourceHandler {
 
   private static boolean isKnownReport(String report) {
     return switch (report) {
-      case "revenue", "sales", "top-products", "ar-aging", "inventory-valuation" -> true;
+      case "revenue", "sales", "top-products", "ar-aging", "inventory-valuation", "profit" -> true;
       default -> false;
     };
   }

@@ -9,13 +9,16 @@ import com.loai.inventory.api.dto.ProductResponse;
 import com.loai.inventory.api.dto.UpdateProductRequest;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
+import com.loai.inventory.common.exception.AuthorizationException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.Product;
+import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.ProductService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -67,7 +70,9 @@ public class ProductHandler implements OrgResourceHandler {
 
   private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID productId)
       throws IOException {
-    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    // Cost is MANAGER-plane data: decided once here, handed to every mapper below.
+    boolean costVisible = AuthzHelper.hasManagerAuthority(sc, orgId);
 
     if (productId == null) {
       // ?barcode= — the scanner's exact-lookup seam (FLOW.md §3 step 1). Mirrors the
@@ -76,7 +81,7 @@ public class ProductHandler implements OrgResourceHandler {
       String barcode = req.getParameter("barcode");
       if (barcode != null && !barcode.isBlank()) {
         Product product = productService.getByBarcode(orgId, barcode);
-        writeJson(resp, 200, ProductResponse.from(product));
+        writeJson(resp, 200, ProductResponse.from(product, costVisible));
         return;
       }
       // ?q= — optional case-insensitive name/SKU search (the POS "search to add" picker). Absent/
@@ -86,22 +91,24 @@ public class ProductHandler implements OrgResourceHandler {
       int size = intParam(req, "size", 10);
       List<Product> products = productService.getAll(orgId, q, page, size);
       long total = productService.count(orgId, q);
-      List<ProductResponse> data = products.stream().map(ProductResponse::from).toList();
+      List<ProductResponse> data =
+          products.stream().map(p -> ProductResponse.from(p, costVisible)).toList();
       writeJson(resp, 200, new PageResponse<>(data, total, page, size));
     } else {
       Product product = productService.getById(orgId, productId);
-      writeJson(resp, 200, ProductResponse.from(product));
+      writeJson(resp, 200, ProductResponse.from(product, costVisible));
     }
   }
 
   private void doPost(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID productId)
       throws IOException {
-    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
     if (productId != null) {
       throw new ValidationException("POST does not accept a product id in the path");
     }
 
     CreateProductRequest body = readBody(req, CreateProductRequest.class);
+    boolean costVisible = AuthzHelper.hasManagerAuthority(sc, orgId);
     Product created =
         productService.create(
             orgId,
@@ -109,18 +116,20 @@ public class ProductHandler implements OrgResourceHandler {
             body.getDescription(),
             body.getBasePrice(),
             body.getSku(),
-            body.getBarcode());
-    writeJson(resp, 201, ProductResponse.from(created));
+            body.getBarcode(),
+            costChange(body.isCostPricePresent(), body.getCostPrice(), costVisible));
+    writeJson(resp, 201, ProductResponse.from(created, costVisible));
   }
 
   private void doPut(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID productId)
       throws IOException {
-    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
     if (productId == null) {
       throw new ValidationException("Product id is required for update");
     }
 
     UpdateProductRequest body = readBody(req, UpdateProductRequest.class);
+    boolean costVisible = AuthzHelper.hasManagerAuthority(sc, orgId);
     Product updated =
         productService.update(
             orgId,
@@ -129,8 +138,9 @@ public class ProductHandler implements OrgResourceHandler {
             body.getDescription(),
             body.getBasePrice(),
             body.getSku(),
-            body.getBarcode());
-    writeJson(resp, 200, ProductResponse.from(updated));
+            body.getBarcode(),
+            costChange(body.isCostPricePresent(), body.getCostPrice(), costVisible));
+    writeJson(resp, 200, ProductResponse.from(updated, costVisible));
   }
 
   private void doDelete(
@@ -142,6 +152,22 @@ public class ProductHandler implements OrgResourceHandler {
     }
     productService.delete(orgId, productId);
     resp.setStatus(204);
+  }
+
+  /**
+   * Map the wire's tri-state {@code cost_price} to the service's instruction, refusing it from a
+   * caller below MANAGER <em>before</em> anything is written. Refused loudly (403, naming the
+   * field) rather than dropped, so a client that shows the field to the wrong role finds out.
+   */
+  static ProductService.CostPriceChange costChange(
+      boolean present, BigDecimal value, boolean costVisible) {
+    if (!present) {
+      return ProductService.CostPriceChange.unchanged();
+    }
+    if (!costVisible) {
+      throw new AuthorizationException("cost_price needs MANAGER");
+    }
+    return ProductService.CostPriceChange.to(value);
   }
 
   private UUID parseId(String remainingPath) {
