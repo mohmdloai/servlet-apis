@@ -24,6 +24,9 @@ public class InventoryOverviewRow {
   /** MANAGER-plane (V92): written only with manager authority and a costed product, else absent. */
   private BigDecimal costPrice;
 
+  /** The product's reorder point (V94); absent when it has none. */
+  private Integer reorderPoint;
+
   private boolean tracked;
   private Integer stockQty;
   private Integer reservedQty;
@@ -61,6 +64,7 @@ public class InventoryOverviewRow {
     r.sku = row.sku();
     r.basePrice = row.basePrice();
     r.costPrice = costVisible ? row.costPrice() : null;
+    r.reorderPoint = row.reorderPoint();
     r.tracked = row.tracked();
     r.stockQty = row.stockQty();
     r.reservedQty = row.reservedQty();
@@ -85,6 +89,10 @@ public class InventoryOverviewRow {
 
   public BigDecimal getBasePrice() {
     return basePrice;
+  }
+
+  public Integer getReorderPoint() {
+    return reorderPoint;
   }
 
   public BigDecimal getCostPrice() {

@@ -90,6 +90,28 @@ public class ProductService {
     }
   }
 
+  /**
+   * The reorder point on the wire (V94). The api layer always passes it as present — the field is
+   * full-replace like {@code barcode} — while the pre-V94 service overloads pass {@code
+   * unchanged()} so a caller that never knew the column cannot clear it.
+   */
+  public record ReorderPointChange(boolean present, Integer value) {
+    public static ReorderPointChange unchanged() {
+      return new ReorderPointChange(false, null);
+    }
+
+    /** Present on the wire: {@code null} clears, a value sets. */
+    public static ReorderPointChange to(Integer value) {
+      return new ReorderPointChange(true, value);
+    }
+  }
+
+  private static void validateReorderPoint(Integer reorderPoint) {
+    if (reorderPoint != null && reorderPoint < 0) {
+      throw new ValidationException("reorder_point must be >= 0");
+    }
+  }
+
   /** Create without touching cost — the pre-V92 shape, kept for existing callers and tests. */
   public Product create(
       UUID orgId,
@@ -101,6 +123,7 @@ public class ProductService {
     return create(orgId, name, description, basePrice, sku, barcode, CostPriceChange.unchanged());
   }
 
+  /** Create without a reorder point — the pre-V94 shape, kept for existing callers and tests. */
   public Product create(
       UUID orgId,
       String name,
@@ -109,9 +132,26 @@ public class ProductService {
       String sku,
       String barcode,
       CostPriceChange costPrice) {
+    return create(orgId, name, description, basePrice, sku, barcode, costPrice, null);
+  }
+
+  /**
+   * @param reorderPoint V94 ({@code stories/reorder_point.md}): notify staff when available stock
+   *     reaches or falls below it; {@code null} = no rule; negative → 400.
+   */
+  public Product create(
+      UUID orgId,
+      String name,
+      String description,
+      BigDecimal basePrice,
+      String sku,
+      String barcode,
+      CostPriceChange costPrice,
+      Integer reorderPoint) {
     String normalizedName = Text.normalizeText(name);
     String normalizedDescription = Text.normalizeText(description);
     validateProductFields(normalizedName, basePrice, sku);
+    validateReorderPoint(reorderPoint);
     BigDecimal normalizedCost = normalizeCostPrice(costPrice);
     String normalizedBarcode = normalizeBarcode(barcode);
 
@@ -133,6 +173,7 @@ public class ProductService {
           product.setCostPrice(costPrice.present() ? normalizedCost : null);
           product.setSku(sku);
           product.setBarcode(normalizedBarcode);
+          product.setReorderPoint(reorderPoint);
 
           Product saved = repo.insert(product);
           log.info("Created product id={} orgId={} sku={}", saved.getId(), orgId, saved.getSku());
@@ -153,6 +194,7 @@ public class ProductService {
         orgId, id, name, description, basePrice, sku, barcode, CostPriceChange.unchanged());
   }
 
+  /** Update without touching the reorder point — the pre-V94 shape, kept for existing callers. */
   public Product update(
       UUID orgId,
       UUID id,
@@ -162,9 +204,38 @@ public class ProductService {
       String sku,
       String barcode,
       CostPriceChange costPrice) {
+    return update(
+        orgId,
+        id,
+        name,
+        description,
+        basePrice,
+        sku,
+        barcode,
+        costPrice,
+        ReorderPointChange.unchanged());
+  }
+
+  /**
+   * Full update. {@code reorderPoint} is full-replace like {@code barcode} when present on the wire
+   * ({@code null} clears); the pre-V94 overload leaves it untouched.
+   */
+  public Product update(
+      UUID orgId,
+      UUID id,
+      String name,
+      String description,
+      BigDecimal basePrice,
+      String sku,
+      String barcode,
+      CostPriceChange costPrice,
+      ReorderPointChange reorderPoint) {
     String normalizedName = Text.normalizeText(name);
     String normalizedDescription = Text.normalizeText(description);
     validateProductFields(normalizedName, basePrice, sku);
+    if (reorderPoint.present()) {
+      validateReorderPoint(reorderPoint.value());
+    }
     BigDecimal normalizedCost = normalizeCostPrice(costPrice);
     String normalizedBarcode = normalizeBarcode(barcode);
 
@@ -190,6 +261,9 @@ public class ProductService {
           }
           existing.setSku(sku);
           existing.setBarcode(normalizedBarcode);
+          if (reorderPoint.present()) {
+            existing.setReorderPoint(reorderPoint.value());
+          }
 
           Product updated = repo.update(existing);
           log.info("Updated product id={} orgId={}", id, orgId);

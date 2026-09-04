@@ -272,6 +272,31 @@ final class NotificationTemplates {
                     + " is still outstanding — your items stay reserved until it's paid.",
                 ctaCompletePayment(locale));
       }
+      case LOW_STOCK -> {
+        // Staff-facing (in-app only today); the CTA label rides along for the day a staff email
+        // channel exists, so the template is complete rather than half-rendered.
+        String name = str(payload, "name");
+        String sku = str(payload, "sku");
+        String available = str(payload, "available");
+        String point = str(payload, "reorder_point");
+        yield ar
+            ? new Rendered(
+                "مخزون منخفض: " + name,
+                "تبقّى "
+                    + available
+                    + " من "
+                    + name
+                    + " ("
+                    + sku
+                    + ") — حد إعادة الطلب "
+                    + point
+                    + ".",
+                isArabic(locale) ? "عرض المخزون" : "View stock")
+            : new Rendered(
+                "Low stock: " + name,
+                available + " left of " + name + " (" + sku + ") — reorder point " + point + ".",
+                "View stock");
+      }
     };
   }
 

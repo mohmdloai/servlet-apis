@@ -103,7 +103,7 @@ class ProductHandlerCostTest {
     assertEquals(403, resp.status);
     assertTrue(resp.text().contains("cost_price"), "the refusal names the field: " + resp.text());
     verify(service, never())
-        .update(any(), any(), any(), any(), any(), any(), any(), any(CostPriceChange.class));
+        .update(any(), any(), any(), any(), any(), any(), any(), any(CostPriceChange.class), any());
   }
 
   @Test
@@ -113,7 +113,7 @@ class ProductHandlerCostTest {
     handler(service).handle("POST", req(member(OrgRole.STAFF), PUT_WITH_COST), resp.mock, ORG, "");
     assertEquals(403, resp.status);
     verify(service, never())
-        .create(any(), any(), any(), any(), any(), any(), any(CostPriceChange.class));
+        .create(any(), any(), any(), any(), any(), any(), any(CostPriceChange.class), any());
   }
 
   @Test
@@ -121,14 +121,23 @@ class ProductHandlerCostTest {
     ProductService service = Mockito.mock(ProductService.class);
     Mockito.when(
             service.update(
-                eq(ORG), eq(ID), any(), any(), any(), any(), any(), any(CostPriceChange.class)))
+                eq(ORG),
+                eq(ID),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(CostPriceChange.class),
+                any()))
         .thenReturn(costed(new BigDecimal("30.00")));
     Resp resp = new Resp();
     handler(service)
         .handle("PUT", req(member(OrgRole.STAFF), PUT_WITHOUT_COST), resp.mock, ORG, "/" + ID);
     assertEquals(200, resp.status);
     ArgumentCaptor<CostPriceChange> change = ArgumentCaptor.forClass(CostPriceChange.class);
-    verify(service).update(eq(ORG), eq(ID), any(), any(), any(), any(), any(), change.capture());
+    verify(service)
+        .update(eq(ORG), eq(ID), any(), any(), any(), any(), any(), change.capture(), any());
     assertFalse(change.getValue().present(), "absent key → unchanged");
     // And the staff echo carries no cost even though the stored product is costed.
     assertFalse(resp.json().has("cost_price"));
@@ -139,7 +148,15 @@ class ProductHandlerCostTest {
     ProductService service = Mockito.mock(ProductService.class);
     Mockito.when(
             service.update(
-                eq(ORG), eq(ID), any(), any(), any(), any(), any(), any(CostPriceChange.class)))
+                eq(ORG),
+                eq(ID),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(CostPriceChange.class),
+                any()))
         .thenReturn(costed(new BigDecimal("30.00")));
     ArgumentCaptor<CostPriceChange> change = ArgumentCaptor.forClass(CostPriceChange.class);
 
@@ -154,7 +171,7 @@ class ProductHandlerCostTest {
     assertEquals(200, clear.status);
 
     verify(service, Mockito.times(2))
-        .update(eq(ORG), eq(ID), any(), any(), any(), any(), any(), change.capture());
+        .update(eq(ORG), eq(ID), any(), any(), any(), any(), any(), change.capture(), any());
     List<CostPriceChange> changes = change.getAllValues();
     assertTrue(changes.get(0).present());
     assertEquals(new BigDecimal("30"), changes.get(0).value());

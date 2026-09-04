@@ -117,7 +117,8 @@ public class ProductHandler implements OrgResourceHandler {
             body.getBasePrice(),
             body.getSku(),
             body.getBarcode(),
-            costChange(body.isCostPricePresent(), body.getCostPrice(), costVisible));
+            costChange(body.isCostPricePresent(), body.getCostPrice(), costVisible),
+            body.getReorderPoint());
     writeJson(resp, 201, ProductResponse.from(created, costVisible));
   }
 
@@ -139,7 +140,9 @@ public class ProductHandler implements OrgResourceHandler {
             body.getBasePrice(),
             body.getSku(),
             body.getBarcode(),
-            costChange(body.isCostPricePresent(), body.getCostPrice(), costVisible));
+            costChange(body.isCostPricePresent(), body.getCostPrice(), costVisible),
+            // Full-replace like barcode: absent or null on the wire clears it.
+            ProductService.ReorderPointChange.to(body.getReorderPoint()));
     writeJson(resp, 200, ProductResponse.from(updated, costVisible));
   }
 

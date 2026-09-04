@@ -176,6 +176,13 @@ class NotificationTemplatesTest {
               "note", "nothing arrived",
               "held_until", "2026-07-14T09:12Z");
       case ORDER_PLACED, REVIEW_REQUESTED -> Map.of("order_number", "SO-1");
+      case LOW_STOCK ->
+          Map.of(
+              "product_id", "11111111-1111-4111-8111-111111111111",
+              "name", "Notebook",
+              "sku", "NB-A5",
+              "available", 4,
+              "reorder_point", 5);
     };
   }
 

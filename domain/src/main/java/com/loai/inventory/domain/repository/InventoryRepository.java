@@ -35,6 +35,7 @@ public interface InventoryRepository {
       String sku,
       BigDecimal basePrice,
       BigDecimal costPrice,
+      Integer reorderPoint,
       boolean tracked,
       Integer stockQty,
       Integer reservedQty,
@@ -44,7 +45,8 @@ public interface InventoryRepository {
 
   /**
    * One page of the stock overview — every product in {@code orgId} LEFT JOINed to inventory,
-   * ordered {@code name ASC, product_id ASC} (catalog order — not a queue). {@code q} is a
+   * ordered {@code name ASC, product_id ASC} (catalog order — not a queue), except {@code REORDER},
+   * the replenishment worklist, which is ordered deepest below its point first. {@code q} is a
    * case-insensitive substring on name OR sku (blank ⇒ no filter). {@code stock} narrows by
    * trackedness / availability ({@code LOW} uses {@code lowLte} as the bound, defaulted upstream).
    * {@code lowLte} is ignored for every filter but {@code LOW}.

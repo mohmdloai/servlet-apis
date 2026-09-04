@@ -36,6 +36,16 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   @Override
+  public List<Product> findByIds(UUID orgId, Collection<UUID> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    return dsl.selectFrom(PRODUCT)
+        .where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.ID.in(ids)))
+        .fetch(this::toProduct);
+  }
+
+  @Override
   public Optional<Product> findByBarcode(UUID orgId, String barcode) {
     return dsl.selectFrom(PRODUCT)
         .where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.BARCODE.eq(barcode)))
@@ -145,6 +155,7 @@ public class ProductRepositoryImpl implements ProductRepository {
             .set(PRODUCT.DESCRIPTION, product.getDescription())
             .set(PRODUCT.BASE_PRICE, product.getBasePrice())
             .set(PRODUCT.COST_PRICE, product.getCostPrice())
+            .set(PRODUCT.REORDER_POINT, product.getReorderPoint())
             .set(PRODUCT.SKU, product.getSku())
             .set(PRODUCT.BARCODE, product.getBarcode())
             .returning()
@@ -170,6 +181,7 @@ public class ProductRepositoryImpl implements ProductRepository {
             .set(PRODUCT.DESCRIPTION, product.getDescription())
             .set(PRODUCT.BASE_PRICE, product.getBasePrice())
             .set(PRODUCT.COST_PRICE, product.getCostPrice())
+            .set(PRODUCT.REORDER_POINT, product.getReorderPoint())
             .set(PRODUCT.SKU, product.getSku())
             .set(PRODUCT.BARCODE, product.getBarcode())
             .set(PRODUCT.UPDATED_AT, OffsetDateTime.now())
@@ -208,6 +220,7 @@ public class ProductRepositoryImpl implements ProductRepository {
             r.getCreatedAt(),
             r.getUpdatedAt());
     p.setCostPrice(r.getCostPrice());
+    p.setReorderPoint(r.getReorderPoint());
     return p;
   }
 }

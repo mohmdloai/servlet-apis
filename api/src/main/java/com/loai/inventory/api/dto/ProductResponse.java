@@ -19,6 +19,9 @@ public class ProductResponse {
    */
   private BigDecimal costPrice;
 
+  /** Reorder point (V94, stories/reorder_point.md); absent when the product has none. */
+  private Integer reorderPoint;
+
   private String sku;
   private String barcode;
   private OffsetDateTime createdAt;
@@ -45,6 +48,7 @@ public class ProductResponse {
     r.description = p.getDescription();
     r.basePrice = p.getBasePrice();
     r.costPrice = costVisible ? p.getCostPrice() : null;
+    r.reorderPoint = p.getReorderPoint();
     r.sku = p.getSku();
     r.barcode = p.getBarcode();
     r.createdAt = p.getCreatedAt();
@@ -74,6 +78,10 @@ public class ProductResponse {
 
   public BigDecimal getCostPrice() {
     return costPrice;
+  }
+
+  public Integer getReorderPoint() {
+    return reorderPoint;
   }
 
   public String getSku() {
