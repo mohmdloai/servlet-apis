@@ -116,6 +116,7 @@ import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceService;
 import com.loai.inventory.service.ListingCommentService;
 import com.loai.inventory.service.ListingReviewService;
+import com.loai.inventory.service.LowStockNotifier;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.MemberService;
 import com.loai.inventory.service.NotificationService;
@@ -578,6 +579,10 @@ public class AppConfig {
             magicLinkService,
             whatsAppSender,
             emailMaxAttempts);
+    // The reorder-point check the two sale sites run (stories/reorder_point.md): reads the
+    // product, calls the one staff fan-out above — composition, not a second alerting path.
+    LowStockNotifier lowStockNotifier =
+        new LowStockNotifier(productRepositoryFactory, notificationService);
     // Portal auth service — the OTP code is sent SYNCHRONOUSLY through the EmailSender (not the
     // NotificationService pipeline): a login code must not be suppressible by a customer's email
     // opt-out, nor wait on the delivery sweeper. The per-email OTP-send throttle shares the
@@ -648,7 +653,8 @@ public class AppConfig {
         new ReservationService(
             inventoryRepositoryFactory,
             inventoryReservationRepositoryFactory,
-            inventoryLogRepositoryFactory);
+            inventoryLogRepositoryFactory,
+            lowStockNotifier);
     this.orderExpiryService =
         new OrderExpiryService(
             dsl,
@@ -729,7 +735,8 @@ public class AppConfig {
             refundService,
             reservationService,
             notificationService,
-            magicLinkService);
+            magicLinkService,
+            lowStockNotifier);
     this.salesOrderService =
         new SalesOrderService(
             dsl,

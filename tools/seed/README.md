@@ -60,11 +60,11 @@ docker exec inventory_db sh -c \
 # OWNER of three stores + platform ADMIN (the run.sh output names the granted slugs).
 ```
 
-### perfdb schema state: hand-migrated to V93 (2026-09-04)
+### perfdb schema state: hand-migrated to V94 (2026-09-04)
 
-**perfdb's schema and Flyway history are both at V93** (V87–V93 applied 2026-09-04 by the standing
-procedure below, one version at a time; history 93 rows, row-for-row with dev; V93 is the
-`STOCKTAKE` enum value — an `ALTER TYPE … ADD VALUE`, no data touched). Before that: It got there by hand in psql — Flyway is
+**perfdb's schema and Flyway history are both at V94** (V87–V94 applied 2026-09-04 by the standing
+procedure below, one version at a time; history 94 rows, row-for-row with dev; V93 is the
+`STOCKTAKE` enum value, V94 the nullable `product.reorder_point` — no data touched by either). Before that: It got there by hand in psql — Flyway is
 still never pointed at it, and the history-copy recipe above is for a *fresh* reseed only (on an
 already-populated perfdb it PK-collides with the existing rows; see the gotcha below). What was
 applied, and how:

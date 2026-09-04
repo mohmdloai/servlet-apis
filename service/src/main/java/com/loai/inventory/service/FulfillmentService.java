@@ -101,6 +101,7 @@ public final class FulfillmentService {
   private final ReservationService reservationService;
   private final NotificationService notificationService;
   private final MagicLinkService magicLinkService;
+  private final LowStockNotifier lowStockNotifier;
 
   public FulfillmentService(
       DSLContext rootDsl,
@@ -115,6 +116,40 @@ public final class FulfillmentService {
       ReservationService reservationService,
       NotificationService notificationService,
       MagicLinkService magicLinkService) {
+    this(
+        rootDsl,
+        fulfillmentRepoFactory,
+        salesOrderRepoFactory,
+        inventoryRepoFactory,
+        reservationRepoFactory,
+        inventoryLogRepoFactory,
+        paymentRepoFactory,
+        invoiceService,
+        refundService,
+        reservationService,
+        notificationService,
+        magicLinkService,
+        null);
+  }
+
+  /**
+   * @param lowStockNotifier the reorder-point check run after the in-store sale's stock writes
+   *     ({@code stories/reorder_point.md}); {@code null} = no check.
+   */
+  public FulfillmentService(
+      DSLContext rootDsl,
+      FulfillmentRepositoryFactory fulfillmentRepoFactory,
+      SalesOrderRepositoryFactory salesOrderRepoFactory,
+      InventoryRepositoryFactory inventoryRepoFactory,
+      InventoryReservationRepositoryFactory reservationRepoFactory,
+      InventoryLogRepositoryFactory inventoryLogRepoFactory,
+      PaymentRepositoryFactory paymentRepoFactory,
+      InvoiceService invoiceService,
+      RefundService refundService,
+      ReservationService reservationService,
+      NotificationService notificationService,
+      MagicLinkService magicLinkService,
+      LowStockNotifier lowStockNotifier) {
     this.rootDsl = rootDsl;
     this.fulfillmentRepoFactory = fulfillmentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
@@ -127,6 +162,7 @@ public final class FulfillmentService {
     this.reservationService = reservationService;
     this.notificationService = notificationService;
     this.magicLinkService = magicLinkService;
+    this.lowStockNotifier = lowStockNotifier;
   }
 
   /** Which order line to ship; quantity is derived from that line's ACTIVE reservation (v1). */
@@ -1140,6 +1176,7 @@ public final class FulfillmentService {
     }
 
     // -stock only (reserved unchanged): the customer takes the goods now, no reservation existed.
+    List<LowStockNotifier.StockMove> moves = new ArrayList<>(sortedProductIds.size());
     for (UUID pid : sortedProductIds) {
       int qty = demandByProduct.get(pid);
       Inventory current = locked.get(pid); // non-null: shortages was empty
@@ -1154,6 +1191,14 @@ public final class FulfillmentService {
           StockReason.SOLD,
           order.getId(),
           actor);
+      moves.add(
+          new LowStockNotifier.StockMove(
+              pid, current.getAvailableQty(), updated.getAvailableQty()));
+    }
+    // The in-store sale is the other place a sale reduces what can be sold; same txn, same rule
+    // (stories/reorder_point.md). A ship is deliberately NOT a caller — it leaves available as is.
+    if (lowStockNotifier != null) {
+      lowStockNotifier.afterSale(txDsl, orgId, moves);
     }
 
     UUID fulfillmentId = UUID.randomUUID();

@@ -25,6 +25,13 @@ public interface ProductRepository {
   Map<UUID, String> findNamesByIds(UUID orgId, Collection<UUID> ids);
 
   /**
+   * The whole product rows for a set of ids in {@code orgId} — one query, ids outside the org
+   * simply absent. Added for the reorder-point check ({@code LowStockNotifier}), which needs each
+   * sold product's {@code reorder_point}, name and SKU after a sale's stock writes.
+   */
+  List<Product> findByIds(UUID orgId, Collection<UUID> ids);
+
+  /**
    * Paged product list, optionally filtered by a name/SKU search term {@code q} (case-insensitive
    * substring, either field). A {@code null}/blank {@code q} returns the whole org list — the
    * pre-search behaviour. Mirrors the {@code /inventory} overview's {@code q} convention so the POS

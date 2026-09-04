@@ -48,14 +48,29 @@ public final class ReservationService {
   private final InventoryRepositoryFactory inventoryRepoFactory;
   private final InventoryReservationRepositoryFactory reservationRepoFactory;
   private final InventoryLogRepositoryFactory inventoryLogRepoFactory;
+  private final LowStockNotifier lowStockNotifier;
 
+  /** Without the reorder-point check — kept for existing callers and tests. */
   public ReservationService(
       InventoryRepositoryFactory inventoryRepoFactory,
       InventoryReservationRepositoryFactory reservationRepoFactory,
       InventoryLogRepositoryFactory inventoryLogRepoFactory) {
+    this(inventoryRepoFactory, reservationRepoFactory, inventoryLogRepoFactory, null);
+  }
+
+  /**
+   * @param lowStockNotifier the reorder-point check run after a placement's reservations ({@code
+   *     stories/reorder_point.md}); {@code null} = no check (tests that never wire notifications).
+   */
+  public ReservationService(
+      InventoryRepositoryFactory inventoryRepoFactory,
+      InventoryReservationRepositoryFactory reservationRepoFactory,
+      InventoryLogRepositoryFactory inventoryLogRepoFactory,
+      LowStockNotifier lowStockNotifier) {
     this.inventoryRepoFactory = inventoryRepoFactory;
     this.reservationRepoFactory = reservationRepoFactory;
     this.inventoryLogRepoFactory = inventoryLogRepoFactory;
+    this.lowStockNotifier = lowStockNotifier;
   }
 
   /**
@@ -108,6 +123,7 @@ public final class ReservationService {
     }
 
     // All products are sufficient. Apply per-product inventory writes and log rows.
+    List<LowStockNotifier.StockMove> moves = new ArrayList<>(sortedProductIds.size());
     for (UUID pid : sortedProductIds) {
       int totalDelta = demandByProduct.get(pid);
       Inventory current = locked.get(pid); // non-null: shortages was empty
@@ -123,6 +139,14 @@ public final class ReservationService {
           StockReason.RESERVED,
           order.getId(),
           actor);
+      moves.add(
+          new LowStockNotifier.StockMove(
+              pid, current.getAvailableQty(), updated.getAvailableQty()));
+    }
+    // A reservation is the sale reducing what can be sold — the reorder-point check runs here, in
+    // this txn, so a placement that rolls back tells nobody (stories/reorder_point.md).
+    if (lowStockNotifier != null) {
+      lowStockNotifier.afterSale(txDsl, orgId, moves);
     }
 
     // One reservation row per sales_order_line (granular audit / link), regardless of aggregation.

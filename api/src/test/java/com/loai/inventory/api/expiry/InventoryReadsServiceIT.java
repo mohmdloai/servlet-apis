@@ -1,5 +1,6 @@
 package com.loai.inventory.api.expiry;
 
+import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -211,6 +212,73 @@ class InventoryReadsServiceIT extends ExpiryIntegrationTestBase {
     assertThrows(
         NotFoundException.class,
         () -> service().listProductReservations(org, ghost, ReservationStatus.ACTIVE));
+  }
+
+  // stories/reorder_point.md — the replenishment worklist is one more filter value
+
+  @Test
+  void overview_reorder_selectsTrackedRowsAtOrBelowTheirOwnPoint_deepestFirst() {
+    UUID org = createOrg("reorder");
+    UUID fine = createProduct(org, "Fine"); // 10 on hand, point 5 → above
+    UUID atPoint = createProduct(org, "AtPoint"); // 5 on hand, point 5 → in (diff 0)
+    UUID deep = createProduct(org, "Deep"); // 1 on hand, point 8 → in (diff −7)
+    UUID mid = createProduct(org, "Mid"); // 2 on hand, point 5 → in (diff −3)
+    UUID noRule = createProduct(org, "NoRule"); // 0 on hand, no point → out of the list
+    UUID untracked = createProduct(org, "Untracked"); // point 5, no inventory → out
+    UUID reservedHeavy = createProduct(org, "Held"); // 10 on hand, 8 reserved, point 5 → in (2)
+    setReorderPoint(fine, 5);
+    setReorderPoint(atPoint, 5);
+    setReorderPoint(deep, 8);
+    setReorderPoint(mid, 5);
+    setReorderPoint(untracked, 5);
+    setReorderPoint(reservedHeavy, 5);
+    createInventory(org, fine, 10);
+    createInventory(org, atPoint, 5);
+    createInventory(org, deep, 1);
+    createInventory(org, mid, 2);
+    createInventory(org, noRule, 0);
+    createInventory(org, reservedHeavy, 10);
+    // A real hold (reservation rows + reserved_qty), so the ground-truth invariant stays true.
+    seedOrder(
+        org, OrderStatus.PENDING_PAYMENT, minutesAhead(60), List.of(new Line(reservedHeavy, 8)));
+
+    OverviewPage page =
+        service().listOverview(org, null, InventoryStockFilter.REORDER, null, 0, 20);
+
+    // Deepest below its own point first: Deep (−7), Mid and Held (−3, name ASC), AtPoint (0).
+    assertEquals(List.of(deep, reservedHeavy, mid, atPoint), ids(page));
+    assertEquals(
+        4, service().listOverview(org, null, InventoryStockFilter.REORDER, null, 0, 20).total());
+    // Every row carries the point; the compare is on available, not on hand.
+    assertEquals(Integer.valueOf(8), page.rows().get(0).reorderPoint());
+    assertEquals(Integer.valueOf(2), page.rows().get(1).availableQty());
+    // low_lte belongs to LOW and is ignored here; q composes.
+    assertEquals(
+        List.of(deep, reservedHeavy, mid, atPoint),
+        ids(service().listOverview(org, null, InventoryStockFilter.REORDER, 100, 0, 20)));
+    assertEquals(
+        List.of(mid),
+        ids(service().listOverview(org, "mid", InventoryStockFilter.REORDER, null, 0, 20)));
+    // Unfiltered rows carry the point too (null when none), in catalog order.
+    OverviewPage all = service().listOverview(org, null, null, null, 0, 20);
+    assertEquals(
+        Integer.valueOf(5),
+        all.rows().stream()
+            .filter(r -> r.productId().equals(untracked))
+            .findFirst()
+            .get()
+            .reorderPoint());
+    assertEquals(
+        null,
+        all.rows().stream()
+            .filter(r -> r.productId().equals(noRule))
+            .findFirst()
+            .get()
+            .reorderPoint());
+  }
+
+  private void setReorderPoint(UUID productId, int point) {
+    dsl.update(PRODUCT).set(PRODUCT.REORDER_POINT, point).where(PRODUCT.ID.eq(productId)).execute();
   }
 
   private static List<UUID> ids(OverviewPage page) {

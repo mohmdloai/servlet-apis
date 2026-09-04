@@ -63,6 +63,7 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
             PRODUCT.SKU,
             PRODUCT.BASE_PRICE,
             PRODUCT.COST_PRICE,
+            PRODUCT.REORDER_POINT,
             INVENTORY.PRODUCT_ID,
             INVENTORY.STOCK_QTY,
             INVENTORY.RESERVED_QTY,
@@ -73,7 +74,19 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
         .on(INVENTORY.PRODUCT_ID.eq(PRODUCT.ID).and(INVENTORY.ORG_ID.eq(PRODUCT.ORG_ID)))
         .where(overviewConditions(orgId, q, stock, lowLte))
         // Catalog order — this is a list, not a queue; the created_at convention does not apply.
-        .orderBy(PRODUCT.NAME.asc(), PRODUCT.ID.asc())
+        // The one exception is the reorder worklist: deepest below its own point first, so the
+        // empty shelf tops a long list (stories/reorder_point.md).
+        .orderBy(
+            stock == InventoryStockFilter.REORDER
+                ? List.of(
+                    INVENTORY
+                        .STOCK_QTY
+                        .minus(INVENTORY.RESERVED_QTY)
+                        .minus(PRODUCT.REORDER_POINT)
+                        .asc(),
+                    PRODUCT.NAME.asc(),
+                    PRODUCT.ID.asc())
+                : List.of(PRODUCT.NAME.asc(), PRODUCT.ID.asc()))
         .offset(offset)
         .limit(limit)
         .fetch(this::toOverviewRow);
@@ -109,6 +122,11 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
             case LOW ->
                 c.and(INVENTORY.PRODUCT_ID.isNotNull())
                     .and(available.le(lowLte != null ? lowLte : 5));
+            // The product's own rule (V94): a NULL point makes the comparison null → excluded.
+            case REORDER ->
+                c.and(INVENTORY.PRODUCT_ID.isNotNull())
+                    .and(PRODUCT.REORDER_POINT.isNotNull())
+                    .and(available.le(PRODUCT.REORDER_POINT));
           };
     }
     return c;
@@ -123,6 +141,7 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
           r.get(PRODUCT.SKU),
           r.get(PRODUCT.BASE_PRICE),
           r.get(PRODUCT.COST_PRICE),
+          r.get(PRODUCT.REORDER_POINT),
           false,
           null,
           null,
@@ -138,6 +157,7 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
         r.get(PRODUCT.SKU),
         r.get(PRODUCT.BASE_PRICE),
         r.get(PRODUCT.COST_PRICE),
+        r.get(PRODUCT.REORDER_POINT),
         true,
         stockQty,
         reservedQty,

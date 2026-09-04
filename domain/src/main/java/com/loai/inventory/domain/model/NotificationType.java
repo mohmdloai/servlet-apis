@@ -97,5 +97,17 @@ public enum NotificationType {
    * and {@code held_until} when the order still has a hold. Silent when the claim names no customer
    * (nobody to tell).
    */
-  PAYMENT_NOT_FOUND
+  PAYMENT_NOT_FOUND,
+
+  /**
+   * A sale took a product's <em>available</em> stock from above its reorder point to at or below it
+   * ({@code stories/reorder_point.md}, V94). Org staff recipients (in-app, the {@code ORDER_PLACED}
+   * fan-out); raised by {@code LowStockNotifier} inside the sale's own transaction — the
+   * reservation at online/phone placement and the in-store sale's decrement — so a rolled-back sale
+   * tells nobody. Fires on the <b>crossing</b>, never on the state: a product already below its
+   * point sells on in silence until a restock (or a release) re-arms it. Payload carries {@code
+   * product_id}, {@code name}, {@code sku}, {@code available}, {@code reorder_point}; source is the
+   * product, and the link is its stock page.
+   */
+  LOW_STOCK
 }

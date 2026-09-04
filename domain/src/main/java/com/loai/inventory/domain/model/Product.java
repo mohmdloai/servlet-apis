@@ -18,6 +18,12 @@ public class Product {
    */
   private BigDecimal costPrice;
 
+  /**
+   * Reorder point (V94): notify staff when available stock reaches or falls below it; null = no
+   * rule.
+   */
+  private Integer reorderPoint;
+
   private String sku;
   private String barcode;
   private OffsetDateTime createdAt;
@@ -92,6 +98,14 @@ public class Product {
 
   public void setCostPrice(BigDecimal costPrice) {
     this.costPrice = costPrice;
+  }
+
+  public Integer getReorderPoint() {
+    return reorderPoint;
+  }
+
+  public void setReorderPoint(Integer reorderPoint) {
+    this.reorderPoint = reorderPoint;
   }
 
   public String getSku() {

@@ -88,7 +88,8 @@ public final class WhatsAppTemplates {
       // Not utility messages — see the class note. PAYMENT_NOT_FOUND is a utility message in
       // spirit ("check your reference"), but it has no approved Meta template yet — the email +
       // feed carry it (stories/payment_claim_not_found.md); a template is a later, approved add.
-      case COMMENT_REPLIED, REVIEW_REQUESTED, PAYMENT_NOT_FOUND -> null;
+      // LOW_STOCK is staff-facing (USER recipients are in-app only) — never a WhatsApp message.
+      case COMMENT_REPLIED, REVIEW_REQUESTED, PAYMENT_NOT_FOUND, LOW_STOCK -> null;
     };
   }
 

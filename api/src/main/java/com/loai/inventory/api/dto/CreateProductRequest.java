@@ -22,6 +22,9 @@ public class CreateProductRequest {
   private BigDecimal costPrice;
   private boolean costPricePresent;
 
+  /** Reorder point (V94): null = no rule; full-replace on PUT like {@code barcode}. */
+  private Integer reorderPoint;
+
   public CreateProductRequest() {}
 
   public String getName() {
@@ -77,5 +80,13 @@ public class CreateProductRequest {
   public void setCostPrice(BigDecimal costPrice) {
     this.costPrice = costPrice;
     this.costPricePresent = true;
+  }
+
+  public Integer getReorderPoint() {
+    return reorderPoint;
+  }
+
+  public void setReorderPoint(Integer reorderPoint) {
+    this.reorderPoint = reorderPoint;
   }
 }

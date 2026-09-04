@@ -31,7 +31,7 @@ public final class InventoryMapper {
       return InventoryStockFilter.valueOf(raw.trim().toUpperCase(Locale.ROOT));
     } catch (IllegalArgumentException e) {
       throw new ValidationException(
-          "Unknown stock filter: " + raw + " (expected out|low|tracked|untracked)");
+          "Unknown stock filter: " + raw + " (expected out|low|reorder|tracked|untracked)");
     }
   }
 
