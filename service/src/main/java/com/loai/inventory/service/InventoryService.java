@@ -19,10 +19,12 @@ import com.loai.inventory.domain.repository.InventoryReservationRepository;
 import com.loai.inventory.domain.repository.InventoryReservationRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -417,29 +419,118 @@ public class InventoryService {
         });
   }
 
+  /**
+   * The reasons {@link #adjust} may write ({@code stories/stocktake_count.md}). {@code RESTOCK} has
+   * its own action; the order-linked reasons are written by the flows that own their {@code
+   * order_id}. Anything else on an adjust would be a lie the ledger cannot detect.
+   */
+  public static final Set<StockReason> ADJUST_REASONS =
+      EnumSet.of(StockReason.ADJUSTMENT, StockReason.STOCKTAKE);
+
   public Inventory adjust(UUID orgId, UUID productId, int stockDelta, ActorContext actor) {
+    return adjust(orgId, productId, stockDelta, StockReason.ADJUSTMENT, actor, null);
+  }
+
+  /**
+   * Adjust by a signed delta under one of {@link #ADJUST_REASONS}, optionally idempotent — the
+   * shape a stocktake posts its variances through ({@code stories/stocktake_count.md}).
+   *
+   * <p>Mirrors {@link #restock(UUID, UUID, int, ActorContext, String)} exactly: lock the row FOR
+   * UPDATE first, then — with a key — the ledger insert IS the claim ({@code ON CONFLICT DO
+   * NOTHING}); a replay fingerprints the prior row (delta, product <b>and reason</b>) and either
+   * returns the locked current row or 409s. Without a key every call applies, as it always did.
+   *
+   * <p>The below-reserved guard runs after the lock and before the claim: {@code stock + delta}
+   * below {@code reserved_qty} (which covers below zero, since {@code reserved_qty >= 0}) is a
+   * {@link ConflictException} naming the reserved count, with nothing written and <b>no key
+   * claimed</b> — so a retry with the same key, once the holds are released or the client has
+   * re-floored, applies cleanly. The V7 CHECK stays as the backstop it always was.
+   */
+  public Inventory adjust(
+      UUID orgId,
+      UUID productId,
+      int stockDelta,
+      StockReason reason,
+      ActorContext actor,
+      String idempotencyKey) {
+    if (reason == null || !ADJUST_REASONS.contains(reason)) {
+      throw new ValidationException("reason must be one of: ADJUSTMENT, STOCKTAKE");
+    }
+    String key =
+        (idempotencyKey == null || idempotencyKey.isBlank()) ? null : idempotencyKey.trim();
+
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
           InventoryRepository repo = repoFactory.create(txDsl);
           InventoryLogRepository logRepo = logRepoFactory.create(txDsl);
 
-          Inventory current = findOrThrow(repo, orgId, productId);
-          Inventory updated =
-              repo.adjustQuantities(orgId, productId, stockDelta, 0, current.getVersion());
+          Inventory current = repo.lockForUpdate(orgId, List.of(productId)).get(productId);
+          if (current == null) {
+            throw new NotFoundException("Inventory", productId);
+          }
 
-          logRepo.insert(
-              orgId,
-              productId,
-              stockDelta,
-              0,
-              updated.getStockQty(),
-              updated.getReservedQty(),
-              StockReason.ADJUSTMENT,
-              null,
-              actor);
+          int stockAfter = current.getStockQty() + stockDelta;
+          if (stockAfter < current.getReservedQty()) {
+            throw new ConflictException(
+                "Stock cannot go below the reserved quantity: "
+                    + current.getReservedQty()
+                    + " units are held by open orders (stock would be "
+                    + stockAfter
+                    + "). Cancel or fulfil those orders first.");
+          }
 
-          return updated;
+          if (key == null) {
+            Inventory updated =
+                repo.adjustQuantities(orgId, productId, stockDelta, 0, current.getVersion());
+            logRepo.insert(
+                orgId,
+                productId,
+                stockDelta,
+                0,
+                updated.getStockQty(),
+                updated.getReservedQty(),
+                reason,
+                null,
+                actor);
+            return updated;
+          }
+
+          Optional<InventoryLog> claimed =
+              logRepo.insertIdempotent(
+                  orgId,
+                  productId,
+                  stockDelta,
+                  0,
+                  stockAfter,
+                  current.getReservedQty(),
+                  reason,
+                  null,
+                  actor,
+                  key);
+
+          if (claimed.isEmpty()) {
+            InventoryLog prior =
+                logRepo
+                    .findByIdempotencyKey(orgId, key)
+                    .orElseThrow(
+                        () -> new IllegalStateException("idempotency key vanished: " + key));
+            if (prior.getStockDelta() != stockDelta
+                || !prior.getProductId().equals(productId)
+                || prior.getReason() != reason) {
+              throw new ConflictException(
+                  "Idempotency-Key reused with different parameters: " + key);
+            }
+            log.info(
+                "Adjust replay ignored (idempotency key already applied) orgId={} productId={}"
+                    + " key={}",
+                orgId,
+                productId,
+                key);
+            return current;
+          }
+
+          return repo.adjustQuantities(orgId, productId, stockDelta, 0, current.getVersion());
         });
   }
 
