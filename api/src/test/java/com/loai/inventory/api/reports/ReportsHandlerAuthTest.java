@@ -1,20 +1,26 @@
 package com.loai.inventory.api.reports;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.loai.inventory.api.servlet.handler.ReportsHandler;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.report.InventoryValuation;
+import com.loai.inventory.domain.model.report.ProfitTotals;
+import com.loai.inventory.domain.model.report.TopProduct;
 import com.loai.inventory.service.ReportService;
 import com.loai.inventory.service.ReportService.ArAgingReport;
 import com.loai.inventory.service.ReportService.InventoryValuationReport;
+import com.loai.inventory.service.ReportService.ProfitReport;
 import com.loai.inventory.service.ReportService.RevenueReport;
 import com.loai.inventory.service.ReportService.SalesReport;
 import com.loai.inventory.service.ReportService.TopProductsReport;
@@ -36,9 +42,12 @@ import org.mockito.Mockito;
 
 /**
  * Runtime auth + routing for {@code GET /api/orgs/{orgId}/reports/*} ({@code
- * stories/reporting_reads.md}): all five reports are VIEWER reads; anon → 401; a non-member → 403;
- * any mutating verb on a known report → 405; an unknown report name → 404; a {@link
- * ValidationException} from the service surfaces as 400.
+ * stories/reporting_reads.md}): the five original reports are VIEWER reads; anon → 401; a
+ * non-member → 403; any mutating verb on a known report → 405; an unknown report name → 404; a
+ * {@link ValidationException} from the service surfaces as 400. Since V92
+ * (stories/product_cost_and_margin.md) cost is MANAGER-plane: {@code /profit} and {@code
+ * ?by=profit} are 403 below MANAGER, and the cost keys on the other two reads ride only for
+ * managers — asserted on the JSON tree.
  */
 class ReportsHandlerAuthTest {
 
@@ -53,6 +62,7 @@ class ReportsHandlerAuthTest {
   private static final String SECURITY_CONTEXT_ATTR = "securityContext";
   private static final OffsetDateTime NOW = OffsetDateTime.now(ZoneOffset.UTC);
 
+  // /profit is deliberately not here: it is the one MANAGER-plane report (tests below).
   private static final String[] ALL_REPORTS = {
     "revenue", "sales", "top-products", "ar-aging", "inventory-valuation"
   };
@@ -80,8 +90,208 @@ class ReportsHandlerAuthTest {
         .thenReturn(new ArAgingReport(NOW, List.of(), 0, BigDecimal.ZERO));
     when(service.inventoryValuation(any()))
         .thenReturn(
-            new InventoryValuationReport(NOW, new InventoryValuation(0, 0, BigDecimal.ZERO, 0)));
+            new InventoryValuationReport(
+                NOW,
+                new InventoryValuation(
+                    3, 15, new BigDecimal("1100.00"), 1, new BigDecimal("640.00"), 1, 5)));
+    when(service.profit(any(), any(), any()))
+        .thenReturn(
+            new ProfitReport(
+                NOW,
+                NOW,
+                new ProfitTotals(
+                    8,
+                    3,
+                    new BigDecimal("150.00"),
+                    new BigDecimal("90.00"),
+                    new BigDecimal("60.00"))));
     return service;
+  }
+
+  private static TopProductsReport costedTopProducts() {
+    return new TopProductsReport(
+        NOW,
+        NOW,
+        "revenue",
+        10,
+        List.of(
+            new TopProduct(
+                UUID.randomUUID(),
+                "Notebook",
+                "NB-1",
+                8,
+                new BigDecimal("456.00"),
+                3,
+                new BigDecimal("150.00"),
+                new BigDecimal("90.00"),
+                new BigDecimal("60.00")),
+            new TopProduct(UUID.randomUUID(), "Pen", "PEN-1", 2, new BigDecimal("10.00"))));
+  }
+
+  private static JsonNode json(Resp resp) throws IOException {
+    return com.loai.inventory.api.config.ObjectMapperProvider.build()
+        .readTree(resp.body.toByteArray());
+  }
+
+  // Cost is MANAGER-plane (stories/product_cost_and_margin.md)
+
+  @Test
+  void profit_viewerAndStaffAre403_serviceNeverCalled() throws IOException {
+    ReportService service = stubbedService();
+    for (OrgRole role : List.of(OrgRole.VIEWER, OrgRole.STAFF)) {
+      Resp resp = new Resp();
+      handler(service)
+          .handle("GET", reqWith(ctxWith(ORG, role), Map.of()), resp.mock, ORG, "/profit");
+      assertEquals(403, resp.status, role + " must not read /profit");
+    }
+    verify(service, never()).profit(any(), any(), any());
+  }
+
+  @Test
+  void profit_managerAndOwnerRead200_withTheTotals() throws IOException {
+    ReportService service = stubbedService();
+    for (OrgRole role : List.of(OrgRole.MANAGER, OrgRole.OWNER)) {
+      Resp resp = new Resp();
+      handler(service)
+          .handle("GET", reqWith(ctxWith(ORG, role), Map.of()), resp.mock, ORG, "/profit");
+      assertEquals(200, resp.status, role + " reads /profit");
+      JsonNode j = json(resp);
+      assertEquals(8, j.get("quantity").asLong());
+      assertEquals(3, j.get("costed_quantity").asLong());
+      assertEquals(0, new BigDecimal("60.00").compareTo(j.get("gross_profit").decimalValue()));
+    }
+  }
+
+  @Test
+  void profit_mutatingVerbIs405_subpathIs404() throws IOException {
+    ReportService service = stubbedService();
+    Resp post = new Resp();
+    handler(service)
+        .handle("POST", reqWith(ctxWith(ORG, OrgRole.OWNER), Map.of()), post.mock, ORG, "/profit");
+    assertEquals(405, post.status);
+    Resp sub = new Resp();
+    handler(service)
+        .handle("GET", reqWith(ctxWith(ORG, OrgRole.OWNER), Map.of()), sub.mock, ORG, "/profit/x");
+    assertEquals(404, sub.status);
+  }
+
+  @Test
+  void topProducts_byProfit_is403BelowManager_beforeTheService() throws IOException {
+    ReportService service = stubbedService();
+    Resp resp = new Resp();
+    handler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.STAFF), Map.of("by", "profit")),
+            resp.mock,
+            ORG,
+            "/top-products");
+    assertEquals(403, resp.status);
+    verify(service, never()).topProducts(any(), any(), any(), any(), any());
+    // The ordinary sorts stay a STAFF read.
+    Resp rev = new Resp();
+    handler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.STAFF), Map.of("by", "revenue")),
+            rev.mock,
+            ORG,
+            "/top-products");
+    assertEquals(200, rev.status);
+  }
+
+  @Test
+  void topProducts_costKeysRideOnlyForManagers() throws IOException {
+    ReportService service = stubbedService();
+    when(service.topProducts(any(), any(), any(), any(), any())).thenReturn(costedTopProducts());
+
+    Resp staff = new Resp();
+    handler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.STAFF), Map.of()),
+            staff.mock,
+            ORG,
+            "/top-products");
+    assertEquals(200, staff.status);
+    for (JsonNode row : json(staff).get("items")) {
+      for (String key : List.of("costed_quantity", "costed_net_sales", "cost", "gross_profit")) {
+        assertFalse(row.has(key), "STAFF row must not carry " + key + ": " + row);
+      }
+      assertTrue(row.has("revenue") && row.has("quantity"), "the shipped shape is intact");
+    }
+
+    Resp manager = new Resp();
+    handler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.MANAGER), Map.of()),
+            manager.mock,
+            ORG,
+            "/top-products");
+    JsonNode rows = json(manager).get("items");
+    JsonNode costed = rows.get(0);
+    assertEquals(3, costed.get("costed_quantity").asLong());
+    assertEquals(
+        0, new BigDecimal("150.00").compareTo(costed.get("costed_net_sales").decimalValue()));
+    assertEquals(0, new BigDecimal("90.00").compareTo(costed.get("cost").decimalValue()));
+    assertEquals(0, new BigDecimal("60.00").compareTo(costed.get("gross_profit").decimalValue()));
+    JsonNode uncosted = rows.get(1);
+    assertEquals(0, uncosted.get("costed_quantity").asLong(), "the primitive is always there");
+    for (String key : List.of("costed_net_sales", "cost", "gross_profit")) {
+      assertFalse(uncosted.has(key), "nothing costed → no money key, never 0: " + uncosted);
+    }
+  }
+
+  @Test
+  void inventoryValuation_costKeysRideOnlyForManagers() throws IOException {
+    ReportService service = stubbedService();
+    Resp staff = new Resp();
+    handler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.STAFF), Map.of()),
+            staff.mock,
+            ORG,
+            "/inventory-valuation");
+    JsonNode s = json(staff);
+    for (String key : List.of("cost_value", "uncosted_products", "uncosted_units")) {
+      assertFalse(s.has(key), "STAFF envelope must not carry " + key);
+    }
+    assertEquals(0, new BigDecimal("1100.00").compareTo(s.get("retail_value").decimalValue()));
+
+    Resp manager = new Resp();
+    handler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.MANAGER), Map.of()),
+            manager.mock,
+            ORG,
+            "/inventory-valuation");
+    JsonNode m = json(manager);
+    assertEquals(0, new BigDecimal("640.00").compareTo(m.get("cost_value").decimalValue()));
+    assertEquals(1, m.get("uncosted_products").asLong());
+    assertEquals(5, m.get("uncosted_units").asLong());
+  }
+
+  @Test
+  void inventoryValuation_noCostedProduct_costValueAbsentEvenForManager() throws IOException {
+    ReportService service = stubbedService();
+    when(service.inventoryValuation(any()))
+        .thenReturn(
+            new InventoryValuationReport(NOW, new InventoryValuation(2, 7, BigDecimal.TEN, 0)));
+    Resp manager = new Resp();
+    handler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.MANAGER), Map.of()),
+            manager.mock,
+            ORG,
+            "/inventory-valuation");
+    JsonNode m = json(manager);
+    assertFalse(m.has("cost_value"), "no costed product → no key, never 0");
+    assertEquals(2, m.get("uncosted_products").asLong());
+    assertEquals(7, m.get("uncosted_units").asLong());
   }
 
   @Test

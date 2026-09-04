@@ -25,7 +25,13 @@ public interface SalesOrderRepository {
   /**
    * A product looked up at order placement, used to snapshot description + unit price onto lines.
    */
-  record ProductSnapshot(UUID productId, String description, BigDecimal unitPrice) {}
+  /**
+   * The product facts a line freezes at placement. {@code unitCost} is the product's {@code
+   * cost_price} at that instant, or {@code null} when uncosted (V92) — it lands on the line
+   * verbatim and is never recomputed, so a later cost edit cannot rewrite the sale's margin.
+   */
+  record ProductSnapshot(
+      UUID productId, String description, BigDecimal unitPrice, BigDecimal unitCost) {}
 
   Optional<SalesOrder> findById(UUID orgId, UUID id);
 

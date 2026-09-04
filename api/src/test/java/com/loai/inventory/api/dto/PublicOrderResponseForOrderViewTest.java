@@ -46,6 +46,7 @@ class PublicOrderResponseForOrderViewTest {
   }
 
   private static SalesOrderLine line() {
+    // A COSTED line (V92): the customer view must not carry the cost either.
     return SalesOrderLine.create(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -53,6 +54,7 @@ class PublicOrderResponseForOrderViewTest {
         "Eva",
         1,
         new BigDecimal("60.00"),
+        new BigDecimal("35.00"),
         BigDecimal.ZERO);
   }
 
@@ -72,9 +74,27 @@ class PublicOrderResponseForOrderViewTest {
             "\"channel\"",
             "\"created_at\"",
             "\"updated_at\"",
-            "\"notes\"")) {
+            "\"notes\"",
+            "\"unit_cost\"",
+            "\"cost\"")) {
       assertFalse(json.contains(forbidden), "leaked " + forbidden + " in: " + json);
     }
+  }
+
+  @Test
+  void lines_carryNoUnitCost_structurally() {
+    // Not just "the value happened to be null": the customer-facing Line type has no such field
+    // at all, so a cost cannot be represented on this boundary
+    // (stories/product_cost_and_margin.md).
+    for (java.lang.reflect.Field f : PublicOrderResponse.Line.class.getDeclaredFields()) {
+      assertFalse(
+          f.getName().toLowerCase().contains("cost"),
+          "PublicOrderResponse.Line must not carry a cost field: " + f.getName());
+    }
+    assertEquals(
+        new BigDecimal("35.00"),
+        line().getUnitCost(),
+        "the domain line does carry it — the DTO drops it");
   }
 
   @Test

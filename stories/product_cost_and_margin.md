@@ -10,6 +10,14 @@
 > and its sales-by-item report has *cost of goods*, *gross profit* and *margin* columns. **Branch
 > `173_feat/product-cost` off `master`, migration V92.** Frontend pair:
 > `frontst/stories/136_st_product_cost_margin.md`.
+>
+> **Built 2026-09-04.** V92 + codegen; `hasManagerAuthority` promoted; tri-state request DTOs;
+> the snapshot through the one builder; `ProfitFields` + `/reports/profit`; perfdb hand-migrated
+> V87→V92 and the EXPLAIN capture in `tools/seed/results/product_cost_173.txt` (same plans, same
+> buffers, no index). Tests: `SalesOrderLineTest` 4 · `ReportServiceTest` 29 · `ProductHandlerCostTest`
+> 9 · `ReportsHandlerAuthTest` 14 · `PublicOrderResponseForOrderViewTest` 3 · `ProductCostIT` 6 ·
+> `SaleCostSnapshotIT` 3 · `ReportReadsIT` 15 — all green; full `mvn verify` battery result recorded
+> at the foot of this file.
 
 ---
 
@@ -119,7 +127,7 @@ tax-inclusive base is wrong by the tax rate, so the profit arithmetic uses its o
 ```
 line_discount_share = CASE WHEN so.subtotal > 0
                            THEN round(so.discount_total * sol.line_subtotal / so.subtotal, 2)
-                           ELSE 0 END                     -- HALF_EVEN, the InvoiceService.discountToBill rule
+                           ELSE 0 END                     -- the InvoiceService.discountToBill share rule
 net_sales_line      = sol.line_subtotal - line_discount_share       -- ex-tax, ex-shipping
 cost_line           = sol.quantity * sol.unit_cost                  -- NULL when uncosted
 gross_profit_line   = net_sales_line - cost_line                    -- NULL when uncosted
@@ -129,8 +137,10 @@ The discount (coupon V72 or counter discount V88) is recorded **on the order**, 
 subtotal. Prorating it onto lines by subtotal share is the rule `InvoiceService.discountToBill`
 already applies when an order is invoiced in parts; using it here means a product's profit and
 the window's profit are the same arithmetic at two grains — the tile and its drill-down agree by
-construction. This is a ranking/summary report, so Σ shares landing a piastre off the order's
-discount is acceptable and stated; the invoice keeps the exact-remainder rule because it must.
+construction. Two stated deviations from the invoice's rule, both because this is a
+ranking/summary read and not a document: Postgres `round()` is half-up where the invoice's Java
+`HALF_EVEN` differs from it only at an exact half piastre; and Σ shares may land a piastre off the
+order's discount (the invoice keeps its exact-remainder rule because it must).
 
 **Every one of these expressions is defined once**, as jOOQ fields in a `ReportRepositoryImpl`
 helper, and consumed by both the per-product read and the profit total. The epic's recurring
@@ -398,3 +408,8 @@ updated; story committed on `173_feat/product-cost`. The frontend pair
 `frontst/stories/136_st_product_cost_margin.md` ships **after** this merges — against the old API
 its cost field would be silently ignored on write and never echoed on read, which is a lie on a
 form, so the pair must not land first. perfdb needs the V92 hand-migration before the next bench.
+
+---
+
+**Full battery, 2026-09-04 (`mvn -o install`, spotless-check included): BUILD SUCCESS** — domain 11 ·
+common 64 · service 274 · api unit 296 + failsafe ITs 1171; 0 failures, 0 errors, 0 skipped.

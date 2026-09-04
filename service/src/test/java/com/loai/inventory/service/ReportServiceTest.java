@@ -9,9 +9,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.report.AgingBand;
 import com.loai.inventory.domain.model.report.InventoryValuation;
+import com.loai.inventory.domain.model.report.ProfitTotals;
 import com.loai.inventory.domain.model.report.RevenuePoint;
 import com.loai.inventory.domain.model.report.SalesPoint;
 import com.loai.inventory.domain.model.report.TopProduct;
+import com.loai.inventory.domain.model.report.TopProductSort;
 import com.loai.inventory.domain.repository.ReportRepository;
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -37,8 +39,9 @@ class ReportServiceTest {
     OffsetDateTime from;
     OffsetDateTime to;
     String channel;
-    Boolean byRevenue;
+    TopProductSort sort;
     Integer limit;
+    boolean profitCalled;
     int[] edges;
 
     @Override
@@ -62,12 +65,20 @@ class ReportServiceTest {
 
     @Override
     public List<TopProduct> topProducts(
-        UUID orgId, OffsetDateTime from, OffsetDateTime to, boolean byRevenue, int limit) {
+        UUID orgId, OffsetDateTime from, OffsetDateTime to, TopProductSort sort, int limit) {
       this.from = from;
       this.to = to;
-      this.byRevenue = byRevenue;
+      this.sort = sort;
       this.limit = limit;
       return List.of();
+    }
+
+    @Override
+    public ProfitTotals profit(UUID orgId, OffsetDateTime from, OffsetDateTime to) {
+      this.from = from;
+      this.to = to;
+      this.profitCalled = true;
+      return new ProfitTotals(0, 0, null, null, null);
     }
 
     @Override
@@ -85,7 +96,7 @@ class ReportServiceTest {
   private final CapturingRepo repo = new CapturingRepo();
   private final ReportService service = new ReportService(repo);
 
-  // ── defaults ────────────────────────────────────────────────────────────────
+  // defaults
 
   @Test
   void revenue_defaults_are30dDayWindowEndingNow() {
@@ -99,8 +110,9 @@ class ReportServiceTest {
 
   @Test
   void topProducts_defaults_revenueLimit10() {
-    service.topProducts(ORG, null, null, null, null);
-    assertTrue(repo.byRevenue);
+    var report = service.topProducts(ORG, null, null, null, null);
+    assertEquals(TopProductSort.REVENUE, repo.sort);
+    assertEquals("revenue", report.by());
     assertEquals(10, repo.limit);
   }
 
@@ -116,7 +128,7 @@ class ReportServiceTest {
     assertNull(repo.channel);
   }
 
-  // ── window validation ────────────────────────────────────────────────────────
+  // window validation
 
   @Test
   void window_fromAfterTo_is400() {
@@ -153,7 +165,7 @@ class ReportServiceTest {
     assertThrows(ValidationException.class, () -> service.revenue(ORG, "not-a-date", null, "day"));
   }
 
-  // ── enum / limit / bucket validation ─────────────────────────────────────────
+  // enum / limit / bucket validation
 
   @Test
   void bucket_unknown_is400() {
@@ -185,9 +197,47 @@ class ReportServiceTest {
   }
 
   @Test
-  void by_quantity_isFalse() {
-    service.topProducts(ORG, null, null, "quantity", null);
-    assertTrue(!repo.byRevenue);
+  void by_quantity_sortsByQuantity() {
+    var report = service.topProducts(ORG, null, null, "quantity", null);
+    assertEquals(TopProductSort.QUANTITY, repo.sort);
+    assertEquals("quantity", report.by());
+  }
+
+  @Test
+  void by_profit_sortsByProfit_andEchoesIt() {
+    var report = service.topProducts(ORG, null, null, " Profit ", null);
+    assertEquals(TopProductSort.PROFIT, repo.sort);
+    assertEquals("profit", report.by());
+  }
+
+  @Test
+  void isProfitSort_recognisesOnlyProfit() {
+    assertTrue(ReportService.isProfitSort("profit"));
+    assertTrue(ReportService.isProfitSort(" PROFIT "));
+    assertTrue(!ReportService.isProfitSort("revenue"));
+    assertTrue(!ReportService.isProfitSort("margin"));
+    assertTrue(!ReportService.isProfitSort(null));
+  }
+
+  @Test
+  void profit_defaults_are30dWindowEndingNow() {
+    OffsetDateTime before = OffsetDateTime.now(ZoneOffset.UTC);
+    var report = service.profit(ORG, null, null);
+    assertTrue(repo.profitCalled);
+    assertTrue(!repo.to.isBefore(before), "to should be ~now");
+    assertEquals(30, Duration.between(repo.from, repo.to).toDays());
+    assertEquals(0, report.totals().quantity());
+    assertNull(report.totals().grossProfit());
+  }
+
+  @Test
+  void profit_windowRulesApply() {
+    assertThrows(
+        ValidationException.class,
+        () -> service.profit(ORG, "2026-02-01T00:00:00Z", "2026-01-01T00:00:00Z"));
+    assertThrows(
+        ValidationException.class,
+        () -> service.profit(ORG, "2024-01-01T00:00:00Z", "2026-01-01T00:00:00Z"));
   }
 
   @Test
@@ -212,7 +262,7 @@ class ReportServiceTest {
     assertEquals(50, repo.limit);
   }
 
-  // ── aging buckets validation ─────────────────────────────────────────────────
+  // aging buckets validation
 
   @Test
   void agingBuckets_custom_parsed() {

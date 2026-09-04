@@ -1,0 +1,399 @@
+# Story product_cost_and_margin.md (branch 173_feat/product-cost, V92) — the cost-aware report reads.
+# Captured 2026-09-04 against perfdb after the V87–V92 hand-migration (tools/seed/README.md
+# standing procedure; history now 92 rows, row-for-row with dev). Flyway is never pointed here.
+#
+# WHAT WAS MEASURED. perfdb's products are ALL uncosted (146 164 products, 0 costed — the seeder
+# predates V92 and the story keeps it that way), so the FILTERed cost sums would have nothing to
+# sum. The capture therefore runs inside ONE transaction that costs the chosen org's 728 products
+# at 60 % of base_price and freezes that onto its order lines, runs the EXPLAINs, and ROLLS BACK
+# (§5 confirms 0 costed products / 0 costed lines afterwards). The plan shape does not depend on
+# the values; the timings do reflect the arithmetic actually running over real rows.
+#
+# The org is the one with the most order lines (de431e06…, 8 510 lines over all time; 5 082 in
+# the last 366 days; 612 tracked products). Every org on perfdb is within a few rows of it.
+#
+# FINDINGS
+#  1. top-products: BEFORE (quantity + revenue) and AFTER (+ four cost aggregates) are the SAME
+#     plan — Index Scan sales_order_org_status_idx → Nested Loop lines → Nested Loop product →
+#     Sort → GroupAggregate → top-N heapsort — at the same estimated cost (7129.68 vs 7131.55) and
+#     the same 38 166 shared-hit buffers. Warm: 39.3 ms vs 39.4 ms. The four FILTER sums are
+#     free at this scale; the cold first run (65 vs 71 ms) is the buffer read, not the query.
+#  2. by=profit changes only the top-N sort key (the aggregate expression, DESC NULLS LAST):
+#     57 ms on its first (cold-ish) run, same plan and buffers as by=revenue.
+#  3. GET /reports/profit (the total: same join, no product join, no GROUP BY): 23.7 / 22.6 ms
+#     over 366 days, 3.7 ms over the default 30-day window. Plain Aggregate over the same
+#     Nested Loop; 18 039 buffers.
+#  4. inventory-valuation: BEFORE and AFTER are the same plan (Bitmap Index Scan inventory_pk →
+#     Nested Loop product_pkey → Aggregate, 3 595 buffers, estimate 5762 vs 5770). The 573 ms on
+#     3a is the COLD first touch of this org's inventory/product pages (perfdb's tables outsize
+#     shared_buffers, so the first read of anything is disk); the two AFTER runs are 5.5 / 4.0 ms
+#     warm. Read 3a as "cold", not as "the old query was slower".
+#  5. NO INDEX ADDED. Nothing here scans a table; every read already rides sales_order_org_status_idx,
+#     sales_order_line_order_idx, inventory_pk and product_pkey, and the new columns are read off
+#     rows those indexes already fetch. V73's rule: an index the planner would not choose is write
+#     cost for no read benefit — and there is no predicate on unit_cost / cost_price to index.
+#
+# The §4 sanity row shows the arithmetic over real rows (10 204 units, all costed inside the txn):
+# costed_net_sales 54 269 930.54, cost 24 647 767.84, gross_profit 29 622 162.70 — the margin is not
+# 40 % because perfdb's storefront lines were priced at the listing's sales_price, not base_price.
+#
+# Raw psql output follows ("unterminated quoted string" lines are \echo apostrophes, harmless).
+
+SET
+===== 0. sizes (count before believing a plan)
+ orders 
+--------
+   5000
+(1 row)
+
+ lines 
+-------
+  8510
+(1 row)
+
+ tracked_products 
+------------------
+              612
+(1 row)
+
+ products | costed 
+----------+--------
+      728 |      0
+(1 row)
+
+BEGIN
+===== (inside a transaction that is ROLLED BACK at the end: cost this
+psql:/tmp/explain_cost.sql:12: error: unterminated quoted string
+UPDATE 728
+UPDATE 8510
+===== 1a. top-products BEFORE (the shipped query: quantity + revenue), by revenue, 366-day window — run twice
+                                                                                                             QUERY PLAN                                                                                                             
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=7129.68..7129.70 rows=10 width=158) (actual time=64.914..64.919 rows=10 loops=1)
+   Buffers: shared hit=38172
+   ->  Sort  (cost=7129.68..7129.76 rows=34 width=158) (actual time=64.912..64.915 rows=10 loops=1)
+         Sort Key: (sum(l.line_total)) DESC, p.id
+         Sort Method: top-N heapsort  Memory: 28kB
+         Buffers: shared hit=38172
+         ->  GroupAggregate  (cost=7128.18..7128.94 rows=34 width=158) (actual time=63.536..64.658 rows=654 loops=1)
+               Group Key: p.id
+               Buffers: shared hit=38166
+               ->  Sort  (cost=7128.18..7128.26 rows=34 width=130) (actual time=63.495..63.717 rows=4127 loops=1)
+                     Sort Key: p.id
+                     Sort Method: quicksort  Memory: 812kB
+                     Buffers: shared hit=38166
+                     ->  Nested Loop  (cost=1.27..7127.31 rows=34 width=130) (actual time=0.344..58.184 rows=4127 loops=1)
+                           Buffers: shared hit=38166
+                           ->  Nested Loop  (cost=0.85..7111.37 rows=34 width=28) (actual time=0.308..33.810 rows=4127 loops=1)
+                                 Buffers: shared hit=18039
+                                 ->  Index Scan using sales_order_org_status_idx on sales_order so  (cost=0.42..6861.72 rows=20 width=16) (actual time=0.265..4.031 rows=2441 loops=1)
+                                       Index Cond: ((org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid) AND (status = ANY ('{PAID,FULFILLING,FULFILLED,CLOSED}'::order_status[])))
+                                       Filter: ((COALESCE(placed_at, created_at) >= '2025-09-03 00:00:00+00'::timestamp with time zone) AND (COALESCE(placed_at, created_at) < '2026-09-04 00:00:00+00'::timestamp with time zone))
+                                       Rows Removed by Filter: 1644
+                                       Buffers: shared hit=4109
+                                 ->  Index Scan using sales_order_line_order_idx on sales_order_line l  (cost=0.43..12.46 rows=2 width=44) (actual time=0.011..0.011 rows=2 loops=2441)
+                                       Index Cond: (sales_order_id = so.id)
+                                       Buffers: shared hit=13930
+                           ->  Index Scan using product_pkey on product p  (cost=0.42..0.47 rows=1 width=118) (actual time=0.005..0.005 rows=1 loops=4127)
+                                 Index Cond: (id = l.product_id)
+                                 Buffers: shared hit=20127
+ Planning:
+   Buffers: shared hit=123 read=8
+ Planning Time: 7.674 ms
+ Execution Time: 65.219 ms
+(32 rows)
+
+                                                                                                             QUERY PLAN                                                                                                             
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=7129.68..7129.70 rows=10 width=158) (actual time=39.027..39.034 rows=10 loops=1)
+   Buffers: shared hit=38166
+   ->  Sort  (cost=7129.68..7129.76 rows=34 width=158) (actual time=39.025..39.030 rows=10 loops=1)
+         Sort Key: (sum(l.line_total)) DESC, p.id
+         Sort Method: top-N heapsort  Memory: 28kB
+         Buffers: shared hit=38166
+         ->  GroupAggregate  (cost=7128.18..7128.94 rows=34 width=158) (actual time=36.697..38.855 rows=654 loops=1)
+               Group Key: p.id
+               Buffers: shared hit=38166
+               ->  Sort  (cost=7128.18..7128.26 rows=34 width=130) (actual time=36.684..37.117 rows=4127 loops=1)
+                     Sort Key: p.id
+                     Sort Method: quicksort  Memory: 812kB
+                     Buffers: shared hit=38166
+                     ->  Nested Loop  (cost=1.27..7127.31 rows=34 width=130) (actual time=0.139..34.558 rows=4127 loops=1)
+                           Buffers: shared hit=38166
+                           ->  Nested Loop  (cost=0.85..7111.37 rows=34 width=28) (actual time=0.127..19.819 rows=4127 loops=1)
+                                 Buffers: shared hit=18039
+                                 ->  Index Scan using sales_order_org_status_idx on sales_order so  (cost=0.42..6861.72 rows=20 width=16) (actual time=0.112..3.338 rows=2441 loops=1)
+                                       Index Cond: ((org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid) AND (status = ANY ('{PAID,FULFILLING,FULFILLED,CLOSED}'::order_status[])))
+                                       Filter: ((COALESCE(placed_at, created_at) >= '2025-09-03 00:00:00+00'::timestamp with time zone) AND (COALESCE(placed_at, created_at) < '2026-09-04 00:00:00+00'::timestamp with time zone))
+                                       Rows Removed by Filter: 1644
+                                       Buffers: shared hit=4109
+                                 ->  Index Scan using sales_order_line_order_idx on sales_order_line l  (cost=0.43..12.46 rows=2 width=44) (actual time=0.006..0.006 rows=2 loops=2441)
+                                       Index Cond: (sales_order_id = so.id)
+                                       Buffers: shared hit=13930
+                           ->  Index Scan using product_pkey on product p  (cost=0.42..0.47 rows=1 width=118) (actual time=0.003..0.003 rows=1 loops=4127)
+                                 Index Cond: (id = l.product_id)
+                                 Buffers: shared hit=20127
+ Planning:
+   Buffers: shared hit=39
+ Planning Time: 0.422 ms
+ Execution Time: 39.308 ms
+(32 rows)
+
+===== 1b. top-products AFTER (+ costed_quantity, costed_net_sales, cost, gross_profit), by revenue — run twice
+                                                                                                             QUERY PLAN                                                                                                             
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=7131.55..7131.57 rows=10 width=262) (actual time=70.905..70.908 rows=10 loops=1)
+   Buffers: shared hit=38166
+   ->  Sort  (cost=7131.55..7131.63 rows=34 width=262) (actual time=70.903..70.905 rows=10 loops=1)
+         Sort Key: (sum(l.line_total)) DESC, p.id
+         Sort Method: top-N heapsort  Memory: 29kB
+         Buffers: shared hit=38166
+         ->  GroupAggregate  (cost=7128.18..7130.81 rows=34 width=262) (actual time=67.186..70.736 rows=654 loops=1)
+               Group Key: p.id
+               Buffers: shared hit=38166
+               ->  Sort  (cost=7128.18..7128.26 rows=34 width=166) (actual time=67.158..67.336 rows=4127 loops=1)
+                     Sort Key: p.id
+                     Sort Method: quicksort  Memory: 921kB
+                     Buffers: shared hit=38166
+                     ->  Nested Loop  (cost=1.27..7127.31 rows=34 width=166) (actual time=0.221..62.396 rows=4127 loops=1)
+                           Buffers: shared hit=38166
+                           ->  Nested Loop  (cost=0.85..7111.37 rows=34 width=64) (actual time=0.201..34.316 rows=4127 loops=1)
+                                 Buffers: shared hit=18039
+                                 ->  Index Scan using sales_order_org_status_idx on sales_order so  (cost=0.42..6861.72 rows=20 width=27) (actual time=0.175..5.001 rows=2441 loops=1)
+                                       Index Cond: ((org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid) AND (status = ANY ('{PAID,FULFILLING,FULFILLED,CLOSED}'::order_status[])))
+                                       Filter: ((COALESCE(placed_at, created_at) >= '2025-09-03 00:00:00+00'::timestamp with time zone) AND (COALESCE(placed_at, created_at) < '2026-09-04 00:00:00+00'::timestamp with time zone))
+                                       Rows Removed by Filter: 1644
+                                       Buffers: shared hit=4109
+                                 ->  Index Scan using sales_order_line_order_idx on sales_order_line l  (cost=0.43..12.46 rows=2 width=69) (actual time=0.010..0.011 rows=2 loops=2441)
+                                       Index Cond: (sales_order_id = so.id)
+                                       Buffers: shared hit=13930
+                           ->  Index Scan using product_pkey on product p  (cost=0.42..0.47 rows=1 width=118) (actual time=0.006..0.006 rows=1 loops=4127)
+                                 Index Cond: (id = l.product_id)
+                                 Buffers: shared hit=20127
+ Planning:
+   Buffers: shared hit=47 read=3
+ Planning Time: 3.004 ms
+ Execution Time: 71.143 ms
+(32 rows)
+
+                                                                                                             QUERY PLAN                                                                                                             
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=7131.55..7131.57 rows=10 width=262) (actual time=38.998..39.005 rows=10 loops=1)
+   Buffers: shared hit=38166
+   ->  Sort  (cost=7131.55..7131.63 rows=34 width=262) (actual time=38.996..39.002 rows=10 loops=1)
+         Sort Key: (sum(l.line_total)) DESC, p.id
+         Sort Method: top-N heapsort  Memory: 29kB
+         Buffers: shared hit=38166
+         ->  GroupAggregate  (cost=7128.18..7130.81 rows=34 width=262) (actual time=34.067..38.827 rows=654 loops=1)
+               Group Key: p.id
+               Buffers: shared hit=38166
+               ->  Sort  (cost=7128.18..7128.26 rows=34 width=166) (actual time=34.044..34.352 rows=4127 loops=1)
+                     Sort Key: p.id
+                     Sort Method: quicksort  Memory: 921kB
+                     Buffers: shared hit=38166
+                     ->  Nested Loop  (cost=1.27..7127.31 rows=34 width=166) (actual time=0.101..32.083 rows=4127 loops=1)
+                           Buffers: shared hit=38166
+                           ->  Nested Loop  (cost=0.85..7111.37 rows=34 width=64) (actual time=0.091..17.964 rows=4127 loops=1)
+                                 Buffers: shared hit=18039
+                                 ->  Index Scan using sales_order_org_status_idx on sales_order so  (cost=0.42..6861.72 rows=20 width=27) (actual time=0.079..2.575 rows=2441 loops=1)
+                                       Index Cond: ((org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid) AND (status = ANY ('{PAID,FULFILLING,FULFILLED,CLOSED}'::order_status[])))
+                                       Filter: ((COALESCE(placed_at, created_at) >= '2025-09-03 00:00:00+00'::timestamp with time zone) AND (COALESCE(placed_at, created_at) < '2026-09-04 00:00:00+00'::timestamp with time zone))
+                                       Rows Removed by Filter: 1644
+                                       Buffers: shared hit=4109
+                                 ->  Index Scan using sales_order_line_order_idx on sales_order_line l  (cost=0.43..12.46 rows=2 width=69) (actual time=0.005..0.005 rows=2 loops=2441)
+                                       Index Cond: (sales_order_id = so.id)
+                                       Buffers: shared hit=13930
+                           ->  Index Scan using product_pkey on product p  (cost=0.42..0.47 rows=1 width=118) (actual time=0.003..0.003 rows=1 loops=4127)
+                                 Index Cond: (id = l.product_id)
+                                 Buffers: shared hit=20127
+ Planning:
+   Buffers: shared hit=39
+ Planning Time: 0.377 ms
+ Execution Time: 39.366 ms
+(32 rows)
+
+===== 1c. top-products AFTER, by=profit (gross_profit DESC NULLS LAST) — the new sort
+                                                                                                                                       QUERY PLAN                                                                                                                                        
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=7131.55..7131.57 rows=10 width=262) (actual time=57.266..57.270 rows=10 loops=1)
+   Buffers: shared hit=38166
+   ->  Sort  (cost=7131.55..7131.63 rows=34 width=262) (actual time=57.264..57.267 rows=10 loops=1)
+         Sort Key: (sum(((l.line_subtotal - CASE WHEN (so.subtotal > '0'::numeric) THEN round(((so.discount_total * l.line_subtotal) / so.subtotal), 2) ELSE '0'::numeric END) - ((l.quantity)::numeric * l.unit_cost))) FILTER (WHERE (l.unit_cost IS NOT NULL))) DESC NULLS LAST, p.id
+         Sort Method: top-N heapsort  Memory: 29kB
+         Buffers: shared hit=38166
+         ->  GroupAggregate  (cost=7128.18..7130.81 rows=34 width=262) (actual time=53.505..57.119 rows=654 loops=1)
+               Group Key: p.id
+               Buffers: shared hit=38166
+               ->  Sort  (cost=7128.18..7128.26 rows=34 width=166) (actual time=53.484..53.682 rows=4127 loops=1)
+                     Sort Key: p.id
+                     Sort Method: quicksort  Memory: 921kB
+                     Buffers: shared hit=38166
+                     ->  Nested Loop  (cost=1.27..7127.31 rows=34 width=166) (actual time=0.205..51.248 rows=4127 loops=1)
+                           Buffers: shared hit=38166
+                           ->  Nested Loop  (cost=0.85..7111.37 rows=34 width=64) (actual time=0.187..35.852 rows=4127 loops=1)
+                                 Buffers: shared hit=18039
+                                 ->  Index Scan using sales_order_org_status_idx on sales_order so  (cost=0.42..6861.72 rows=20 width=27) (actual time=0.163..2.938 rows=2441 loops=1)
+                                       Index Cond: ((org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid) AND (status = ANY ('{PAID,FULFILLING,FULFILLED,CLOSED}'::order_status[])))
+                                       Filter: ((COALESCE(placed_at, created_at) >= '2025-09-03 00:00:00+00'::timestamp with time zone) AND (COALESCE(placed_at, created_at) < '2026-09-04 00:00:00+00'::timestamp with time zone))
+                                       Rows Removed by Filter: 1644
+                                       Buffers: shared hit=4109
+                                 ->  Index Scan using sales_order_line_order_idx on sales_order_line l  (cost=0.43..12.46 rows=2 width=69) (actual time=0.005..0.006 rows=2 loops=2441)
+                                       Index Cond: (sales_order_id = so.id)
+                                       Buffers: shared hit=13930
+                           ->  Index Scan using product_pkey on product p  (cost=0.42..0.47 rows=1 width=118) (actual time=0.003..0.003 rows=1 loops=4127)
+                                 Index Cond: (id = l.product_id)
+                                 Buffers: shared hit=20127
+ Planning:
+   Buffers: shared hit=39
+ Planning Time: 1.146 ms
+ Execution Time: 57.458 ms
+(32 rows)
+
+===== 2. GET /reports/profit — the window total (same join, no GROUP BY, no product join) — run twice
+                                                                                                 QUERY PLAN                                                                                                 
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=7113.08..7113.09 rows=1 width=112) (actual time=23.514..23.516 rows=1 loops=1)
+   Buffers: shared hit=18039
+   ->  Nested Loop  (cost=0.85..7111.37 rows=34 width=40) (actual time=0.185..18.657 rows=4127 loops=1)
+         Buffers: shared hit=18039
+         ->  Index Scan using sales_order_org_status_idx on sales_order so  (cost=0.42..6861.72 rows=20 width=27) (actual time=0.157..2.710 rows=2441 loops=1)
+               Index Cond: ((org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid) AND (status = ANY ('{PAID,FULFILLING,FULFILLED,CLOSED}'::order_status[])))
+               Filter: ((COALESCE(placed_at, created_at) >= '2025-09-03 00:00:00+00'::timestamp with time zone) AND (COALESCE(placed_at, created_at) < '2026-09-04 00:00:00+00'::timestamp with time zone))
+               Rows Removed by Filter: 1644
+               Buffers: shared hit=4109
+         ->  Index Scan using sales_order_line_order_idx on sales_order_line l  (cost=0.43..12.46 rows=2 width=45) (actual time=0.006..0.006 rows=2 loops=2441)
+               Index Cond: (sales_order_id = so.id)
+               Buffers: shared hit=13930
+ Planning:
+   Buffers: shared hit=26
+ Planning Time: 0.681 ms
+ Execution Time: 23.673 ms
+(16 rows)
+
+                                                                                                 QUERY PLAN                                                                                                 
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=7113.08..7113.09 rows=1 width=112) (actual time=22.520..22.521 rows=1 loops=1)
+   Buffers: shared hit=18039
+   ->  Nested Loop  (cost=0.85..7111.37 rows=34 width=40) (actual time=0.171..17.833 rows=4127 loops=1)
+         Buffers: shared hit=18039
+         ->  Index Scan using sales_order_org_status_idx on sales_order so  (cost=0.42..6861.72 rows=20 width=27) (actual time=0.145..3.360 rows=2441 loops=1)
+               Index Cond: ((org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid) AND (status = ANY ('{PAID,FULFILLING,FULFILLED,CLOSED}'::order_status[])))
+               Filter: ((COALESCE(placed_at, created_at) >= '2025-09-03 00:00:00+00'::timestamp with time zone) AND (COALESCE(placed_at, created_at) < '2026-09-04 00:00:00+00'::timestamp with time zone))
+               Rows Removed by Filter: 1644
+               Buffers: shared hit=4109
+         ->  Index Scan using sales_order_line_order_idx on sales_order_line l  (cost=0.43..12.46 rows=2 width=45) (actual time=0.005..0.005 rows=2 loops=2441)
+               Index Cond: (sales_order_id = so.id)
+               Buffers: shared hit=13930
+ Planning:
+   Buffers: shared hit=17
+ Planning Time: 0.533 ms
+ Execution Time: 22.622 ms
+(16 rows)
+
+===== 2b. the same total over the default 30-day window
+                                                                                                 QUERY PLAN                                                                                                 
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=7113.08..7113.09 rows=1 width=112) (actual time=3.613..3.615 rows=1 loops=1)
+   Buffers: shared hit=4109
+   ->  Nested Loop  (cost=0.85..7111.37 rows=34 width=40) (actual time=3.606..3.607 rows=0 loops=1)
+         Buffers: shared hit=4109
+         ->  Index Scan using sales_order_org_status_idx on sales_order so  (cost=0.42..6861.72 rows=20 width=27) (actual time=3.604..3.604 rows=0 loops=1)
+               Index Cond: ((org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid) AND (status = ANY ('{PAID,FULFILLING,FULFILLED,CLOSED}'::order_status[])))
+               Filter: ((COALESCE(placed_at, created_at) >= '2026-08-05 00:00:00+00'::timestamp with time zone) AND (COALESCE(placed_at, created_at) < '2026-09-04 00:00:00+00'::timestamp with time zone))
+               Rows Removed by Filter: 4085
+               Buffers: shared hit=4109
+         ->  Index Scan using sales_order_line_order_idx on sales_order_line l  (cost=0.43..12.46 rows=2 width=45) (never executed)
+               Index Cond: (sales_order_id = so.id)
+ Planning:
+   Buffers: shared hit=17
+ Planning Time: 0.639 ms
+ Execution Time: 3.723 ms
+(15 rows)
+
+===== 3a. inventory-valuation BEFORE (the shipped query)
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=5762.39..5762.40 rows=1 width=56) (actual time=572.821..572.823 rows=1 loops=1)
+   Buffers: shared hit=2999 read=596
+   ->  Nested Loop  (cost=29.63..5751.55 rows=619 width=10) (actual time=0.332..569.772 rows=612 loops=1)
+         Buffers: shared hit=2999 read=596
+         ->  Bitmap Heap Scan on inventory i  (cost=29.21..1344.74 rows=619 width=20) (actual time=0.302..547.284 rows=612 loops=1)
+               Recheck Cond: (org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid)
+               Heap Blocks: exact=604
+               Buffers: shared hit=18 read=593
+               ->  Bitmap Index Scan on inventory_pk  (cost=0.00..29.06 rows=619 width=0) (actual time=0.201..0.202 rows=612 loops=1)
+                     Index Cond: (org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid)
+                     Buffers: shared hit=7
+         ->  Index Scan using product_pkey on product p  (cost=0.42..7.12 rows=1 width=22) (actual time=0.029..0.029 rows=1 loops=612)
+               Index Cond: (id = i.product_id)
+               Buffers: shared hit=2981 read=3
+ Planning:
+   Buffers: shared hit=20
+ Planning Time: 0.726 ms
+ Execution Time: 573.079 ms
+(18 rows)
+
+===== 3b. inventory-valuation AFTER (+ cost_value, uncosted_products, uncosted_units) — run twice
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=5770.13..5770.14 rows=1 width=104) (actual time=5.412..5.413 rows=1 loops=1)
+   Buffers: shared hit=3595
+   ->  Nested Loop  (cost=29.63..5751.55 rows=619 width=26) (actual time=0.345..5.059 rows=612 loops=1)
+         Buffers: shared hit=3595
+         ->  Bitmap Heap Scan on inventory i  (cost=29.21..1344.74 rows=619 width=20) (actual time=0.294..1.366 rows=612 loops=1)
+               Recheck Cond: (org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid)
+               Heap Blocks: exact=604
+               Buffers: shared hit=611
+               ->  Bitmap Index Scan on inventory_pk  (cost=0.00..29.06 rows=619 width=0) (actual time=0.207..0.207 rows=612 loops=1)
+                     Index Cond: (org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid)
+                     Buffers: shared hit=7
+         ->  Index Scan using product_pkey on product p  (cost=0.42..7.12 rows=1 width=38) (actual time=0.005..0.005 rows=1 loops=612)
+               Index Cond: (id = i.product_id)
+               Buffers: shared hit=2984
+ Planning:
+   Buffers: shared hit=8
+ Planning Time: 0.428 ms
+ Execution Time: 5.549 ms
+(18 rows)
+
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=5770.13..5770.14 rows=1 width=104) (actual time=3.876..3.877 rows=1 loops=1)
+   Buffers: shared hit=3595
+   ->  Nested Loop  (cost=29.63..5751.55 rows=619 width=26) (actual time=0.290..3.607 rows=612 loops=1)
+         Buffers: shared hit=3595
+         ->  Bitmap Heap Scan on inventory i  (cost=29.21..1344.74 rows=619 width=20) (actual time=0.262..0.890 rows=612 loops=1)
+               Recheck Cond: (org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid)
+               Heap Blocks: exact=604
+               Buffers: shared hit=611
+               ->  Bitmap Index Scan on inventory_pk  (cost=0.00..29.06 rows=619 width=0) (actual time=0.170..0.170 rows=612 loops=1)
+                     Index Cond: (org_id = 'de431e06-e924-4069-80bb-ae526ec01269'::uuid)
+                     Buffers: shared hit=7
+         ->  Index Scan using product_pkey on product p  (cost=0.42..7.12 rows=1 width=38) (actual time=0.004..0.004 rows=1 loops=612)
+               Index Cond: (id = i.product_id)
+               Buffers: shared hit=2984
+ Planning:
+   Buffers: shared hit=8
+ Planning Time: 0.430 ms
+ Execution Time: 4.000 ms
+(18 rows)
+
+===== 4. the numbers the costed org would report (sanity: the arithmetic on real rows)
+ quantity | costed_quantity | costed_net_sales |    cost     | gross_profit 
+----------+-----------------+------------------+-------------+--------------
+    10204 |           10204 |      54269930.54 | 24647767.84 |  29622162.70
+(1 row)
+
+ROLLBACK
+===== 5. rolled back:
+psql:/tmp/explain_cost.sql:130: error: unterminated quoted string
+ products | costed 
+----------+--------
+      728 |      0
+(1 row)
+
+ costed_lines 
+--------------
+            0
+(1 row)
+

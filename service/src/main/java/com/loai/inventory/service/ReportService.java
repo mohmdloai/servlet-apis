@@ -3,9 +3,11 @@ package com.loai.inventory.service;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.report.AgingBand;
 import com.loai.inventory.domain.model.report.InventoryValuation;
+import com.loai.inventory.domain.model.report.ProfitTotals;
 import com.loai.inventory.domain.model.report.RevenuePoint;
 import com.loai.inventory.domain.model.report.SalesPoint;
 import com.loai.inventory.domain.model.report.TopProduct;
+import com.loai.inventory.domain.model.report.TopProductSort;
 import com.loai.inventory.domain.repository.ReportRepository;
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -13,6 +15,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
@@ -45,7 +48,7 @@ public final class ReportService {
     this.reports = reports;
   }
 
-  // ── G1 · revenue ────────────────────────────────────────────────────────────
+  // G1 · revenue
 
   public RevenueReport revenue(UUID orgId, String fromParam, String toParam, String bucketParam) {
     Window w = window(fromParam, toParam);
@@ -72,7 +75,7 @@ public final class ReportService {
       BigDecimal totalCollected,
       BigDecimal totalRefunded) {}
 
-  // ── G2 · sales by channel ──────────────────────────────────────────────────
+  // G2 · sales by channel
 
   public SalesReport sales(
       UUID orgId, String fromParam, String toParam, String bucketParam, String channelParam) {
@@ -99,22 +102,42 @@ public final class ReportService {
       long totalOrders,
       BigDecimal totalGross) {}
 
-  // ── G3 · top products ──────────────────────────────────────────────────────
+  // G3 · top products
 
   public TopProductsReport topProducts(
       UUID orgId, String fromParam, String toParam, String byParam, String limitParam) {
     Window w = window(fromParam, toParam);
-    boolean byRevenue = by(byParam);
+    TopProductSort sort = by(byParam);
     int limit = topLimit(limitParam);
-    List<TopProduct> items = reports.topProducts(orgId, w.from(), w.to(), byRevenue, limit);
+    List<TopProduct> items = reports.topProducts(orgId, w.from(), w.to(), sort, limit);
     return new TopProductsReport(
-        w.from(), w.to(), byRevenue ? "revenue" : "quantity", limit, items);
+        w.from(), w.to(), sort.name().toLowerCase(Locale.ROOT), limit, items);
   }
 
   public record TopProductsReport(
       OffsetDateTime from, OffsetDateTime to, String by, int limit, List<TopProduct> items) {}
 
-  // ── G4 · AR aging ──────────────────────────────────────────────────────────
+  /**
+   * Is this {@code ?by=} the MANAGER-plane sort? Answered here (the one place that parses the
+   * parameter) so the handler can refuse it with a 403 before the query runs — an unknown value is
+   * still the ordinary 400 from {@link #topProducts}, not a 403 that would confirm the option
+   * exists.
+   */
+  public static boolean isProfitSort(String byParam) {
+    return byParam != null && byParam.trim().equalsIgnoreCase("profit");
+  }
+
+  // G6 · profit (stories/product_cost_and_margin.md)
+
+  /** The window's cost of goods + gross profit; common windowed-parameter rules verbatim. */
+  public ProfitReport profit(UUID orgId, String fromParam, String toParam) {
+    Window w = window(fromParam, toParam);
+    return new ProfitReport(w.from(), w.to(), reports.profit(orgId, w.from(), w.to()));
+  }
+
+  public record ProfitReport(OffsetDateTime from, OffsetDateTime to, ProfitTotals totals) {}
+
+  // G4 · AR aging
 
   public ArAgingReport arAging(UUID orgId, String bucketsParam) {
     int[] edges = agingEdges(bucketsParam);
@@ -133,7 +156,7 @@ public final class ReportService {
   public record ArAgingReport(
       OffsetDateTime asOf, List<AgingBand> bands, long totalCount, BigDecimal totalOutstanding) {}
 
-  // ── G5 · inventory valuation ───────────────────────────────────────────────
+  // G5 · inventory valuation
 
   public InventoryValuationReport inventoryValuation(UUID orgId) {
     return new InventoryValuationReport(
@@ -142,7 +165,7 @@ public final class ReportService {
 
   public record InventoryValuationReport(OffsetDateTime asOf, InventoryValuation valuation) {}
 
-  // ── validation / defaulting ────────────────────────────────────────────────
+  // validation / defaulting
 
   private record Window(OffsetDateTime from, OffsetDateTime to) {}
 
@@ -198,14 +221,21 @@ public final class ReportService {
     return c;
   }
 
-  private static boolean by(String param) {
-    if (param == null || param.isBlank() || param.equalsIgnoreCase("revenue")) {
-      return true;
+  private static TopProductSort by(String param) {
+    if (param == null || param.isBlank()) {
+      return TopProductSort.REVENUE;
     }
-    if (param.equalsIgnoreCase("quantity")) {
-      return false;
+    String p = param.trim();
+    if (p.equalsIgnoreCase("revenue")) {
+      return TopProductSort.REVENUE;
     }
-    throw new ValidationException("'by' must be revenue or quantity");
+    if (p.equalsIgnoreCase("quantity")) {
+      return TopProductSort.QUANTITY;
+    }
+    if (p.equalsIgnoreCase("profit")) {
+      return TopProductSort.PROFIT;
+    }
+    throw new ValidationException("'by' must be revenue, quantity or profit");
   }
 
   private static int topLimit(String param) {

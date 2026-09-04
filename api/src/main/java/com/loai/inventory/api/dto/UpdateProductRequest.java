@@ -1,5 +1,6 @@
 package com.loai.inventory.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 
 /** Request body for PUT /api/products/{id} */
@@ -10,6 +11,11 @@ public class UpdateProductRequest {
   private BigDecimal basePrice;
   private String sku;
   private String barcode;
+  // Tri-state cost (stories/product_cost_and_margin.md): the setter records that the key was on
+  // the wire at all, because Jackson hands a plain field the same null for "absent" and for
+  // "explicitly null" — and here those are two different instructions (leave alone vs. clear).
+  private BigDecimal costPrice;
+  private boolean costPricePresent;
 
   public UpdateProductRequest() {}
 
@@ -51,5 +57,20 @@ public class UpdateProductRequest {
 
   public void setBarcode(String barcode) {
     this.barcode = barcode;
+  }
+
+  public BigDecimal getCostPrice() {
+    return costPrice;
+  }
+
+  /** True iff {@code cost_price} appeared in the body (with a value or as {@code null}). */
+  public boolean isCostPricePresent() {
+    return costPricePresent;
+  }
+
+  @JsonProperty("cost_price")
+  public void setCostPrice(BigDecimal costPrice) {
+    this.costPrice = costPrice;
+    this.costPricePresent = true;
   }
 }

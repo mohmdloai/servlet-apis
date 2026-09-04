@@ -34,6 +34,7 @@ public interface InventoryRepository {
       String name,
       String sku,
       BigDecimal basePrice,
+      BigDecimal costPrice,
       boolean tracked,
       Integer stockQty,
       Integer reservedQty,

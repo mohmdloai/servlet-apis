@@ -124,4 +124,24 @@ public final class AuthzHelper {
     }
     return ctx;
   }
+
+  /**
+   * Does the caller hold MANAGER (or OWNER) in {@code orgId}, or platform ADMIN? The one predicate
+   * behind every "money-shaped" question the org plane asks after access is already granted: the
+   * counter-discount gate (stories/counter_discount.md) and, since
+   * stories/product_cost_and_margin.md, whether a cost or any cost-derived figure is written to the
+   * response at all. A pure check — it throws nothing and consults no gate — so callers decide
+   * between "omit the field" and "403". Defined once so the four consumers cannot drift onto four
+   * definitions.
+   */
+  public static boolean hasManagerAuthority(SecurityContext ctx, UUID orgId) {
+    if (ctx == null) {
+      return false;
+    }
+    if (ctx.isSystemAdmin()) {
+      return true;
+    }
+    Set<OrgRole> roles = ctx.orgRoles() == null ? null : ctx.orgRoles().get(orgId);
+    return roles != null && roles.stream().anyMatch(r -> RANK.get(r) >= RANK.get(OrgRole.MANAGER));
+  }
 }

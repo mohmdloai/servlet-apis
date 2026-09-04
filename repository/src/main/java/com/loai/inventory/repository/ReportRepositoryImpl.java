@@ -10,9 +10,11 @@ import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 
 import com.loai.inventory.domain.model.report.AgingBand;
 import com.loai.inventory.domain.model.report.InventoryValuation;
+import com.loai.inventory.domain.model.report.ProfitTotals;
 import com.loai.inventory.domain.model.report.RevenuePoint;
 import com.loai.inventory.domain.model.report.SalesPoint;
 import com.loai.inventory.domain.model.report.TopProduct;
+import com.loai.inventory.domain.model.report.TopProductSort;
 import com.loai.inventory.domain.repository.ReportRepository;
 import com.loai.inventory.repository.generated.enums.InvoiceStatus;
 import com.loai.inventory.repository.generated.enums.OrderChannel;
@@ -31,6 +33,7 @@ import org.jooq.Condition;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Record;
+import org.jooq.SortField;
 import org.jooq.impl.DSL;
 import org.jooq.impl.SQLDataType;
 
@@ -57,7 +60,7 @@ public final class ReportRepositoryImpl implements ReportRepository {
     this.dsl = dsl;
   }
 
-  // ── G1 · revenue ────────────────────────────────────────────────────────────
+  // G1 · revenue
 
   @Override
   public List<RevenuePoint> revenue(
@@ -128,7 +131,7 @@ public final class ReportRepositoryImpl implements ReportRepository {
             r -> utc(r.get("period", OffsetDateTime.class)), r -> r.get("total", BigDecimal.class));
   }
 
-  // ── G2 · sales by channel ──────────────────────────────────────────────────
+  // G2 · sales by channel
 
   @Override
   public List<SalesPoint> sales(
@@ -168,16 +171,95 @@ public final class ReportRepositoryImpl implements ReportRepository {
                     r.get("gross", BigDecimal.class)));
   }
 
-  // ── G3 · top products ──────────────────────────────────────────────────────
+  // G3 · top products
+
+  /**
+   * The profit arithmetic, defined once and consumed by {@link #topProducts} and {@link #profit} so
+   * a product row and the window total are the same expressions at two grains
+   * (stories/product_cost_and_margin.md).
+   *
+   * <ul>
+   *   <li>{@code discountShare} — the order's discount (coupon V72 / counter discount V88, recorded
+   *       on the order, off the goods subtotal) prorated onto the line by its subtotal share: the
+   *       rule {@code InvoiceService.discountToBill} applies when an order is invoiced in parts.
+   *       {@code 0} when the order subtotal is {@code 0} (every line priced at 0.00 — no discount
+   *       to share). Postgres {@code round()} is half-up; the invoice's Java HALF_EVEN differs from
+   *       it only at an exact half piastre, immaterial for a ranking / summary read.
+   *   <li>{@code netSales} — the ex-tax, ex-shipping line subtotal minus that share. The shipped
+   *       {@code revenue} stays {@code Σ line_total} (tax-inclusive); a margin against a
+   *       tax-inclusive base would be wrong by the tax rate.
+   *   <li>{@code cost} — {@code quantity × unit_cost}, a raw fragment so the Integer × Numeric
+   *       product stays NUMERIC (the valuation query's own precedent).
+   *   <li>Every cost aggregate is {@code FILTER (WHERE unit_cost IS NOT NULL)} — over the
+   *       <b>costed</b> lines only, with {@code costedQuantity} beside them so a client can say how
+   *       many units the figure speaks for. An aggregate over zero costed lines is SQL {@code
+   *       NULL}, which the mappers keep: absent, never {@code 0}.
+   * </ul>
+   */
+  private static final class ProfitFields {
+    static final Condition COSTED = SALES_ORDER_LINE.UNIT_COST.isNotNull();
+
+    static final Field<BigDecimal> DISCOUNT_SHARE =
+        DSL.field(
+            "case when {0} > 0 then round({1} * {2} / {0}, 2) else 0 end",
+            BigDecimal.class,
+            SALES_ORDER.SUBTOTAL,
+            SALES_ORDER.DISCOUNT_TOTAL,
+            SALES_ORDER_LINE.LINE_SUBTOTAL);
+
+    static final Field<BigDecimal> NET_SALES = SALES_ORDER_LINE.LINE_SUBTOTAL.minus(DISCOUNT_SHARE);
+
+    static final Field<BigDecimal> COST =
+        DSL.field(
+            "{0} * {1}", BigDecimal.class, SALES_ORDER_LINE.QUANTITY, SALES_ORDER_LINE.UNIT_COST);
+
+    static Field<BigDecimal> costedQuantity() {
+      return DSL.coalesce(DSL.sum(SALES_ORDER_LINE.QUANTITY).filterWhere(COSTED), BigDecimal.ZERO);
+    }
+
+    static Field<BigDecimal> costedNetSales() {
+      return DSL.sum(NET_SALES).filterWhere(COSTED);
+    }
+
+    static Field<BigDecimal> cost() {
+      return DSL.sum(COST).filterWhere(COSTED);
+    }
+
+    static Field<BigDecimal> grossProfit() {
+      return DSL.sum(NET_SALES.minus(COST)).filterWhere(COSTED);
+    }
+  }
 
   @Override
   public List<TopProduct> topProducts(
-      UUID orgId, OffsetDateTime from, OffsetDateTime to, boolean byRevenue, int limit) {
+      UUID orgId, OffsetDateTime from, OffsetDateTime to, TopProductSort sort, int limit) {
     Field<OffsetDateTime> saleTs = DSL.coalesce(SALES_ORDER.PLACED_AT, SALES_ORDER.CREATED_AT);
     Field<BigDecimal> quantity = DSL.sum(SALES_ORDER_LINE.QUANTITY).as("quantity");
     Field<BigDecimal> revenue = DSL.sum(SALES_ORDER_LINE.LINE_TOTAL).as("revenue");
+    Field<BigDecimal> costedQuantity = ProfitFields.costedQuantity().as("costed_quantity");
+    Field<BigDecimal> costedNetSales = ProfitFields.costedNetSales().as("costed_net_sales");
+    Field<BigDecimal> cost = ProfitFields.cost().as("cost");
+    Field<BigDecimal> grossProfit = ProfitFields.grossProfit().as("gross_profit");
 
-    return dsl.select(PRODUCT.ID, PRODUCT.NAME, PRODUCT.SKU, quantity, revenue)
+    // Tie-break on product_id so the capped top-N is deterministic without pagination. PROFIT
+    // ranks uncosted products last (NULLS LAST), never out.
+    SortField<?> primary =
+        switch (sort) {
+          case REVENUE -> revenue.desc();
+          case QUANTITY -> quantity.desc();
+          case PROFIT -> grossProfit.desc().nullsLast();
+        };
+
+    return dsl.select(
+            PRODUCT.ID,
+            PRODUCT.NAME,
+            PRODUCT.SKU,
+            quantity,
+            revenue,
+            costedQuantity,
+            costedNetSales,
+            cost,
+            grossProfit)
         .from(SALES_ORDER_LINE)
         .join(SALES_ORDER)
         .on(SALES_ORDER_LINE.SALES_ORDER_ID.eq(SALES_ORDER.ID))
@@ -190,8 +272,7 @@ public final class ReportRepositoryImpl implements ReportRepository {
                 .and(SALES_ORDER.STATUS.in(SALE_STATUSES))
                 .and(window(saleTs, from, to)))
         .groupBy(PRODUCT.ID, PRODUCT.NAME, PRODUCT.SKU)
-        // Tie-break on product_id so the capped top-N is deterministic without pagination.
-        .orderBy(byRevenue ? revenue.desc() : quantity.desc(), PRODUCT.ID.asc())
+        .orderBy(primary, PRODUCT.ID.asc())
         .limit(limit)
         .fetch(
             r ->
@@ -200,10 +281,45 @@ public final class ReportRepositoryImpl implements ReportRepository {
                     r.get(PRODUCT.NAME),
                     r.get(PRODUCT.SKU),
                     r.get(quantity).longValueExact(),
-                    r.get(revenue)));
+                    r.get(revenue),
+                    r.get(costedQuantity).longValueExact(),
+                    r.get(costedNetSales),
+                    r.get(cost),
+                    r.get(grossProfit)));
   }
 
-  // ── G4 · AR aging ──────────────────────────────────────────────────────────
+  @Override
+  public ProfitTotals profit(UUID orgId, OffsetDateTime from, OffsetDateTime to) {
+    Field<OffsetDateTime> saleTs = DSL.coalesce(SALES_ORDER.PLACED_AT, SALES_ORDER.CREATED_AT);
+    Field<BigDecimal> quantity =
+        DSL.coalesce(DSL.sum(SALES_ORDER_LINE.QUANTITY), BigDecimal.ZERO).as("quantity");
+    Field<BigDecimal> costedQuantity = ProfitFields.costedQuantity().as("costed_quantity");
+    Field<BigDecimal> costedNetSales = ProfitFields.costedNetSales().as("costed_net_sales");
+    Field<BigDecimal> cost = ProfitFields.cost().as("cost");
+    Field<BigDecimal> grossProfit = ProfitFields.grossProfit().as("gross_profit");
+
+    Record r =
+        dsl.select(quantity, costedQuantity, costedNetSales, cost, grossProfit)
+            .from(SALES_ORDER_LINE)
+            .join(SALES_ORDER)
+            .on(SALES_ORDER_LINE.SALES_ORDER_ID.eq(SALES_ORDER.ID))
+            .where(
+                SALES_ORDER
+                    .ORG_ID
+                    .eq(orgId)
+                    .and(SALES_ORDER.STATUS.in(SALE_STATUSES))
+                    .and(window(saleTs, from, to)))
+            .fetchOne();
+
+    return new ProfitTotals(
+        r.get(quantity).longValueExact(),
+        r.get(costedQuantity).longValueExact(),
+        r.get(costedNetSales),
+        r.get(cost),
+        r.get(grossProfit));
+  }
+
+  // G4 · AR aging
 
   @Override
   public List<AgingBand> arAging(UUID orgId, int[] edges, OffsetDateTime asOf) {
@@ -264,20 +380,32 @@ public final class ReportRepositoryImpl implements ReportRepository {
     return (edges[i - 1] + 1) + "-" + edges[i];
   }
 
-  // ── G5 · inventory valuation ───────────────────────────────────────────────
+  // G5 · inventory valuation
 
   @Override
   public InventoryValuation inventoryValuation(UUID orgId) {
-    // stock_qty * base_price kept as a raw fragment so the Integer×Numeric product stays NUMERIC
-    // (jOOQ's typed .mul would coerce to the Integer LHS and truncate the money).
+    // stock_qty * price kept as raw fragments so the Integer×Numeric product stays NUMERIC (jOOQ's
+    // typed .mul would coerce to the Integer LHS and truncate the money).
     Field<BigDecimal> retail =
         DSL.field("coalesce(sum(inventory.stock_qty * product.base_price), 0)", BigDecimal.class);
+    // Over the COSTED products only, and deliberately NOT coalesced: no costed product → SQL NULL →
+    // the key is absent, never a 0 that reads "the shelf is worth nothing".
+    Field<BigDecimal> costValue =
+        DSL.field(
+            "sum(inventory.stock_qty * product.cost_price) filter (where product.cost_price is not"
+                + " null)",
+            BigDecimal.class);
+    Condition uncosted = PRODUCT.COST_PRICE.isNull();
     Record r =
         dsl.select(
                 DSL.count().as("tracked"),
                 DSL.coalesce(DSL.sum(INVENTORY.STOCK_QTY), BigDecimal.ZERO).as("units"),
                 retail.as("retail"),
-                DSL.count().filterWhere(INVENTORY.STOCK_QTY.eq(0)).as("oos"))
+                DSL.count().filterWhere(INVENTORY.STOCK_QTY.eq(0)).as("oos"),
+                costValue.as("cost_value"),
+                DSL.count().filterWhere(uncosted).as("uncosted_products"),
+                DSL.coalesce(DSL.sum(INVENTORY.STOCK_QTY).filterWhere(uncosted), BigDecimal.ZERO)
+                    .as("uncosted_units"))
             .from(INVENTORY)
             .join(PRODUCT)
             .on(INVENTORY.PRODUCT_ID.eq(PRODUCT.ID))
@@ -288,10 +416,13 @@ public final class ReportRepositoryImpl implements ReportRepository {
         r.get("tracked", Long.class),
         r.get("units", BigDecimal.class).longValueExact(),
         r.get("retail", BigDecimal.class),
-        r.get("oos", Long.class));
+        r.get("oos", Long.class),
+        r.get("cost_value", BigDecimal.class),
+        r.get("uncosted_products", Long.class),
+        r.get("uncosted_units", BigDecimal.class).longValueExact());
   }
 
-  // ── shared helpers ─────────────────────────────────────────────────────────
+  // shared helpers
 
   /** {@code date_trunc(bucket, ts, 'UTC')} — deterministic UTC bucket edges (Postgres 14+). */
   private static Field<OffsetDateTime> truncField(String bucket, Field<OffsetDateTime> ts) {

@@ -274,7 +274,7 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
       return Map.of();
     }
     Map<UUID, ProductSnapshot> result = new HashMap<>();
-    dsl.select(PRODUCT.ID, PRODUCT.NAME, PRODUCT.BASE_PRICE)
+    dsl.select(PRODUCT.ID, PRODUCT.NAME, PRODUCT.BASE_PRICE, PRODUCT.COST_PRICE)
         .from(PRODUCT)
         .where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.ID.in(productIds)))
         .fetch()
@@ -283,7 +283,10 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
                 result.put(
                     r.get(PRODUCT.ID),
                     new ProductSnapshot(
-                        r.get(PRODUCT.ID), r.get(PRODUCT.NAME), r.get(PRODUCT.BASE_PRICE))));
+                        r.get(PRODUCT.ID),
+                        r.get(PRODUCT.NAME),
+                        r.get(PRODUCT.BASE_PRICE),
+                        r.get(PRODUCT.COST_PRICE))));
     return result;
   }
 
@@ -436,6 +439,7 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
         r.setDescription(line.getDescription());
         r.setQuantity(line.getQuantity());
         r.setUnitPrice(line.getUnitPrice());
+        r.setUnitCost(line.getUnitCost());
         r.setTaxRate(line.getTaxRate());
         r.setLineSubtotal(line.getLineSubtotal());
         r.setLineTax(line.getLineTax());
@@ -542,6 +546,7 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
         r.getDescription(),
         r.getQuantity(),
         r.getUnitPrice(),
+        r.getUnitCost(),
         r.getTaxRate(),
         r.getLineSubtotal(),
         r.getLineTax(),

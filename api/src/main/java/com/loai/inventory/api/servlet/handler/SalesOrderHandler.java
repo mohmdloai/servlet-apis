@@ -477,11 +477,9 @@ public class SalesOrderHandler implements OrgResourceHandler {
    * and an OWNER at the till must clear a MANAGER bar.
    */
   static boolean isManagerOrAdmin(SecurityContext sc, UUID orgId) {
-    if (sc.isSystemAdmin()) {
-      return true;
-    }
-    var roles = sc.orgRoles() == null ? null : sc.orgRoles().get(orgId);
-    return roles != null && (roles.contains(OrgRole.MANAGER) || roles.contains(OrgRole.OWNER));
+    // Promoted to AuthzHelper (stories/product_cost_and_margin.md) so the cost-visibility gate and
+    // this discount gate are one definition; kept as the local name its tests and callers use.
+    return AuthzHelper.hasManagerAuthority(sc, orgId);
   }
 
   private <T> T readBody(HttpServletRequest req, Class<T> type) throws IOException {

@@ -2,9 +2,11 @@ package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.report.AgingBand;
 import com.loai.inventory.domain.model.report.InventoryValuation;
+import com.loai.inventory.domain.model.report.ProfitTotals;
 import com.loai.inventory.domain.model.report.RevenuePoint;
 import com.loai.inventory.domain.model.report.SalesPoint;
 import com.loai.inventory.domain.model.report.TopProduct;
+import com.loai.inventory.domain.model.report.TopProductSort;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -33,13 +35,19 @@ public interface ReportRepository {
       UUID orgId, String bucket, OffsetDateTime from, OffsetDateTime to, String channel);
 
   /**
-   * Top products by revenue or quantity over money-committed orders.
-   *
-   * @param byRevenue sort key: {@code true} = revenue desc, {@code false} = quantity desc; ties
-   *     broken {@code product_id ASC}
+   * Top products by revenue, quantity or gross profit over money-committed orders; ties broken
+   * {@code product_id ASC}. The cost figures on every row are always computed (cheap {@code FILTER}
+   * sums on a query that runs anyway) — the handler decides whether they cross the wire.
    */
   List<TopProduct> topProducts(
-      UUID orgId, OffsetDateTime from, OffsetDateTime to, boolean byRevenue, int limit);
+      UUID orgId, OffsetDateTime from, OffsetDateTime to, TopProductSort sort, int limit);
+
+  /**
+   * The window's totals over the same lines and expressions as {@link #topProducts}: units sold,
+   * costed units, and the costed lines' net sales / cost / gross profit
+   * (stories/product_cost_and_margin.md).
+   */
+  ProfitTotals profit(UUID orgId, OffsetDateTime from, OffsetDateTime to);
 
   /**
    * Outstanding-invoice money bucketed by age. Returns every band (zero-filled), ordered youngest

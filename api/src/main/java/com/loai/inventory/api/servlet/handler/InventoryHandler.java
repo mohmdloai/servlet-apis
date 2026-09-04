@@ -76,11 +76,11 @@ public class InventoryHandler implements OrgResourceHandler {
 
   private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, PathParts path)
       throws IOException {
-    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
 
     // GET /inventory — the stock-overview list (product-driven; untracked products appear).
     if (path.productId == null) {
-      doGetOverview(req, resp, orgId);
+      doGetOverview(req, resp, orgId, AuthzHelper.hasManagerAuthority(sc, orgId));
       return;
     }
 
@@ -98,7 +98,8 @@ public class InventoryHandler implements OrgResourceHandler {
   }
 
   /** {@code GET /inventory?page=&size=&q=&stock=&low_lte=} — the stock-overview list. */
-  private void doGetOverview(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+  private void doGetOverview(
+      HttpServletRequest req, HttpServletResponse resp, UUID orgId, boolean costVisible)
       throws IOException {
     int page = Math.max(intParam(req, "page", 0), 0);
     int size =
@@ -117,7 +118,10 @@ public class InventoryHandler implements OrgResourceHandler {
         resp,
         200,
         new PageResponse<>(
-            InventoryMapper.toOverviewRows(result.rows(), imageUrls), result.total(), page, size));
+            InventoryMapper.toOverviewRows(result.rows(), imageUrls, costVisible),
+            result.total(),
+            page,
+            size));
   }
 
   /** {@code GET /inventory/{productId}/log?page=&size=} — the movement ledger. */

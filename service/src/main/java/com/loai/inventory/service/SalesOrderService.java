@@ -990,6 +990,9 @@ public class SalesOrderService {
       // shopper saw (slice L2b); online/in-store lines snapshot the internal product.name.
       String description =
           in.descriptionOverride() != null ? in.descriptionOverride() : snap.description();
+      // Every channel freezes the product's cost_price here (V92) — there is no override, because
+      // what a unit cost the merchant is never something the caller gets to say. Null stays null:
+      // an uncosted product's sale is counted as "uncosted" by the reports, not costed at zero.
       SalesOrderLine line =
           SalesOrderLine.create(
               UUID.randomUUID(),
@@ -998,6 +1001,7 @@ public class SalesOrderService {
               description,
               in.quantity(),
               unitPrice,
+              snap.unitCost(),
               org.getTaxRate());
       orderLines.add(line);
       subtotal = subtotal.add(line.getLineSubtotal());

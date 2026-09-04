@@ -34,7 +34,7 @@ public class ProductService {
     this.dsl = dsl;
   }
 
-  // ── Queries
+  // Queries
 
   public Product getById(UUID orgId, UUID id) {
     return repo.findById(orgId, id).orElseThrow(() -> new NotFoundException("Product", id));
@@ -69,8 +69,28 @@ public class ProductService {
     return repo.count(orgId, q);
   }
 
-  // ── Commands
+  // Commands
 
+  /**
+   * A cost on a product write, as a tri-state (stories/product_cost_and_margin.md): the key absent
+   * from the body leaves the cost as it is ({@link #unchanged()}); present and {@code null} clears
+   * it; present with a value sets it. Jackson cannot tell absent from null on a plain field, which
+   * is why the request DTOs track presence in the setter and hand this object over — and why the
+   * STAFF product form can keep doing a full-replace PUT without the key and never touch a cost it
+   * is not allowed to see.
+   */
+  public record CostPriceChange(boolean present, BigDecimal value) {
+    public static CostPriceChange unchanged() {
+      return new CostPriceChange(false, null);
+    }
+
+    /** Present on the wire: {@code null} clears, a value sets. */
+    public static CostPriceChange to(BigDecimal value) {
+      return new CostPriceChange(true, value);
+    }
+  }
+
+  /** Create without touching cost — the pre-V92 shape, kept for existing callers and tests. */
   public Product create(
       UUID orgId,
       String name,
@@ -78,9 +98,21 @@ public class ProductService {
       BigDecimal basePrice,
       String sku,
       String barcode) {
+    return create(orgId, name, description, basePrice, sku, barcode, CostPriceChange.unchanged());
+  }
+
+  public Product create(
+      UUID orgId,
+      String name,
+      String description,
+      BigDecimal basePrice,
+      String sku,
+      String barcode,
+      CostPriceChange costPrice) {
     String normalizedName = Text.normalizeText(name);
     String normalizedDescription = Text.normalizeText(description);
     validateProductFields(normalizedName, basePrice, sku);
+    BigDecimal normalizedCost = normalizeCostPrice(costPrice);
     String normalizedBarcode = normalizeBarcode(barcode);
 
     return dsl.transactionResult(
@@ -97,6 +129,8 @@ public class ProductService {
           product.setName(normalizedName);
           product.setDescription(normalizedDescription);
           product.setBasePrice(basePrice);
+          // Absent on create means "not costed" — there is nothing to leave unchanged yet.
+          product.setCostPrice(costPrice.present() ? normalizedCost : null);
           product.setSku(sku);
           product.setBarcode(normalizedBarcode);
 
@@ -106,6 +140,7 @@ public class ProductService {
         });
   }
 
+  /** Update without touching cost — the pre-V92 shape, kept for existing callers and tests. */
   public Product update(
       UUID orgId,
       UUID id,
@@ -114,9 +149,23 @@ public class ProductService {
       BigDecimal basePrice,
       String sku,
       String barcode) {
+    return update(
+        orgId, id, name, description, basePrice, sku, barcode, CostPriceChange.unchanged());
+  }
+
+  public Product update(
+      UUID orgId,
+      UUID id,
+      String name,
+      String description,
+      BigDecimal basePrice,
+      String sku,
+      String barcode,
+      CostPriceChange costPrice) {
     String normalizedName = Text.normalizeText(name);
     String normalizedDescription = Text.normalizeText(description);
     validateProductFields(normalizedName, basePrice, sku);
+    BigDecimal normalizedCost = normalizeCostPrice(costPrice);
     String normalizedBarcode = normalizeBarcode(barcode);
 
     return dsl.transactionResult(
@@ -136,6 +185,9 @@ public class ProductService {
           existing.setName(normalizedName);
           existing.setDescription(normalizedDescription);
           existing.setBasePrice(basePrice);
+          if (costPrice.present()) {
+            existing.setCostPrice(normalizedCost);
+          }
           existing.setSku(sku);
           existing.setBarcode(normalizedBarcode);
 
@@ -176,6 +228,20 @@ public class ProductService {
           }
           log.info("Deleted product id={} orgId={}", id, orgId);
         });
+  }
+
+  /**
+   * Validate and scale a present cost; {@code null} (absent or clear) passes through. Scaled to
+   * money here so the stored value and the echoed value agree from the first read.
+   */
+  private static BigDecimal normalizeCostPrice(CostPriceChange change) {
+    if (change == null || !change.present() || change.value() == null) {
+      return null;
+    }
+    if (change.value().compareTo(BigDecimal.ZERO) < 0) {
+      throw new ValidationException("cost_price must be >= 0");
+    }
+    return change.value().setScale(2, java.math.RoundingMode.HALF_EVEN);
   }
 
   private void validateProductFields(String name, BigDecimal basePrice, String sku) {
