@@ -422,6 +422,77 @@ public final class DocumentRenderService {
     return new RenderedDocument(fileName(slip.number(), "return", ".escpos"), bytes);
   }
 
+  /**
+   * The shift slip ({@code stories/cash_shift.md} §The slip): the drawer-day's figures in the order
+   * the owner reads them — float, cash in, cash out, movements, EXPECTED, then the count and the
+   * over/short once closed, then the non-cash context. No lines, no barcode; the same raster
+   * painter as the receipt, so it comes out of the same printer.
+   */
+  public RenderedDocument renderShiftSlipEscpos(
+      UUID orgId, com.loai.inventory.service.CashShiftService.Detail detail, int width) {
+    Org org = org(orgId);
+    var view = detail.view();
+    var shift = view.shift();
+    var totals = view.totals();
+    boolean open = shift.isOpen();
+
+    List<SlipModel.Row> meta = new ArrayList<>();
+    meta.add(new SlipModel.Row("Opened", fmtDate(shift.getOpenedAt())));
+    if (view.openedBy() != null && !blank(view.openedBy().name())) {
+      meta.add(new SlipModel.Row("By", view.openedBy().name()));
+    }
+    if (!open) {
+      meta.add(new SlipModel.Row("Closed", fmtDate(shift.getClosedAt())));
+      if (view.closedBy() != null && !blank(view.closedBy().name())) {
+        meta.add(new SlipModel.Row("Closed by", view.closedBy().name()));
+      }
+    }
+
+    List<SlipModel.Row> totalRows = new ArrayList<>();
+    totalRows.add(new SlipModel.Row("Starting cash", money(shift.getStartingCash())));
+    totalRows.add(new SlipModel.Row("Cash sales", money(totals.cashSales())));
+    totalRows.add(new SlipModel.Row("Change given", "-" + money(totals.changeGiven())));
+    totalRows.add(new SlipModel.Row("Cash refunds", "-" + money(totals.cashRefunds())));
+    totalRows.add(new SlipModel.Row("Pay-ins", money(totals.payIn())));
+    totalRows.add(new SlipModel.Row("Pay-outs", "-" + money(totals.payOut())));
+
+    List<SlipModel.Row> after = new ArrayList<>();
+    if (!open) {
+      after.add(new SlipModel.Row("Counted", money(shift.getCountedCash())));
+      BigDecimal diff = view.difference();
+      String signed = diff.signum() > 0 ? "+" + money(diff) : money(diff);
+      after.add(
+          new SlipModel.Row(
+              diff.signum() < 0 ? "SHORT" : diff.signum() > 0 ? "OVER" : "Exact", signed));
+    }
+    after.add(new SlipModel.Row("InstaPay", money(totals.instapayTotal())));
+    after.add(new SlipModel.Row("Receipts", String.valueOf(totals.receipts())));
+    if (nz(totals.discounts()).signum() > 0) {
+      after.add(new SlipModel.Row("Discounts", money(totals.discounts())));
+    }
+
+    SlipModel m =
+        new SlipModel(
+            headerName(org),
+            orgAddressLines(org),
+            logoBytes(org),
+            open ? "SHIFT (OPEN)" : "SHIFT",
+            null,
+            meta,
+            List.of(),
+            totalRows,
+            new SlipModel.Row("EXPECTED", money(view.expectedCash())),
+            after,
+            null,
+            null,
+            null,
+            open ? "Shift still open" : "Thank you!");
+    String stamp =
+        shift.getOpenedAt().withOffsetSameInstant(ZoneOffset.UTC).toLocalDate().toString();
+    byte[] bytes = Escpos.encode(SlipRaster.paint(m, width));
+    return new RenderedDocument(fileName("SHIFT-" + stamp, "shift", ".escpos"), bytes);
+  }
+
   private record ReturnSlip(String number, SlipModel model) {}
 
   private ReturnSlip returnSlip(UUID orgId, UUID creditNoteId) {

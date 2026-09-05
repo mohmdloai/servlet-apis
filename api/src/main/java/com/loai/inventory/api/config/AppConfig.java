@@ -58,6 +58,8 @@ import com.loai.inventory.domain.repository.StorefrontPageRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
+import com.loai.inventory.repository.CashMovementRepositoryFactoryImpl;
+import com.loai.inventory.repository.CashShiftRepositoryFactoryImpl;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.CollectionRepositoryFactoryImpl;
 import com.loai.inventory.repository.CouponRepositoryFactoryImpl;
@@ -103,6 +105,7 @@ import com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl;
 import com.loai.inventory.repository.StorefrontPageRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
+import com.loai.inventory.service.CashShiftService;
 import com.loai.inventory.service.CategoryService;
 import com.loai.inventory.service.CollectionService;
 import com.loai.inventory.service.CounterReturnService;
@@ -335,6 +338,7 @@ public class AppConfig {
   public final InventoryService inventoryService;
   public final ReservationService reservationService;
   public final SalesOrderService salesOrderService;
+  public final CashShiftService cashShiftService;
   public final OrderExpiryService orderExpiryService;
   public final NumberSequenceReconciliationService numberSequenceReconciliationService;
   public final PaymentService paymentService;
@@ -665,6 +669,15 @@ public class AppConfig {
         new NumberSequenceReconciliationService(dsl, numberSequenceReconciliationRepositoryFactory);
     // NotificationService + MagicLinkService are both constructed above — the ORDER_PAID producer
     // (stories/notify_order_paid.md) mints a fresh order-view link per customer email.
+    // stories/cash_shift.md: the drawer-day every counter tender, change and cash refund is
+    // stamped with. Built before the money services so both take it as their stamper.
+    this.cashShiftService =
+        new CashShiftService(
+            dsl,
+            new CashShiftRepositoryFactoryImpl(),
+            new CashMovementRepositoryFactoryImpl(),
+            orgRepositoryFactory,
+            userRepositoryFactory);
     this.paymentService =
         new PaymentService(
             dsl,
@@ -675,7 +688,8 @@ public class AppConfig {
             inventoryReservationRepositoryFactory,
             notificationService,
             magicLinkService,
-            orgMilestoneService);
+            orgMilestoneService,
+            cashShiftService);
     this.paymentDisputeService =
         new PaymentDisputeService(
             dsl,
@@ -697,7 +711,8 @@ public class AppConfig {
             paymentAllocationRepositoryFactory,
             paymentTransactionRepositoryFactory,
             orgRepositoryFactory,
-            salesOrderRepositoryFactory);
+            salesOrderRepositoryFactory,
+            cashShiftService);
     this.paymentTransactionService =
         new PaymentTransactionService(
             dsl,

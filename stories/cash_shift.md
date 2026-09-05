@@ -10,6 +10,14 @@
 > one thing they lack: which drawer-day they belong to. **Branch `176_feat/cash-shift` off
 > `master`, migration V95.** Frontend pair: `frontst/stories/139_st_cash_shift.md`.
 >
+> **Built 2026-09-05:** V95 + `CashShift`/`CashMovement` + repositories (totals in four small
+> reads) + `CashShiftService` (implements `CashShiftStamper`; the 9-arg `PaymentService` /
+> `RefundService` constructors keep `NONE`, the production wiring passes the service) + the three
+> stamp sites + `CashShiftHandler` + the shift slip. Green: `CashShiftMathTest` 6,
+> `CashShiftHandlerTest` 8, `DocumentRenderServiceTest` 24, `CashShiftIT` 7, the money
+> regression ITs (`InStoreSaleIT` 12 · `SplitTenderIT` 10 · `CounterReturnIT` 17 ·
+> `CreditNoteRefundIT` 22 · `ReceiptEscposIT` 3), service suite 284.
+>
 > **The owner is often the cashier.** This slice is designed for a shop of one first: a shift opens
 > itself on the first counter sale, nothing blocks selling unless the org switches the gate on, the
 > owner closes their own count with no second person, and the report reads as a daily cash diary.

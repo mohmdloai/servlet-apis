@@ -229,7 +229,12 @@ public class OrgService {
    * null} field leaves the stored value unchanged (both columns are NOT NULL DEFAULT 0, so there is
    * no "clear" — set 0 explicitly to turn a knob off).
    */
-  public record StoreConfig(java.math.BigDecimal taxRate, java.math.BigDecimal shippingFee) {}
+  public record StoreConfig(
+      java.math.BigDecimal taxRate, java.math.BigDecimal shippingFee, Boolean shiftRequired) {
+    public StoreConfig(java.math.BigDecimal taxRate, java.math.BigDecimal shippingFee) {
+      this(taxRate, shippingFee, null);
+    }
+  }
 
   /** Mirrors the V68 CHECKs: {@code tax_rate} ∈ [0,1], {@code shipping_fee} ≥ 0. */
   public static void validateStoreConfig(StoreConfig c) {
@@ -252,6 +257,7 @@ public class OrgService {
     }
     if (c.taxRate() != null) org.setTaxRate(c.taxRate());
     if (c.shippingFee() != null) org.setShippingFee(c.shippingFee());
+    if (c.shiftRequired() != null) org.setShiftRequired(c.shiftRequired());
   }
 
   /**

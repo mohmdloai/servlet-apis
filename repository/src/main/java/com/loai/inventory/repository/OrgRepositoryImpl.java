@@ -115,6 +115,7 @@ public final class OrgRepositoryImpl implements OrgRepository {
             .set(ORG.OG_IMAGE_OBJECT_KEY, org.getOgImageObjectKey())
             .set(ORG.TAX_RATE, org.getTaxRate())
             .set(ORG.SHIPPING_FEE, org.getShippingFee())
+            .set(ORG.SHIFT_REQUIRED, org.isShiftRequired())
             .set(ORG.UPDATED_AT, OffsetDateTime.now())
             .where(ORG.ID.eq(org.getId()))
             .returning()
@@ -219,6 +220,7 @@ public final class OrgRepositoryImpl implements OrgRepository {
     org.setOgImageObjectKey(r.getOgImageObjectKey());
     org.setTaxRate(r.getTaxRate());
     org.setShippingFee(r.getShippingFee());
+    org.setShiftRequired(Boolean.TRUE.equals(r.getShiftRequired()));
     return org;
   }
 }

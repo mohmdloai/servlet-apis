@@ -6,6 +6,7 @@ import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.servlet.handler.BannerHandler;
+import com.loai.inventory.api.servlet.handler.CashShiftHandler;
 import com.loai.inventory.api.servlet.handler.CategoryHandler;
 import com.loai.inventory.api.servlet.handler.CollectionHandler;
 import com.loai.inventory.api.servlet.handler.CommentHandler;
@@ -87,6 +88,10 @@ public class OrgServlet extends HttpServlet {
             Map.entry("health", new HealthHandler(config.orgHealthService, mapper)),
             Map.entry("whatsapp", new WhatsAppHandler(config.orgWhatsAppService, mapper)),
             Map.entry("reports", new ReportsHandler(config.reportService, mapper)),
+            Map.entry(
+                "shifts",
+                new CashShiftHandler(
+                    config.cashShiftService, config.documentRenderService, mapper)),
             Map.entry("products", new ProductHandler(config.productService, mapper)),
             Map.entry("categories", new CategoryHandler(config.categoryService, mapper)),
             Map.entry("collections", new CollectionHandler(config.collectionService, mapper)),

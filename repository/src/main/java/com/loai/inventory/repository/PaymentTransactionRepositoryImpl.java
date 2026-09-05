@@ -57,6 +57,7 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
                 com.loai.inventory.repository.generated.enums.PaymentVerificationStatus.valueOf(
                     txn.getVerificationStatus().name()))
             .set(PAYMENT_TRANSACTION.VERIFIED_BY, txn.getVerifiedBy())
+            .set(PAYMENT_TRANSACTION.CASH_SHIFT_ID, txn.getCashShiftId())
             .set(PAYMENT_TRANSACTION.VERIFIED_AT, txn.getVerifiedAt())
             .set(PAYMENT_TRANSACTION.VERIFICATION_PROOF, txn.getVerificationProof())
             .set(PAYMENT_TRANSACTION.RECONCILIATION_STATUS, toReconRecord(txn))
@@ -123,6 +124,7 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
             com.loai.inventory.repository.generated.enums.PaymentVerificationStatus.valueOf(
                 txn.getVerificationStatus().name()))
         .set(PAYMENT_TRANSACTION.VERIFIED_BY, txn.getVerifiedBy())
+        .set(PAYMENT_TRANSACTION.CASH_SHIFT_ID, txn.getCashShiftId())
         .set(PAYMENT_TRANSACTION.VERIFIED_AT, txn.getVerifiedAt())
         .set(PAYMENT_TRANSACTION.VERIFICATION_PROOF, txn.getVerificationProof())
         .set(PAYMENT_TRANSACTION.RECONCILIATION_STATUS, toReconRecord(txn))
@@ -315,6 +317,7 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
         r.getReconciliationStatus() == null
             ? null
             : PaymentReconciliationStatus.valueOf(r.getReconciliationStatus().name()),
-        r.getUpdatedAt());
+        r.getUpdatedAt(),
+        r.getCashShiftId());
   }
 }

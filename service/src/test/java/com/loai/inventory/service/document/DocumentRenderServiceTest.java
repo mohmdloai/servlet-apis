@@ -964,4 +964,60 @@ class DocumentRenderServiceTest {
       }
     }
   }
+
+  // ---- shift slip (stories/cash_shift.md) ------------------------------------------------------
+
+  private static com.loai.inventory.service.CashShiftService.Detail aShift(boolean closed) {
+    UUID owner = UUID.randomUUID();
+    com.loai.inventory.domain.model.CashShift shift =
+        com.loai.inventory.domain.model.CashShift.open(
+            UUID.randomUUID(),
+            ORG,
+            owner,
+            new BigDecimal("200.00"),
+            true,
+            null,
+            OffsetDateTime.of(2026, 9, 5, 9, 12, 0, 0, ZoneOffset.UTC));
+    com.loai.inventory.domain.repository.CashShiftRepository.Totals totals =
+        new com.loai.inventory.domain.repository.CashShiftRepository.Totals(
+            new BigDecimal("240.00"),
+            new BigDecimal("10.00"),
+            new BigDecimal("30.00"),
+            new BigDecimal("10.00"),
+            new BigDecimal("100.00"),
+            new BigDecimal("80.00"),
+            4,
+            BigDecimal.ZERO);
+    BigDecimal expected =
+        com.loai.inventory.service.CashShiftService.expectedCash(shift.getStartingCash(), totals);
+    if (closed) {
+      shift.close(
+          owner, new BigDecimal("415.00"), expected, null, OffsetDateTime.now(ZoneOffset.UTC));
+    }
+    var view =
+        new com.loai.inventory.service.CashShiftService.ShiftView(
+            shift,
+            totals,
+            expected,
+            new com.loai.inventory.service.CashShiftService.Person(owner, "Nadia"),
+            closed ? new com.loai.inventory.service.CashShiftService.Person(owner, "Nadia") : null);
+    return new com.loai.inventory.service.CashShiftService.Detail(view, List.of());
+  }
+
+  @Test
+  void renderShiftSlipEscpos_isABandedSlipNamedByTheOpeningDay() {
+    when(orgService.getById(ORG)).thenReturn(orgWithProfile());
+
+    RenderedDocument closed = svc.renderShiftSlipEscpos(ORG, aShift(true), Escpos.WIDTH_80MM);
+    assertEquals("SHIFT-2026-09-05.escpos", closed.filename());
+    EscposTestSupport.Parsed p = EscposTestSupport.parse(closed.bytes());
+    assertTrue(p.bands().size() >= 4);
+    assertEquals(72, p.bands().get(0).bytesPerRow());
+    assertEquals(closed.bytes().length - 7, p.tailOffset());
+
+    // An open shift renders too (no count rows), and at 58 mm.
+    RenderedDocument open = svc.renderShiftSlipEscpos(ORG, aShift(false), Escpos.WIDTH_58MM);
+    assertEquals(48, EscposTestSupport.parse(open.bytes()).bands().get(0).bytesPerRow());
+    assertTrue(open.bytes().length < closed.bytes().length, "the open slip has fewer rows");
+  }
 }
