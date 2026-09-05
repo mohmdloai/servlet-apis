@@ -301,7 +301,9 @@ class InvoiceHandlerAuthTest {
   void list_allowedForViewer_serviceCalled() throws IOException {
     InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
     when(service.list(eq(ORG), any(), Mockito.anyInt(), Mockito.anyInt()))
-        .thenReturn(new InvoiceAdminService.InvoicePage(List.of(), 0));
+        .thenReturn(
+            new InvoiceAdminService.InvoicePage(
+                List.of(), 0, com.loai.inventory.domain.model.InvoiceListStats.empty()));
     InvoiceHandler handler =
         new InvoiceHandler(
             service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
@@ -327,6 +329,125 @@ class InvoiceHandlerAuthTest {
 
     assertEquals(400, resp.status, "an unknown status filter must be a 400");
     verify(service, never()).list(any(), any(), Mockito.anyInt(), Mockito.anyInt());
+  }
+
+  @Test
+  void list_filtersReachTheService_asOneFilter() throws IOException {
+    InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
+    when(service.list(eq(ORG), any(), Mockito.anyInt(), Mockito.anyInt()))
+        .thenReturn(
+            new InvoiceAdminService.InvoicePage(
+                List.of(), 0, com.loai.inventory.domain.model.InvoiceListStats.empty()));
+    HttpServletRequest req = reqWith(ctxWith(OrgRole.VIEWER), null);
+    when(req.getParameter("status")).thenReturn("issued");
+    when(req.getParameter("q")).thenReturn("  nadia ");
+    when(req.getParameter("from")).thenReturn("2026-07-31T21:00:00Z");
+    when(req.getParameter("to")).thenReturn("2026-08-31T21:00:00Z");
+    when(req.getParameter("paid")).thenReturn("partial");
+    when(req.getParameter("min")).thenReturn("500");
+    when(req.getParameter("max")).thenReturn("2500.50");
+    InvoiceHandler handler =
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle("GET", req, resp.mock, ORG, "/");
+
+    assertEquals(200, resp.status);
+    var captor =
+        org.mockito.ArgumentCaptor.forClass(
+            com.loai.inventory.domain.model.InvoiceListFilter.class);
+    verify(service).list(eq(ORG), captor.capture(), Mockito.anyInt(), Mockito.anyInt());
+    var f = captor.getValue();
+    assertEquals(com.loai.inventory.domain.model.InvoiceStatus.ISSUED, f.status());
+    assertEquals("nadia", f.q(), "q is trimmed");
+    assertEquals(java.time.OffsetDateTime.parse("2026-07-31T21:00:00Z"), f.issuedFrom());
+    assertEquals(java.time.OffsetDateTime.parse("2026-08-31T21:00:00Z"), f.issuedTo());
+    assertEquals(com.loai.inventory.domain.model.InvoiceListFilter.PaidState.PARTIAL, f.paid());
+    assertEquals(0, new java.math.BigDecimal("500").compareTo(f.minTotal()));
+    assertEquals(0, new java.math.BigDecimal("2500.50").compareTo(f.maxTotal()));
+  }
+
+  @Test
+  void list_badFilterValues_are400_serviceNeverCalled() throws IOException {
+    record Bad(String param, String value, String why) {}
+    List<Bad> cases =
+        List.of(
+            new Bad("from", "2026-08-01", "a bare date is not an ISO-8601 date-time"),
+            new Bad("to", "yesterday", "prose is not a date-time"),
+            new Bad("paid", "half", "paid is none|partial"),
+            new Bad("min", "abc", "min must be a number"),
+            new Bad("max", "-1", "max must not be negative"));
+    for (Bad bad : cases) {
+      InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
+      HttpServletRequest req = reqWith(ctxWith(OrgRole.VIEWER), null);
+      when(req.getParameter(bad.param())).thenReturn(bad.value());
+      InvoiceHandler handler =
+          new InvoiceHandler(
+              service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
+      Resp resp = new Resp();
+
+      handler.handle("GET", req, resp.mock, ORG, "/");
+
+      assertEquals(400, resp.status, bad.why());
+      verify(service, never()).list(any(), any(), Mockito.anyInt(), Mockito.anyInt());
+    }
+  }
+
+  @Test
+  void list_invertedWindowOrBounds_are400() throws IOException {
+    for (String[] pair :
+        List.of(
+            new String[] {"from", "2026-09-01T00:00:00Z", "to", "2026-08-01T00:00:00Z"},
+            new String[] {"min", "900", "max", "100"})) {
+      InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
+      HttpServletRequest req = reqWith(ctxWith(OrgRole.VIEWER), null);
+      when(req.getParameter(pair[0])).thenReturn(pair[1]);
+      when(req.getParameter(pair[2])).thenReturn(pair[3]);
+      InvoiceHandler handler =
+          new InvoiceHandler(
+              service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
+      Resp resp = new Resp();
+
+      handler.handle("GET", req, resp.mock, ORG, "/");
+
+      assertEquals(400, resp.status, pair[0] + " > " + pair[2] + " must be a 400");
+      verify(service, never()).list(any(), any(), Mockito.anyInt(), Mockito.anyInt());
+    }
+  }
+
+  @Test
+  void statusCounts_allowedForViewer_serviceCalled() throws IOException {
+    InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
+    when(service.statusCounts(ORG))
+        .thenReturn(
+            new InvoiceAdminService.InvoiceStatusCounts(
+                java.util.Map.of(com.loai.inventory.domain.model.InvoiceStatus.ISSUED, 2L), 2));
+    InvoiceHandler handler =
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle("GET", reqWith(ctxWith(OrgRole.VIEWER), null), resp.mock, ORG, "/status-counts");
+
+    assertEquals(200, resp.status, "VIEWER must be allowed to read the tab counts");
+    verify(service).statusCounts(ORG);
+    verify(service, never()).list(any(), any(), Mockito.anyInt(), Mockito.anyInt());
+  }
+
+  @Test
+  void statusCounts_post_is405() throws IOException {
+    InvoiceAdminService service = Mockito.mock(InvoiceAdminService.class);
+    InvoiceHandler handler =
+        new InvoiceHandler(
+            service, null, com.loai.inventory.api.config.ObjectMapperProvider.build());
+    Resp resp = new Resp();
+
+    handler.handle(
+        "POST", reqWith(ctxWith(OrgRole.MANAGER), null), resp.mock, ORG, "/status-counts");
+
+    assertEquals(405, resp.status);
+    verify(service, never()).statusCounts(any());
   }
 
   @Test

@@ -1,9 +1,12 @@
 package com.loai.inventory.domain.repository;
 
+import com.loai.inventory.domain.model.InvoiceListFilter;
+import com.loai.inventory.domain.model.InvoiceListStats;
 import com.loai.inventory.domain.model.InvoiceStatus;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -41,16 +44,32 @@ public interface SalesInvoiceRepository {
   List<SalesInvoice> findByOrderId(UUID orgId, UUID salesOrderId);
 
   /**
-   * One page of the org's invoices — the awaiting-payment worklist / invoice ledger. A non-null
-   * {@code status} makes it a queue: {@code created_at ASC, id ASC} ({@code ?status=ISSUED} is the
-   * oldest-awaiting-payment first). {@code null} makes it the audit ledger: {@code created_at DESC,
-   * id DESC}, every status (VOID included). Same queue-vs-ledger convention as {@code
-   * RefundRepository#list}. Lean: the invoice header only — lines are not loaded for the list.
+   * One page of the org's invoices — the awaiting-payment worklist / invoice ledger, narrowed by
+   * every dimension of the {@link InvoiceListFilter} ({@code stories/invoice_filters.md}). A status
+   * makes it a queue: {@code created_at ASC, id ASC} ({@code ?status=ISSUED} is the
+   * oldest-awaiting-payment first). None makes it the audit ledger: {@code created_at DESC, id
+   * DESC}, every status (VOID included). The other dimensions only narrow — they never reorder.
+   * Same queue-vs-ledger convention as {@code RefundRepository#list}. Lean: the invoice header only
+   * — lines are not loaded for the list.
    */
-  List<SalesInvoice> list(UUID orgId, InvoiceStatus status, int offset, int limit);
+  List<SalesInvoice> list(UUID orgId, InvoiceListFilter filter, int offset, int limit);
+
+  /**
+   * The count and money figures of everything {@link #list} would page through for the same filter
+   * — one query, the same predicate, so a total can never disagree with its rows.
+   */
+  InvoiceListStats stats(UUID orgId, InvoiceListFilter filter);
 
   /** Total rows {@link #list} would page through for the same {@code status}. */
-  long count(UUID orgId, InvoiceStatus status);
+  default long count(UUID orgId, InvoiceStatus status) {
+    return stats(orgId, InvoiceListFilter.ofStatus(status)).total();
+  }
+
+  /**
+   * Live rows per status across the whole org ledger — the worklist tabs' numbers. Only statuses
+   * with at least one row appear; the service fills the zeros.
+   */
+  Map<InvoiceStatus, Long> countByStatus(UUID orgId);
 
   /**
    * One page of a single customer's <em>live</em> (non-VOID) invoices — the customer-portal "my

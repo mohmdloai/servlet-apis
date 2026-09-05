@@ -4,6 +4,8 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.Customer;
+import com.loai.inventory.domain.model.InvoiceListFilter;
+import com.loai.inventory.domain.model.InvoiceListStats;
 import com.loai.inventory.domain.model.InvoiceStatus;
 import com.loai.inventory.domain.model.SalesInvoice;
 import com.loai.inventory.domain.model.SalesInvoiceLine;
@@ -21,7 +23,9 @@ import com.loai.inventory.service.InvoiceService.LineSpec;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
@@ -101,25 +105,37 @@ public final class InvoiceAdminService {
    */
   public record InvoiceSummary(SalesInvoice invoice, String salesOrderNumber) {}
 
-  /** One page of the invoice queue/ledger plus the filtered total (for tab badges). */
-  public record InvoicePage(List<InvoiceSummary> items, long total) {}
+  /**
+   * One page of the invoice queue/ledger plus what the whole filtered set adds up to: the total the
+   * pager needs and the money figures the worklist shows under its applied filters ({@link
+   * InvoiceListStats}).
+   */
+  public record InvoicePage(List<InvoiceSummary> items, long total, InvoiceListStats stats) {}
+
+  /** The worklist tabs' numbers: every status (zeros included) and the ledger total. */
+  public record InvoiceStatusCounts(Map<InvoiceStatus, Long> counts, long total) {}
 
   public static final int DEFAULT_PAGE_SIZE = 20;
   public static final int MAX_PAGE_SIZE = 100;
 
   /**
-   * Read one page of the org's invoices — filtered by {@code status} it is a worklist ({@code
-   * ?status=ISSUED} is the awaiting-payment queue, oldest first); unfiltered it is the ledger
-   * (every status including VOID, newest first). Mirrors {@link RefundService#list}: {@code page}
-   * floors at 0, {@code size} is clamped to {@code [1, MAX_PAGE_SIZE]}. The per-row {@code
-   * salesOrderNumber} is batch-loaded — one projection per page, never per row.
+   * Read one page of the org's invoices — with a status it is a worklist ({@code ?status=ISSUED} is
+   * the awaiting-payment queue, oldest first); without one it is the ledger (every status including
+   * VOID, newest first). The filter's other dimensions ({@code stories/invoice_filters.md}: free
+   * text, the issued window, the paid state, the amount bounds) narrow the same read and never
+   * reorder it. Mirrors {@link RefundService#list}: {@code page} floors at 0, {@code size} is
+   * clamped to {@code [1, MAX_PAGE_SIZE]}. The per-row {@code salesOrderNumber} is batch-loaded —
+   * one projection per page, never per row; the total and the money summary are one stats query
+   * over the same predicate as the rows.
    */
-  public InvoicePage list(UUID orgId, InvoiceStatus status, int page, int size) {
+  public InvoicePage list(UUID orgId, InvoiceListFilter filter, int page, int size) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    InvoiceListFilter f = filter == null ? InvoiceListFilter.none() : filter;
     SalesInvoiceRepository invoiceRepo = invoiceRepoFactory.create(rootDsl);
-    List<SalesInvoice> items = invoiceRepo.list(orgId, status, p * s, s);
-    long total = invoiceRepo.count(orgId, status);
+    List<SalesInvoice> items = invoiceRepo.list(orgId, f, p * s, s);
+    InvoiceListStats stats = invoiceRepo.stats(orgId, f);
+    long total = stats.total();
 
     java.util.Map<UUID, String> orderNumbers =
         orderRepoFactory
@@ -136,7 +152,24 @@ public final class InvoiceAdminService {
         items.stream()
             .map(inv -> new InvoiceSummary(inv, orderNumbers.get(inv.getSalesOrderId())))
             .toList();
-    return new InvoicePage(views, total);
+    return new InvoicePage(views, total, stats);
+  }
+
+  /**
+   * The worklist tabs' numbers ({@code GET /invoices/status-counts}): every {@link InvoiceStatus}
+   * present, {@code 0} included — a client never treats absence as zero — and the ledger total,
+   * which equals Σ counts by construction. Mirrors {@code SalesOrderService#statusCounts}.
+   */
+  public InvoiceStatusCounts statusCounts(UUID orgId) {
+    Map<InvoiceStatus, Long> raw = invoiceRepoFactory.create(rootDsl).countByStatus(orgId);
+    Map<InvoiceStatus, Long> counts = new EnumMap<>(InvoiceStatus.class);
+    long total = 0;
+    for (InvoiceStatus status : InvoiceStatus.values()) {
+      long n = raw.getOrDefault(status, 0L);
+      counts.put(status, n);
+      total += n;
+    }
+    return new InvoiceStatusCounts(counts, total);
   }
 
   /** An order's billing story: the header + every invoice oldest-first, each with lines. */
