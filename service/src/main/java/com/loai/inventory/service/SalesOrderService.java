@@ -903,11 +903,23 @@ public class SalesOrderService {
    */
   public OrderListPage list(
       UUID orgId, OrderStatus status, OrderChannel channel, int page, int size) {
+    return list(orgId, status, channel, null, page, size);
+  }
+
+  /**
+   * {@link #list} narrowed by a free-text {@code q} as well ({@code ?q=}, {@code
+   * stories/order_search.md}): the order number, or the customer's name or phone — CRM row or
+   * walk-in contact. Whitespace-only is absent, not a search for spaces. The rows and the total
+   * share one predicate, so the pager can never disagree with the list.
+   */
+  public OrderListPage list(
+      UUID orgId, OrderStatus status, OrderChannel channel, String q, int page, int size) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+    String term = (q == null || q.isBlank()) ? null : q.trim();
     SalesOrderRepository repo = repoFactory.create(rootDsl);
-    List<SalesOrder> orders = repo.list(orgId, status, channel, p * s, s);
-    long total = repo.count(orgId, status, channel);
+    List<SalesOrder> orders = repo.list(orgId, status, channel, term, p * s, s);
+    long total = repo.count(orgId, status, channel, term);
     Map<UUID, List<SalesOrderLine>> linesByOrder =
         repo.findLinesByOrderIds(orders.stream().map(SalesOrder::getId).toList());
     List<Placed> items =

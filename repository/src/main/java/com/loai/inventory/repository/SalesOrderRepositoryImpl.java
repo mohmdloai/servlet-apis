@@ -7,6 +7,7 @@ import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER_LINE;
 
 import com.loai.inventory.common.text.Phone;
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.OrderChannel;
@@ -177,7 +178,13 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   @Override
   public List<SalesOrder> list(
       UUID orgId, OrderStatus status, OrderChannel channel, int offset, int limit) {
-    var query = dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status, channel));
+    return list(orgId, status, channel, null, offset, limit);
+  }
+
+  @Override
+  public List<SalesOrder> list(
+      UUID orgId, OrderStatus status, OrderChannel channel, String q, int offset, int limit) {
+    var query = dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status, channel, q));
     // Queue vs ledger: a status filter is a worklist — oldest first; no filter is the ledger —
     // newest first (mirrors the payment/refund worklists).
     var ordered =
@@ -194,8 +201,13 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
 
   @Override
   public long count(UUID orgId, OrderStatus status, OrderChannel channel) {
+    return count(orgId, status, channel, null);
+  }
+
+  @Override
+  public long count(UUID orgId, OrderStatus status, OrderChannel channel, String q) {
     return dsl.fetchCount(
-        dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status, channel)));
+        dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status, channel, q)));
   }
 
   @Override
@@ -233,6 +245,32 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
 
   private static org.jooq.Condition listConditions(
       UUID orgId, OrderStatus status, OrderChannel channel) {
+    return listConditions(orgId, status, channel, null);
+  }
+
+  /**
+   * The worklist predicate — one definition for the list and its count, so a total can never
+   * disagree with its rows. The {@code q} legs ({@code stories/order_search.md}):
+   *
+   * <ul>
+   *   <li><b>number</b> — {@code order_number ILIKE '%q%'}: {@code "42"} finds {@code
+   *       SO-2026-00042} the way a merchant reads the number back from a chat.
+   *   <li><b>name</b> — folded on BOTH sides with the DB's own {@code fold_search}, the {@code
+   *       CustomerRepositoryImpl.searchCondition} rule: the CRM row's generated {@code name_search}
+   *       (V62) through an {@code EXISTS} on {@code customer_id}, and the walk-in {@code
+   *       customer_name} (V87) folded in the query — it has no generated twin.
+   *   <li><b>phone</b> — only when {@code q} carries digits: the CRM {@code phone_e164} (V79) and
+   *       the walk-in {@code customer_phone} with its non-digits stripped, both matched on the
+   *       digits of {@code q} (Arabic-Indic digits folded first), so {@code "0100 123"} and {@code
+   *       "+20100123"} find the same order.
+   * </ul>
+   *
+   * <p>No minimum length, for the reason the customer search measured: the predicate is org-scoped,
+   * so the planner never chooses a trigram index and the cost is linear in the tenant's own ledger.
+   * The {@code EXISTS} is one index hit per candidate row ({@code customer} PK).
+   */
+  private static org.jooq.Condition listConditions(
+      UUID orgId, OrderStatus status, OrderChannel channel, String q) {
     org.jooq.Condition c = SALES_ORDER.ORG_ID.eq(orgId);
     if (status != null) {
       c =
@@ -248,7 +286,60 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
                   com.loai.inventory.repository.generated.enums.OrderChannel.valueOf(
                       channel.name())));
     }
+    if (q != null && !q.isBlank()) {
+      c = c.and(searchLegs(q.trim()));
+    }
     return c;
+  }
+
+  private static org.jooq.Condition searchLegs(String term) {
+    org.jooq.Field<String> folded =
+        org.jooq.impl.DSL.field("fold_search({0})", String.class, org.jooq.impl.DSL.val(term));
+    org.jooq.Field<String> foldedPattern =
+        org.jooq.impl.DSL.concat(
+            org.jooq.impl.DSL.inline("%"), folded, org.jooq.impl.DSL.inline("%"));
+    org.jooq.Condition byNumber = SALES_ORDER.ORDER_NUMBER.containsIgnoreCase(term);
+    org.jooq.Condition byWalkInName =
+        org.jooq
+            .impl
+            .DSL
+            .field("fold_search({0})", String.class, SALES_ORDER.CUSTOMER_NAME)
+            .like(foldedPattern);
+    org.jooq.Condition byCrmName =
+        org.jooq.impl.DSL.exists(
+            org.jooq
+                .impl
+                .DSL
+                .selectOne()
+                .from(CUSTOMER)
+                .where(CUSTOMER.ID.eq(SALES_ORDER.CUSTOMER_ID))
+                .and(CUSTOMER.NAME_SEARCH.like(foldedPattern)));
+    org.jooq.Condition legs = byNumber.or(byWalkInName).or(byCrmName);
+
+    String numeric = Text.normalizeNumeric(term);
+    String digits = numeric == null ? "" : numeric.replaceAll("[^0-9]", "");
+    if (!digits.isEmpty()) {
+      String digitsPattern = "%" + digits + "%";
+      org.jooq.Condition byWalkInPhone =
+          org.jooq
+              .impl
+              .DSL
+              .field(
+                  "regexp_replace({0}, '[^0-9]', '', 'g')",
+                  String.class, SALES_ORDER.CUSTOMER_PHONE)
+              .like(digitsPattern);
+      org.jooq.Condition byCrmPhone =
+          org.jooq.impl.DSL.exists(
+              org.jooq
+                  .impl
+                  .DSL
+                  .selectOne()
+                  .from(CUSTOMER)
+                  .where(CUSTOMER.ID.eq(SALES_ORDER.CUSTOMER_ID))
+                  .and(CUSTOMER.PHONE_E164.like(digitsPattern)));
+      legs = legs.or(byWalkInPhone).or(byCrmPhone);
+    }
+    return legs;
   }
 
   @Override

@@ -106,11 +106,24 @@ public interface SalesOrderRepository {
   List<SalesOrder> list(
       UUID orgId, OrderStatus status, OrderChannel channel, int offset, int limit);
 
+  /**
+   * {@link #list} narrowed by a free-text {@code q} as well ({@code ?q=} — {@code
+   * stories/order_search.md}): the order number (contains, case-insensitive), the customer's name
+   * (folded the V62 way, CRM row or walk-in contact) or phone (digits, CRM {@code phone_e164} or
+   * the walk-in {@code customer_phone}). A blank {@code q} is the unfiltered read. Ordering stays
+   * keyed on {@code status} alone.
+   */
+  List<SalesOrder> list(
+      UUID orgId, OrderStatus status, OrderChannel channel, String q, int offset, int limit);
+
   /** Count of the filtered orders (drives the pager / tab badges). */
   long count(UUID orgId, OrderStatus status);
 
   /** {@link #count} narrowed by {@code channel} as well. */
   long count(UUID orgId, OrderStatus status, OrderChannel channel);
+
+  /** {@link #count} narrowed by {@code channel} and {@code q} — the same predicate as the list. */
+  long count(UUID orgId, OrderStatus status, OrderChannel channel, String q);
 
   /**
    * Live count of the org's orders per status in one grouped scan ({@code
