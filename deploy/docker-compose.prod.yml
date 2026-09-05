@@ -117,6 +117,11 @@ services:
       CUSTOMER_JWT_SECRET: ${CUSTOMER_JWT_SECRET}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      # Web Push (V96). Both keys unset → the channel is honestly off (LoggingWebPushSender,
+      # GET /api/me/push/config → enabled:false, the admin switch reads "unavailable").
+      WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
+      WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
+      WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:ops@${DOMAIN}}
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080' || exit 1"]
       interval: 15s
