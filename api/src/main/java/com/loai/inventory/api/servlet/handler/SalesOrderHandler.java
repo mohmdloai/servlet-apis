@@ -283,9 +283,10 @@ public class SalesOrderHandler implements OrgResourceHandler {
    *   <li>{@code ?order_number=SO-…} — exact-match, case-sensitive lookup (trimmed: numbers arrive
    *       by copy-paste from transfer notes); a single {@code SalesOrderResponse}, not a page
    *       ({@code stories/lookup_order_by_number.md}).
-   *   <li>otherwise — the order <b>worklist</b>: {@code ?status=&page=&size=}, a {@code
+   *   <li>otherwise — the order <b>worklist</b>: {@code ?status=&channel=&q=&page=&size=}, a {@code
    *       PageResponse} of full order rows. Filtered by status = queue (oldest first); unfiltered =
-   *       ledger (newest first). Unknown status ⇒ 400.
+   *       ledger (newest first). {@code q} matches the order number or the customer's name / phone
+   *       ({@code stories/order_search.md}); blank = absent. Unknown status ⇒ 400.
    * </ul>
    */
   private void doGetOrList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
@@ -306,6 +307,7 @@ public class SalesOrderHandler implements OrgResourceHandler {
             orgId,
             SalesOrderMapper.toOrderStatus(req.getParameter("status")),
             SalesOrderMapper.toOrderChannel(req.getParameter("channel")),
+            req.getParameter("q"),
             page,
             size);
     var data = result.items().stream().map(SalesOrderMapper::toResponse).toList();
