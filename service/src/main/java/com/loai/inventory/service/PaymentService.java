@@ -69,6 +69,11 @@ public final class PaymentService {
   public static final String IN_STORE_PROVIDER_REJECT_MSG =
       "INSTAPAY_MANUAL is the online path; in-store accepts CASH or INSTAPAY_IN_STORE";
 
+  /**
+   * stories/cash_shift.md: which drawer-day a counter tender belongs to; NONE outside production.
+   */
+  private final CashShiftStamper cashShifts;
+
   private final DSLContext rootDsl;
   private final PaymentRepositoryFactory paymentRepoFactory;
   private final SalesOrderRepositoryFactory salesOrderRepoFactory;
@@ -89,6 +94,32 @@ public final class PaymentService {
       NotificationService notificationService,
       MagicLinkService magicLinkService,
       OrgMilestoneService milestoneService) {
+    this(
+        rootDsl,
+        paymentRepoFactory,
+        salesOrderRepoFactory,
+        txnRepoFactory,
+        refundRepoFactory,
+        reservationRepoFactory,
+        notificationService,
+        magicLinkService,
+        milestoneService,
+        CashShiftStamper.NONE);
+  }
+
+  /** The production wiring: counter tenders are stamped with the org's cash shift (V95). */
+  public PaymentService(
+      DSLContext rootDsl,
+      PaymentRepositoryFactory paymentRepoFactory,
+      SalesOrderRepositoryFactory salesOrderRepoFactory,
+      PaymentTransactionRepositoryFactory txnRepoFactory,
+      RefundRepositoryFactory refundRepoFactory,
+      InventoryReservationRepositoryFactory reservationRepoFactory,
+      NotificationService notificationService,
+      MagicLinkService magicLinkService,
+      OrgMilestoneService milestoneService,
+      CashShiftStamper cashShifts) {
+    this.cashShifts = cashShifts == null ? CashShiftStamper.NONE : cashShifts;
     this.rootDsl = rootDsl;
     this.paymentRepoFactory = paymentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
@@ -474,6 +505,13 @@ public final class PaymentService {
             now);
     txn.verify(verifiedBy, now);
     txn.applyReconciliation(PaymentReconciliationStatus.MATCHED, now);
+    // The counter's drawer-day (stories/cash_shift.md): both providers are stamped so the shift
+    // slip totals the counter's receipts; the gate (409 SHIFT_REQUIRED) fires here, before any
+    // row of the sale is written.
+    UUID shiftId = cashShifts.shiftForCounterInTx(txDsl, orgId, verifiedBy, now);
+    if (shiftId != null) {
+      txn.stampCashShift(shiftId);
+    }
 
     // insertIfAbsent persists the full VERIFIED + MATCHED row (ON CONFLICT DO NOTHING). A
     // not-inserted result means this exact (provider, provider_ref) was already recorded.

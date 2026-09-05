@@ -41,6 +41,7 @@ public class OrgResponse {
 
   // Commerce money config (V68, roadmap item 5).
   private BigDecimal taxRate;
+  private boolean shiftRequired;
   private BigDecimal shippingFee;
 
   private OrgResponse() {}
@@ -72,6 +73,7 @@ public class OrgResponse {
     r.metaDescription = o.getMetaDescription();
     r.ogImageObjectKey = o.getOgImageObjectKey();
     r.taxRate = o.getTaxRate();
+    r.shiftRequired = o.isShiftRequired();
     r.shippingFee = o.getShippingFee();
     return r;
   }
@@ -178,5 +180,9 @@ public class OrgResponse {
 
   public String getOgImageObjectKey() {
     return ogImageObjectKey;
+  }
+
+  public boolean isShiftRequired() {
+    return shiftRequired;
   }
 }

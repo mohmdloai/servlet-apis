@@ -65,6 +65,15 @@ public class ApiError {
    * The record path's "this order has open claims" refusal — not an error the user did anything
    * wrong to earn, so the client opens the claim's verify sheet instead of showing it.
    */
+  /**
+   * A plain error whose {@code kind} names a machine-readable reason (e.g. {@code SHIFT_REQUIRED}).
+   */
+  public static ApiError ofKind(int status, String message, String kind) {
+    ApiError e = new ApiError(status, httpPhrase(status), message);
+    e.kind = kind;
+    return e;
+  }
+
   public static ApiError ofClaimPending(
       int status, String message, String kind, List<PendingClaim> claims) {
     ApiError e = new ApiError(status, httpPhrase(status), message);

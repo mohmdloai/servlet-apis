@@ -58,6 +58,9 @@ public class PaymentTransaction {
   private PaymentReconciliationStatus reconciliationStatus;
   private OffsetDateTime updatedAt;
 
+  /** The cash shift this drawer event belongs to (stories/cash_shift.md); null off the counter. */
+  private UUID cashShiftId;
+
   /**
    * A customer-claimed CREDIT transfer awaiting verification. Direction is fixed to {@code CREDIT}
    * (money in) and status to {@code UNVERIFIED}; reconciliation is null until verified. {@code
@@ -196,31 +199,35 @@ public class PaymentTransaction {
       String notFoundNote,
       String rawPayload,
       PaymentReconciliationStatus reconciliationStatus,
-      OffsetDateTime updatedAt) {
-    return new PaymentTransaction(
-        id,
-        orgId,
-        provider,
-        providerRef,
-        direction,
-        amount,
-        currency,
-        occurredAt,
-        recordedAt,
-        claimedByCustomerId,
-        claimedSalesOrderId,
-        customerNote,
-        proofObjectKey,
-        createdAt,
-        verificationStatus,
-        verifiedBy,
-        verifiedAt,
-        verificationProof,
-        notFoundReason,
-        notFoundNote,
-        rawPayload,
-        reconciliationStatus,
-        updatedAt);
+      OffsetDateTime updatedAt,
+      UUID cashShiftId) {
+    PaymentTransaction txn =
+        new PaymentTransaction(
+            id,
+            orgId,
+            provider,
+            providerRef,
+            direction,
+            amount,
+            currency,
+            occurredAt,
+            recordedAt,
+            claimedByCustomerId,
+            claimedSalesOrderId,
+            customerNote,
+            proofObjectKey,
+            createdAt,
+            verificationStatus,
+            verifiedBy,
+            verifiedAt,
+            verificationProof,
+            notFoundReason,
+            notFoundNote,
+            rawPayload,
+            reconciliationStatus,
+            updatedAt);
+    txn.cashShiftId = cashShiftId;
+    return txn;
   }
 
   private PaymentTransaction(
@@ -490,6 +497,18 @@ public class PaymentTransaction {
 
   public PaymentVerificationStatus getVerificationStatus() {
     return verificationStatus;
+  }
+
+  public UUID getCashShiftId() {
+    return cashShiftId;
+  }
+
+  /**
+   * Attribute this drawer event to the org's open shift — set inside the sale's / return's own
+   * transaction, before the row is written; never re-stamped later.
+   */
+  public void stampCashShift(UUID cashShiftId) {
+    this.cashShiftId = cashShiftId;
   }
 
   public UUID getVerifiedBy() {

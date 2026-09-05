@@ -66,6 +66,9 @@ public final class RefundService {
   private static final Logger log = LoggerFactory.getLogger(RefundService.class);
   private static final String CURRENCY_EGP = "EGP";
 
+  /** stories/cash_shift.md: which drawer-day a cash DEBIT belongs to; NONE outside production. */
+  private final CashShiftStamper cashShifts;
+
   private final DSLContext rootDsl;
   private final RefundRepositoryFactory refundRepoFactory;
   private final RefundAllocationRepositoryFactory refundAllocationRepoFactory;
@@ -86,6 +89,32 @@ public final class RefundService {
       PaymentTransactionRepositoryFactory txnRepoFactory,
       OrgRepositoryFactory orgRepoFactory,
       SalesOrderRepositoryFactory salesOrderRepoFactory) {
+    this(
+        rootDsl,
+        refundRepoFactory,
+        refundAllocationRepoFactory,
+        creditNoteRepoFactory,
+        paymentRepoFactory,
+        paymentAllocationRepoFactory,
+        txnRepoFactory,
+        orgRepoFactory,
+        salesOrderRepoFactory,
+        CashShiftStamper.NONE);
+  }
+
+  /** The production wiring: cash DEBITs (change, cash refunds) are stamped with the shift (V95). */
+  public RefundService(
+      DSLContext rootDsl,
+      RefundRepositoryFactory refundRepoFactory,
+      RefundAllocationRepositoryFactory refundAllocationRepoFactory,
+      CreditNoteRepositoryFactory creditNoteRepoFactory,
+      PaymentRepositoryFactory paymentRepoFactory,
+      PaymentAllocationRepositoryFactory paymentAllocationRepoFactory,
+      PaymentTransactionRepositoryFactory txnRepoFactory,
+      OrgRepositoryFactory orgRepoFactory,
+      SalesOrderRepositoryFactory salesOrderRepoFactory,
+      CashShiftStamper cashShifts) {
+    this.cashShifts = cashShifts == null ? CashShiftStamper.NONE : cashShifts;
     this.rootDsl = rootDsl;
     this.refundRepoFactory = refundRepoFactory;
     this.refundAllocationRepoFactory = refundAllocationRepoFactory;
@@ -266,6 +295,14 @@ public final class RefundService {
                 actorId,
                 null,
                 now);
+        // Cash handed back at the counter (or from the desk) leaves the drawer: stamp it with the
+        // shift; a transfer refund never touches the drawer and carries no stamp.
+        if (refund.getMethod() == PaymentProvider.CASH) {
+          UUID cashShift = cashShifts.shiftForCounterInTx(txDsl, orgId, actorId, now);
+          if (cashShift != null) {
+            debit.stampCashShift(cashShift);
+          }
+        }
         PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
         PaymentTransactionRepository.Recorded rec = txnRepo.insertIfAbsent(debit);
         if (!rec.inserted()) {
@@ -440,6 +477,11 @@ public final class RefundService {
             actorId,
             null,
             now);
+    // The change leaves the same drawer the tender entered (stories/cash_shift.md).
+    UUID changeShift = cashShifts.shiftForCounterInTx(txDsl, orgId, actorId, now);
+    if (changeShift != null) {
+      debit.stampCashShift(changeShift);
+    }
     PaymentTransactionRepository.Recorded rec = txnRepoFactory.create(txDsl).insertIfAbsent(debit);
     if (!rec.inserted()) {
       throw new ConflictException(

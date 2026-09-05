@@ -70,6 +70,11 @@ public class Org {
   private BigDecimal taxRate = BigDecimal.ZERO;
   private BigDecimal shippingFee = BigDecimal.ZERO;
 
+  /**
+   * stories/cash_shift.md: refuse a counter sale with no open shift instead of auto-opening one.
+   */
+  private boolean shiftRequired = false;
+
   public Org() {}
 
   public Org(
@@ -326,6 +331,14 @@ public class Org {
 
   public void setShippingFee(BigDecimal shippingFee) {
     this.shippingFee = shippingFee;
+  }
+
+  public boolean isShiftRequired() {
+    return shiftRequired;
+  }
+
+  public void setShiftRequired(boolean shiftRequired) {
+    this.shiftRequired = shiftRequired;
   }
 
   @Override

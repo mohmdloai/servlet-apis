@@ -30,6 +30,10 @@ public class UpdateOrgRequest {
   // unchanged (merge); a blank string clears it. See stories/storefront_seo_metadata.md.
   private String metaTitle;
   private String metaDescription;
+
+  /** stories/cash_shift.md: require an open cash shift to sell (OWNER); null = unchanged. */
+  private Boolean shiftRequired;
+
   private String ogImageObjectKey;
 
   /**
@@ -218,5 +222,13 @@ public class UpdateOrgRequest {
 
   public void setShippingFee(BigDecimal shippingFee) {
     this.shippingFee = shippingFee;
+  }
+
+  public Boolean getShiftRequired() {
+    return shiftRequired;
+  }
+
+  public void setShiftRequired(Boolean shiftRequired) {
+    this.shiftRequired = shiftRequired;
   }
 }

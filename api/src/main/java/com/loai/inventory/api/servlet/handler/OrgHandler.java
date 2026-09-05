@@ -117,7 +117,8 @@ public class OrgHandler {
             body.getOgImageObjectKey(),
             body.getDiscoverable());
     OrgService.StoreConfig storeConfig =
-        new OrgService.StoreConfig(body.getTaxRate(), body.getShippingFee());
+        new OrgService.StoreConfig(
+            body.getTaxRate(), body.getShippingFee(), body.getShiftRequired());
     Org updated =
         orgService.update(
             orgId,

@@ -4,6 +4,7 @@ import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ApprovalRequiredException;
 import com.loai.inventory.common.exception.ClaimPendingException;
 import com.loai.inventory.common.exception.InsufficientStockException;
+import com.loai.inventory.common.exception.ShiftRequiredException;
 import com.loai.inventory.common.exception.TooManyAttemptsException;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -68,6 +69,9 @@ public final class ApiErrors {
           are.getRequiredRole(),
           are.getThresholdAmount(),
           are.getRequestedAmount());
+    }
+    if (e instanceof ShiftRequiredException) {
+      return ApiError.ofKind(e.getStatusCode(), e.getMessage(), ShiftRequiredException.KIND);
     }
     return ApiError.of(e.getStatusCode(), e.getMessage());
   }
