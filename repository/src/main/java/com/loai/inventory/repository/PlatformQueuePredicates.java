@@ -70,11 +70,13 @@ final class PlatformQueuePredicates {
   /** The membership rule. Written once; see the class comment for why that matters. */
   static Condition where(PlatformQueueKind kind) {
     return switch (kind) {
-      // No channel narrowing, per stories/platform_overview.md. Only the email leg has a failure
-      // path today (NotificationService.dispatchPendingEmail); the in-app leg goes PENDING→SENT and
-      // never reaches FAILED, so the two predicates coincide. If an in-app failure path is ever
-      // added, this one needs `AND channel='email'` to keep matching its name.
-      case FAILED_EMAILS -> NOTIFICATION_DELIVERY.STATUS.eq("FAILED");
+      // Narrowed to the email leg since V96 (stories/web_push_channel.md). The original "no channel
+      // narrowing" verdict (stories/platform_overview.md) held while email was the only channel
+      // with
+      // a failure path; V82's WhatsApp leg quietly broke it, and a failed push is a dead phone the
+      // sweeper prunes, not an operator queue. Without this the "failed emails" tile counted both.
+      case FAILED_EMAILS ->
+          NOTIFICATION_DELIVERY.STATUS.eq("FAILED").and(NOTIFICATION_DELIVERY.CHANNEL.eq("email"));
       case PENDING_REFUNDS -> REFUND.STATUS.eq(RefundStatus.PENDING);
       case OPEN_DISPUTES -> PAYMENT.STATUS.eq(PaymentStatus.DISPUTED);
       // The org queue's has_payment=false verbatim: the 1:1 payment row is the disposition marker,

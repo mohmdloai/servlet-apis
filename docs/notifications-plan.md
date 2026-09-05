@@ -213,7 +213,7 @@ recommendation in this plan's discussion. Not in the notifications scope.
 | Event | Recipient | Default channels | Status |
 |---|---|---|---|
 | Order placed | Customer | email | ✅ |
-| Order placed | Org staff | in_app | ✅ |
+| Order placed | Org staff | in_app + **push** | ✅ push since V96 (`stories/web_push_channel.md`): one `push` delivery per live device, frozen payload, the `token_version` rule silences it on every sign-out-everywhere path |
 | Payment needs verification (manual InstaPay) | Org admin | in_app | |
 | Payment verified | Customer | email | ✅ shipped as `ORDER_PAID` — fired at both `markPaid` sites in `PaymentService.reconcileAndCreate` (MATCHED + OVERPAID, so verify **and** orphan-resolve), not on UNDERPAID or the in-store sale; carries a fresh order-view magic link (`stories/notify_order_paid.md`) |
 | Order shipped | Customer | email | ✅ shipped as `ORDER_SHIPPED` — fired in `FulfillmentService.ship` on `PENDING → SHIPPED`, **once per fulfillment** (a split order is two boxes, two messages); carries `carrier`/`tracking_number` only when recorded. Deliberately **not** named `OUT_FOR_DELIVERY`, which `stories/rider_self_delivery.md` reserves for the rider-pickup edge (`stories/order_lifecycle_notifications.md`) |
@@ -221,7 +221,7 @@ recommendation in this plan's discussion. Not in the notifications scope.
 | Order cancelled | Customer | email | ✅ shipped as `ORDER_CANCELLED` — fired in `OrderCancellationService.cancel` after the refund obligations exist, so a cancel refused by the approval gate rolls back and stays silent. Names the refund total as *being processed* (refunds are created PENDING — no money has moved); an order with no prepayment gets no money sentence at all |
 | Payment received but short (UNDERPAID) | Customer | email | ✅ shipped as `PAYMENT_NEEDS_ATTENTION` — fired on the UNDERPAID reconcile branch beside the partial Payment, **per recorded partial** (each top-up restates the smaller remainder). Silent on OVERPAID (that order is PAID) and on DISPUTED |
 | Invoice issued / reissued | Customer | email *(delivery only — does not harden the invoice)* | |
-| Low-stock threshold crossed | Org manager | in_app | |
+| Low-stock threshold crossed | Org staff | in_app + **push** | ✅ shipped as `LOW_STOCK` (V94, `stories/reorder_point.md`) on the crossing, fired at the two sale sites by `LowStockNotifier`; the push leg (V96) is the immediate reason the channel exists — the person who needs to know a shelf is empty is usually not looking at the dashboard |
 | Refund executed | Customer | email | |
 | Order expired (no payment) | Customer | email | |
 
@@ -260,12 +260,24 @@ each calling `notify(...)` inside its business txn.
    → email off for the org). Covered by `NotificationPreferenceIT`. Story:
    `stories/notification_preferences.md`.
 5. **Phase 4 — Explicit sends:** admin→org and org→customer producers.
-6. **Later:** customer-session magic links / portal (own slice), SMS/WhatsApp subtypes, ESP webhooks
-   for true DELIVERED, org template customization, broadcast model.
+6. **Web Push (V96):** ✅ **done** — `stories/web_push_channel.md`. The first channel a **staff**
+   recipient has besides the feed, and the one channel with **one delivery row per device** (V96
+   relaxes `UNIQUE (notification_id, channel)` to `WHERE channel <> 'push'`). `push_subscription`
+   keyed on the endpoint with `token_version_at_subscribe`; `notification_delivery_push` freezes the
+   target + payload; RFC 8291/8188 encryption and RFC 8292 VAPID in-house on the JCE + jjwt
+   (`common/crypto/WebPushEncryptor`, `common/security/VapidSigner`, pinned to RFC 8291 Appendix A);
+   `NotificationService.dispatchPendingPush` on the shared claim → send → settle lease; 404/410
+   prunes the device. `/api/me/push/config` + `/api/me/push-subscriptions`. Frontend pair:
+   `frontst/stories/140_st_web_push.md`. Push accelerates; the feed row and its poll own delivery.
+7. **Later:** customer push on the storefront (same table + `customer_id`, the portal's own
+   `/api/portal/me/push-subscriptions`), SMS, ESP webhooks for true DELIVERED, org template
+   customization, broadcast model.
 
 > **A new type is free; a new channel is not.** `notification.type` is open TEXT, so the three
-> lifecycle events above cost no migration. `notification_delivery.channel` is `TEXT + CHECK
-> (channel IN ('in_app','email'))`, so **WhatsApp/SMS need a migration (next: V79)**, a subtype
+> lifecycle events above cost no migration. `notification_delivery.channel` is `TEXT + CHECK`
+> (widened by V82 for `whatsapp` and by **V96 for `push`** — the two CHECKs, on
+> `notification_delivery` and `notification_preference`, are independent and both must move), so
+> **a new channel needs a migration**, a subtype
 > table beside `notification_delivery_email`, and `channelsFor(recipient)` — today a constant
 > two-line switch — becoming a per-org/per-customer resolution. The owner decision is a
 > **per-merchant WABA** (each merchant connects their own number, brand and template approval).

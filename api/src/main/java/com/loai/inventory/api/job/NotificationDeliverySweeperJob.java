@@ -53,6 +53,9 @@ public final class NotificationDeliverySweeperJob {
     // by it and needs no second reaper.
     NotificationService.DeliverySummary whatsapp =
         notificationService.dispatchPendingWhatsApp(batchLimit);
+    // The fourth channel (V96): one delivery per device, the same claim → send → settle lease and
+    // the same reaper. The push service's timeouts (5 s + 15 s) sit well inside the lease.
+    NotificationService.DeliverySummary push = notificationService.dispatchPendingPush(batchLimit);
     if (reaped.picked() > 0) {
       log.warn("Notification delivery tick reaped stranded email claims: {}", reaped);
     }
@@ -64,6 +67,9 @@ public final class NotificationDeliverySweeperJob {
     }
     if (email.picked() > 0) {
       log.info("Notification delivery tick (email): {}", email);
+    }
+    if (push.picked() > 0) {
+      log.info("Notification delivery tick (push): {}", push);
     }
   }
 }

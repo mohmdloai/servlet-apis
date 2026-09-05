@@ -370,11 +370,30 @@ The job's `run()` gains one line. `reapStranded` needs nothing: it keys on `SEND
 
 ## Definition of done
 
-- [ ] V96 applied, codegen re-run; `NotificationChannel.PUSH`; both CHECKs widened; the partial
+- [x] V96 applied, codegen re-run; `NotificationChannel.PUSH`; both CHECKs widened; the partial
       unique; `push_subscription` + `notification_delivery_push`.
-- [ ] `WebPushEncryptor` + `VapidSigner` in `common`, pinned to the RFC vectors.
-- [ ] `WebPushSender` pair + factory; env + startup validation; `LoggingWebPushSender` when unset.
-- [ ] `pushTargetsFor`, the produce leg, `dispatchPendingPush`, the job line.
-- [ ] `/api/me/push/config`, `/api/me/push-subscriptions` (`GET`/`POST`/`DELETE`).
-- [ ] `FAILED_EMAILS` narrowed; `perfdb` re-measure recorded.
-- [ ] Tests above green; `service` + `api` batteries green; perfdb hand-migrated to V96.
+- [x] `WebPushEncryptor` + `VapidSigner` in `common`, pinned to the RFC vectors (`P256` helper
+      validates a browser's point is on the curve before any ECDH).
+- [x] `WebPushSender` pair + factory; env + startup validation (`VapidKeys` sign-verifies the pair
+      at boot); `LoggingWebPushSender` when unset.
+- [x] `pushTargetsFor`, the produce leg, `dispatchPendingPush`, the job line.
+- [x] `/api/me/push/config`, `/api/me/push-subscriptions` (`GET`/`POST`/`DELETE`);
+      `MeServletPushTest` pins the 401/403/201/200/204/503 shape and that no read echoes the
+      endpoint or keys.
+- [x] `FAILED_EMAILS` narrowed; `perfdb` re-measure recorded in
+      `tools/seed/results/failed_emails_channel_177.txt` (same plan, filter removes 0 rows).
+- [x] Tests above green (`WebPushEncryptorTest` 6, `VapidSignerTest` 5, `PushSubscriptionIT` 9,
+      `WebPushDeliveryIT` 13, `MeServletPushTest` 9, + the `PlatformQueuesIT` /
+      `NotificationPreferenceIT` additions); perfdb hand-migrated to V95 + V96.
+
+## Built 2026-09-05 — notes for the operator
+
+- **Generate the key pair once:** `npx web-push generate-vapid-keys` prints exactly the two
+  base64url values (`WEB_PUSH_VAPID_PUBLIC_KEY` = the 65-byte point, `WEB_PUSH_VAPID_PRIVATE_KEY` =
+  the 32-byte scalar). Set `WEB_PUSH_SUBJECT=mailto:…` beside them. Until the VPS carries them the
+  channel is honestly off: the logging sender, `enabled:false`, and the frontend switch reads
+  *unavailable*.
+- **The listing is `GET /api/me/push-subscriptions` → live rows only** (token generation matches,
+  user active). After a logout-all the phone's row is silent until the app re-POSTs its
+  subscription — which the frontend does on load, so the next login on that phone revives it.
+- **`ServiceUnavailableException` (503)** is new in `common/exception` for the no-key-pair case.

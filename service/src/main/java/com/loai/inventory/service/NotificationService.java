@@ -20,6 +20,7 @@ import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.OrgWhatsAppConfig;
+import com.loai.inventory.domain.model.PushSubscription;
 import com.loai.inventory.domain.model.RecipientType;
 import com.loai.inventory.domain.repository.CustomerRepository;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
@@ -29,17 +30,25 @@ import com.loai.inventory.domain.repository.NotificationRepository;
 import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgWhatsAppConfigRepositoryFactory;
+import com.loai.inventory.domain.repository.PushSubscriptionRepository;
+import com.loai.inventory.domain.repository.PushSubscriptionRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.service.email.EmailMessage;
 import com.loai.inventory.service.email.EmailSender;
+import com.loai.inventory.service.push.LoggingWebPushSender;
+import com.loai.inventory.service.push.PushTarget;
+import com.loai.inventory.service.push.WebPushException;
+import com.loai.inventory.service.push.WebPushSender;
 import com.loai.inventory.service.whatsapp.CloudApiWhatsAppSender;
 import com.loai.inventory.service.whatsapp.WhatsAppMessage;
 import com.loai.inventory.service.whatsapp.WhatsAppSender;
 import com.loai.inventory.service.whatsapp.WhatsAppTemplates;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -67,10 +76,12 @@ import org.slf4j.LoggerFactory;
  *   <li><b>Feed</b> — own-only reads/mutations, scoped by {@code (orgId, userId)}.
  * </ul>
  *
- * <p>Two channels are wired: a {@code USER} recipient gets an {@code in_app} delivery; a {@code
- * CUSTOMER} recipient gets an {@code in_app} delivery (the portal feed — slice P5) <em>and</em> an
- * {@code email} delivery (the offline reach). Email is transmitted by {@link #dispatchPendingEmail}
- * through an {@link EmailSender} <em>after</em> the business txn commits (never inside it).
+ * <p>Channels: a {@code USER} recipient gets an {@code in_app} delivery, plus one {@code push}
+ * delivery <b>per live device</b> (V96, {@code stories/web_push_channel.md}); a {@code CUSTOMER}
+ * recipient gets an {@code in_app} delivery (the portal feed — slice P5) <em>and</em> an {@code
+ * email} delivery (the offline reach), plus WhatsApp when the org has a live WABA (V82). Every
+ * outbound channel is transmitted by its {@code dispatchPending*} walk through its sender
+ * <em>after</em> the business txn commits (never inside it).
  */
 public class NotificationService {
 
@@ -93,7 +104,10 @@ public class NotificationService {
   private final EmailSender emailSender;
   private final MagicLinkService magicLinkService;
   private final WhatsAppSender whatsAppSender;
+  private final PushSubscriptionRepositoryFactory pushSubscriptionRepoFactory;
+  private final WebPushSender webPushSender;
   private final int emailMaxAttempts;
+  private final int pushMaxAttempts;
   private final ObjectMapper payloadMapper = new ObjectMapper();
 
   public NotificationService(
@@ -108,6 +122,45 @@ public class NotificationService {
       MagicLinkService magicLinkService,
       WhatsAppSender whatsAppSender,
       int emailMaxAttempts) {
+    // Push not wired: no subscription repository means no device is ever a target, and the logging
+    // sender is never reached. The shape the pre-V96 ITs construct.
+    this(
+        rootDsl,
+        notificationRepoFactory,
+        userRepoFactory,
+        customerRepoFactory,
+        preferenceRepoFactory,
+        orgRepoFactory,
+        whatsAppConfigRepoFactory,
+        emailSender,
+        magicLinkService,
+        whatsAppSender,
+        emailMaxAttempts,
+        null,
+        new LoggingWebPushSender(),
+        emailMaxAttempts);
+  }
+
+  /**
+   * The full wiring, with the Web Push leg (V96). {@code pushMaxAttempts} defaults to the email
+   * budget when not positive — the three outbound channels share one budget unless the operator
+   * says otherwise.
+   */
+  public NotificationService(
+      DSLContext rootDsl,
+      NotificationRepositoryFactory notificationRepoFactory,
+      UserRepositoryFactory userRepoFactory,
+      CustomerRepositoryFactory customerRepoFactory,
+      NotificationPreferenceRepositoryFactory preferenceRepoFactory,
+      OrgRepositoryFactory orgRepoFactory,
+      OrgWhatsAppConfigRepositoryFactory whatsAppConfigRepoFactory,
+      EmailSender emailSender,
+      MagicLinkService magicLinkService,
+      WhatsAppSender whatsAppSender,
+      int emailMaxAttempts,
+      PushSubscriptionRepositoryFactory pushSubscriptionRepoFactory,
+      WebPushSender webPushSender,
+      int pushMaxAttempts) {
     this.rootDsl = rootDsl;
     this.notificationRepoFactory = notificationRepoFactory;
     this.userRepoFactory = userRepoFactory;
@@ -118,7 +171,10 @@ public class NotificationService {
     this.emailSender = emailSender;
     this.magicLinkService = magicLinkService;
     this.whatsAppSender = whatsAppSender;
+    this.pushSubscriptionRepoFactory = pushSubscriptionRepoFactory;
+    this.webPushSender = webPushSender == null ? new LoggingWebPushSender() : webPushSender;
     this.emailMaxAttempts = emailMaxAttempts > 0 ? emailMaxAttempts : DEFAULT_EMAIL_MAX_ATTEMPTS;
+    this.pushMaxAttempts = pushMaxAttempts > 0 ? pushMaxAttempts : this.emailMaxAttempts;
   }
 
   /** A staff-preference upsert input from the PUT endpoint. */
@@ -209,6 +265,13 @@ public class NotificationService {
         channelsFor(txDsl, orgId, recipient, type, payload, locale)) {
       // Opt-out resolution: a preference row can suppress this channel. Absence = enabled.
       if (!isChannelEnabled(txDsl, orgId, recipient, type.name(), channel)) {
+        continue;
+      }
+      if (channel == NotificationChannel.PUSH) {
+        // One delivery PER DEVICE, not per channel — see producePushLegs. Zero targets here (a
+        // device pruned between channelsFor and now) simply produces nothing.
+        created +=
+            producePushLegs(txDsl, repo, saved, recipient, type, rendered, sourceType, sourceId);
         continue;
       }
       // An email channel with nowhere to send is resolved BEFORE the delivery row is written, so a
@@ -314,7 +377,12 @@ public class NotificationService {
       Map<String, Object> payload,
       String locale) {
     if (recipient.type() == RecipientType.USER) {
-      return List.of(NotificationChannel.IN_APP);
+      // Push accelerates; the feed row and the bell's poll still own delivery. The leg exists only
+      // when the user has a live subscription — resolved to absence, never to error, like WhatsApp.
+      if (pushTargetsFor(txDsl, recipient.userId()).isEmpty()) {
+        return List.of(NotificationChannel.IN_APP);
+      }
+      return List.of(NotificationChannel.IN_APP, NotificationChannel.PUSH);
     }
     List<NotificationChannel> channels =
         new ArrayList<>(List.of(NotificationChannel.IN_APP, NotificationChannel.EMAIL));
@@ -368,6 +436,91 @@ public class NotificationService {
       // answer "is WhatsApp available?" cannot be allowed to roll back an order.
       log.warn("Could not resolve the WhatsApp channel for org {} — skipping it", orgId, e);
       return null;
+    }
+  }
+
+  /**
+   * The user's live push subscriptions — the devices a {@code push} leg fans out to (V96).
+   *
+   * <p>Live = the user is active and the row's {@code token_version_at_subscribe} still equals
+   * {@code app_user.token_version}, so every existing sign-out-everywhere path (logout-all,
+   * password change, de-privilege, platform disable) silences push with no new call site. Empty
+   * when push is not wired at all (no repository factory), when the user has no device, or when the
+   * read throws — the {@link #whatsAppSpecFor} rule, for the same reason: this runs inside the
+   * caller's business transaction and must never roll it back. Computed twice per notification
+   * (once to decide the channel list, once to write the rows), a couple of indexed reads at human
+   * cadence.
+   */
+  List<PushSubscription> pushTargetsFor(DSLContext txDsl, UUID userId) {
+    if (pushSubscriptionRepoFactory == null || userId == null) {
+      return List.of();
+    }
+    try {
+      return pushSubscriptionRepoFactory.create(txDsl).findLiveByUser(userId);
+    } catch (RuntimeException e) {
+      log.warn("Could not resolve push subscriptions for user {} — skipping push", userId, e);
+      return List.of();
+    }
+  }
+
+  /**
+   * Write one {@code push} delivery + subtype row per live device, the payload frozen now. Returns
+   * how many were written. A device subscribed a second later gets the next event, not this one.
+   */
+  private int producePushLegs(
+      DSLContext txDsl,
+      NotificationRepository repo,
+      Notification saved,
+      NotificationRecipient recipient,
+      NotificationType type,
+      NotificationTemplates.Rendered rendered,
+      String sourceType,
+      UUID sourceId) {
+    List<PushSubscription> targets = pushTargetsFor(txDsl, recipient.userId());
+    if (targets.isEmpty()) {
+      return 0;
+    }
+    String payloadJson =
+        pushPayloadJson(saved.getId(), saved.getOrgId(), type, rendered, sourceType, sourceId);
+    int written = 0;
+    for (PushSubscription sub : targets) {
+      NotificationDelivery d = new NotificationDelivery();
+      d.setNotificationId(saved.getId());
+      d.setChannel(NotificationChannel.PUSH);
+      d.setStatus(DeliveryStatus.PENDING);
+      d.setAttempts(0);
+      NotificationDelivery savedDelivery = repo.insertDelivery(d);
+      repo.insertPushDelivery(
+          savedDelivery.getId(), sub.id(), sub.endpoint(), sub.p256dh(), sub.auth(), payloadJson);
+      written++;
+    }
+    return written;
+  }
+
+  /**
+   * The push payload: the feed row's own words plus what the client needs to resolve a route.
+   * {@code source_type}/{@code source_id} rather than the API-shaped {@code link_target} — the
+   * service worker builds a page path, not an API URL. Well under the 4 KB push limit.
+   */
+  private String pushPayloadJson(
+      UUID notificationId,
+      UUID orgId,
+      NotificationType type,
+      NotificationTemplates.Rendered rendered,
+      String sourceType,
+      UUID sourceId) {
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("notification_id", notificationId.toString());
+    payload.put("type", type.name());
+    payload.put("title", rendered.title());
+    payload.put("body", rendered.body());
+    payload.put("org_id", orgId.toString());
+    payload.put("source_type", sourceType);
+    payload.put("source_id", sourceId == null ? null : sourceId.toString());
+    try {
+      return payloadMapper.writeValueAsString(payload);
+    } catch (JsonProcessingException e) {
+      throw new IllegalArgumentException("cannot serialize push payload", e);
     }
   }
 
@@ -888,6 +1041,159 @@ public class NotificationService {
           if (terminal || claimed.getAttempts() + 1 >= emailMaxAttempts) {
             repo.markDeliveryFailed(deliveryId, truncateError(failure.getMessage()), now);
             finalizeIfTerminal(repo, claimed.getNotificationId(), now);
+            return DeliveryOutcome.FAILED;
+          }
+          repo.markDeliveryRetry(deliveryId, truncateError(failure.getMessage()), now);
+          return DeliveryOutcome.RETRIED;
+        });
+  }
+
+  // Worker: drain pending push deliveries (V96)
+
+  /**
+   * Drain PENDING push deliveries — the {@link #dispatchPendingWhatsApp} walk step for step: claim
+   * in one short txn, encrypt + POST with no connection held, settle in a second short txn. One
+   * delivery is one device; a phone that is gone (404/410) fails its own row and prunes its own
+   * subscription while the laptop's row goes out untouched.
+   */
+  public DeliverySummary dispatchPendingPush(int batchLimit) {
+    NotificationRepository reader = notificationRepoFactory.create(rootDsl);
+    List<UUID> ids = reader.findPendingDeliveryIds(NotificationChannel.PUSH, batchLimit);
+    int sent = 0;
+    int retried = 0;
+    int failed = 0;
+    int skipped = 0;
+    for (UUID id : ids) {
+      DeliveryOutcome outcome;
+      try {
+        outcome = dispatchOnePush(id);
+      } catch (RuntimeException e) {
+        outcome = DeliveryOutcome.RETRIED;
+        log.warn("push delivery {} errored during dispatch (will retry)", id, e);
+      }
+      switch (outcome) {
+        case SENT -> sent++;
+        case RETRIED -> retried++;
+        case FAILED -> failed++;
+        case SKIPPED -> skipped++;
+      }
+    }
+    return new DeliverySummary(ids.size(), sent, retried, failed, skipped);
+  }
+
+  /** The claimed row plus the frozen target and payload. */
+  private record ClaimedPush(
+      NotificationDelivery delivery, NotificationRepository.PushDeliveryContent content) {}
+
+  private DeliveryOutcome dispatchOnePush(UUID deliveryId) {
+    // 1. Claim — short transaction, no provider call inside it.
+    PushClaim claim = claimPush(deliveryId);
+    if (claim.failedTerminally()) {
+      return DeliveryOutcome.FAILED;
+    }
+    ClaimedPush claimed = claim.claimed();
+    if (claimed == null) {
+      return DeliveryOutcome.SKIPPED;
+    }
+
+    // 2. Send — NO transaction, NO connection, NO row lock.
+    RuntimeException failure = null;
+    Integer providerStatus = null;
+    try {
+      providerStatus =
+          webPushSender.send(
+              new PushTarget(
+                  claimed.content().subscriptionId(),
+                  claimed.content().endpoint(),
+                  claimed.content().p256dh(),
+                  claimed.content().auth()),
+              claimed.content().payloadJson().getBytes(StandardCharsets.UTF_8));
+    } catch (RuntimeException e) {
+      failure = e;
+    }
+
+    // 3. Settle — short transaction. The row is SENDING, so this is its only writer.
+    return settlePush(claimed, providerStatus, failure);
+  }
+
+  /** Returned, not thrown — see {@link WhatsAppClaim}. */
+  private record PushClaim(ClaimedPush claimed, boolean failedTerminally) {
+    static PushClaim nothing() {
+      return new PushClaim(null, false);
+    }
+
+    static PushClaim failed() {
+      return new PushClaim(null, true);
+    }
+
+    static PushClaim of(ClaimedPush c) {
+      return new PushClaim(c, false);
+    }
+  }
+
+  private PushClaim claimPush(UUID deliveryId) {
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          NotificationRepository repo = notificationRepoFactory.create(txDsl);
+          OffsetDateTime now = now();
+          NotificationDelivery d = repo.claimForSend(deliveryId, now).orElse(null);
+          if (d == null) {
+            return PushClaim.nothing();
+          }
+          NotificationRepository.PushDeliveryContent content =
+              repo.findPushDeliveryContent(deliveryId).orElse(null);
+          if (content == null || content.subscriptionId() == null) {
+            // A missing subtype row is a producer bug; a null subscription_id means the device was
+            // pruned (ON DELETE SET NULL) since produce — a 410 on a sibling delivery, or the user
+            // unsubscribed. Both are terminal for THIS delivery: a send to a dead endpoint only
+            // earns another 410. Committed by returning, never thrown.
+            repo.markDeliveryFailed(
+                deliveryId,
+                content == null ? "missing push subtype row" : "subscription pruned before send",
+                now);
+            finalizeIfTerminal(repo, d.getNotificationId(), now);
+            return PushClaim.failed();
+          }
+          return PushClaim.of(new ClaimedPush(d, content));
+        });
+  }
+
+  private DeliveryOutcome settlePush(
+      ClaimedPush claimed, Integer providerStatus, RuntimeException failure) {
+    return rootDsl.transactionResult(
+        cfg -> {
+          DSLContext txDsl = DSL.using(cfg);
+          NotificationRepository repo = notificationRepoFactory.create(txDsl);
+          OffsetDateTime now = now();
+          UUID deliveryId = claimed.delivery().getId();
+          UUID subscriptionId = claimed.content().subscriptionId();
+          if (failure == null) {
+            repo.markPushProviderStatus(deliveryId, providerStatus);
+            repo.markDeliverySent(deliveryId, now);
+            if (pushSubscriptionRepoFactory != null && subscriptionId != null) {
+              pushSubscriptionRepoFactory.create(txDsl).touchLastUsed(subscriptionId, now);
+            }
+            finalizeIfTerminal(repo, claimed.delivery().getNotificationId(), now);
+            return DeliveryOutcome.SENT;
+          }
+          if (failure instanceof WebPushException wpe) {
+            repo.markPushProviderStatus(deliveryId, wpe.status());
+          }
+          boolean terminal = failure instanceof WebPushException.TerminalWebPushException;
+          boolean gone = terminal && ((WebPushException.TerminalWebPushException) failure).isGone();
+          if (terminal || claimed.delivery().getAttempts() + 1 >= pushMaxAttempts) {
+            repo.markDeliveryFailed(deliveryId, truncateError(failure.getMessage()), now);
+            if (gone && pushSubscriptionRepoFactory != null && subscriptionId != null) {
+              // The push service's verdict on the DEVICE, not the message: it unsubscribed or the
+              // endpoint expired. The only moment the server learns it — prune, so the next event
+              // does not produce a row for a phone that is not there.
+              PushSubscriptionRepository subs = pushSubscriptionRepoFactory.create(txDsl);
+              if (subs.deleteById(subscriptionId) > 0) {
+                log.info("pruned push subscription {} (push service said gone)", subscriptionId);
+              }
+            }
+            finalizeIfTerminal(repo, claimed.delivery().getNotificationId(), now);
             return DeliveryOutcome.FAILED;
           }
           repo.markDeliveryRetry(deliveryId, truncateError(failure.getMessage()), now);
