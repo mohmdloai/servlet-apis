@@ -3,14 +3,15 @@ package com.loai.inventory.api.servlet.handler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
+import com.loai.inventory.api.dto.InvoiceListResponse;
 import com.loai.inventory.api.dto.InvoiceSummaryResponse;
-import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.ReissueInvoiceRequest;
 import com.loai.inventory.api.dto.VoidInvoiceRequest;
 import com.loai.inventory.api.mapper.InvoiceMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.InvoiceListFilter;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceAdminService.InvoicePage;
@@ -28,10 +29,13 @@ import org.slf4j.LoggerFactory;
  * Handles {@code /api/orgs/{orgId}/invoices}:
  *
  * <ul>
- *   <li>{@code GET /invoices?status=&page=&size=} — the awaiting-payment worklist / invoice ledger
- *       ({@code stories/invoice_reads.md}): filtered = queue oldest-first ({@code ?status=ISSUED}
+ *   <li>{@code GET /invoices?status=&q=&from=&to=&paid=&min=&max=&page=&size=} — the
+ *       awaiting-payment worklist / invoice ledger ({@code stories/invoice_reads.md}, narrowed by
+ *       {@code stories/invoice_filters.md}): filtered = queue oldest-first ({@code ?status=ISSUED}
  *       is the awaiting-payment queue), unfiltered = ledger newest-first (VOID included); lean rows
- *       carry their batch-loaded {@code sales_order_number}. VIEWER+.
+ *       carry their batch-loaded {@code sales_order_number}; the envelope carries the filtered
+ *       set's money summary. VIEWER+.
+ *   <li>{@code GET /invoices/status-counts} — the worklist tabs' numbers, one query. VIEWER+.
  *   <li>{@code GET /invoices/{id}} — read an invoice + lines (VIEWER+)
  *   <li>{@code POST /invoices/{id}/void} — cancel an ISSUED, unpaid, uncredited invoice (MANAGER+)
  *   <li>{@code POST /invoices/{id}/reissue} — void + issue a corrected replacement (MANAGER+)
@@ -74,6 +78,15 @@ public class InvoiceHandler implements OrgResourceHandler {
         return;
       }
 
+      if (parts.length == 1 && "status-counts".equals(parts[0])) {
+        if ("GET".equals(method)) {
+          doStatusCounts(req, resp, orgId);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
+
       UUID invoiceId = parseId(parts[0]);
       if (parts.length == 1) {
         if ("GET".equals(method)) {
@@ -110,7 +123,11 @@ public class InvoiceHandler implements OrgResourceHandler {
     }
   }
 
-  /** {@code GET /} — the awaiting-payment worklist (filtered) / invoice ledger (unfiltered). */
+  /**
+   * {@code GET /?status=&q=&from=&to=&paid=&min=&max=&page=&size=} — the awaiting-payment worklist
+   * (with a status) / invoice ledger (without), narrowed by the other dimensions ({@code
+   * stories/invoice_filters.md}). The envelope carries the filtered set's money summary.
+   */
   private void doList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
       throws IOException {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
@@ -120,11 +137,30 @@ public class InvoiceHandler implements OrgResourceHandler {
         Math.min(
             Math.max(intParam(req, "size", InvoiceAdminService.DEFAULT_PAGE_SIZE), 1),
             InvoiceAdminService.MAX_PAGE_SIZE);
-    InvoicePage result =
-        service.list(orgId, InvoiceMapper.toStatusFilter(req.getParameter("status")), page, size);
+    InvoiceListFilter filter =
+        InvoiceMapper.toListFilter(
+            req.getParameter("status"),
+            req.getParameter("q"),
+            req.getParameter("from"),
+            req.getParameter("to"),
+            req.getParameter("paid"),
+            req.getParameter("min"),
+            req.getParameter("max"));
+    InvoicePage result = service.list(orgId, filter, page, size);
     List<InvoiceSummaryResponse> data =
         result.items().stream().map(InvoiceMapper::toSummaryResponse).toList();
-    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+    writeJson(
+        resp,
+        200,
+        new InvoiceListResponse(
+            data, result.total(), page, size, InvoiceMapper.toSummaryResponse(result.stats())));
+  }
+
+  /** {@code GET /status-counts} — the worklist tabs' numbers (VIEWER), one query. */
+  private void doStatusCounts(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(resp, 200, InvoiceMapper.toStatusCountsResponse(service.statusCounts(orgId)));
   }
 
   private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)

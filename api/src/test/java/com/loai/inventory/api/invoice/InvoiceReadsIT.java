@@ -8,6 +8,7 @@ import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.loai.inventory.domain.model.InvoiceListFilter;
 import com.loai.inventory.domain.model.InvoiceStatus;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
@@ -126,17 +127,22 @@ class InvoiceReadsIT {
     Invoice i3 = seedInvoice(orgId, order, "100.00", InvoiceStatus.ISSUED, base.plusMinutes(3));
 
     // Queue: only ISSUED, oldest first (collect the money first).
-    InvoicePage queue = invoiceAdminService.list(orgId, InvoiceStatus.ISSUED, 0, 20);
+    InvoicePage queue =
+        invoiceAdminService.list(orgId, InvoiceListFilter.ofStatus(InvoiceStatus.ISSUED), 0, 20);
     assertEquals(2, queue.total());
     assertEquals(List.of(i1.id(), i3.id()), ids(queue));
 
     // Ledger: every status incl. VOID, newest first.
-    InvoicePage ledger = invoiceAdminService.list(orgId, null, 0, 20);
+    InvoicePage ledger = invoiceAdminService.list(orgId, InvoiceListFilter.none(), 0, 20);
     assertEquals(3, ledger.total());
     assertEquals(List.of(i3.id(), i2.id(), i1.id()), ids(ledger));
 
     // The VOID filter isolates the cancelled document.
-    assertEquals(List.of(i2.id()), ids(invoiceAdminService.list(orgId, InvoiceStatus.VOID, 0, 20)));
+    assertEquals(
+        List.of(i2.id()),
+        ids(
+            invoiceAdminService.list(
+                orgId, InvoiceListFilter.ofStatus(InvoiceStatus.VOID), 0, 20)));
   }
 
   @Test
@@ -147,7 +153,7 @@ class InvoiceReadsIT {
     seedInvoice(orgId, order, "100.00", InvoiceStatus.ISSUED, base.plusMinutes(2));
 
     // page floors at 0, size clamps into [1, MAX]; total is the full filtered count.
-    InvoicePage page = invoiceAdminService.list(orgId, null, -3, 0);
+    InvoicePage page = invoiceAdminService.list(orgId, InvoiceListFilter.none(), -3, 0);
     assertEquals(1, page.items().size());
     assertEquals(2, page.total());
   }
@@ -158,7 +164,8 @@ class InvoiceReadsIT {
     Order order = seedOrder(orgId, "500.00");
     Invoice inv = seedInvoice(orgId, order, "120.00", InvoiceStatus.ISSUED, base.plusMinutes(1));
 
-    InvoiceSummary row = invoiceAdminService.list(orgId, null, 0, 20).items().get(0);
+    InvoiceSummary row =
+        invoiceAdminService.list(orgId, InvoiceListFilter.none(), 0, 20).items().get(0);
 
     assertEquals(inv.id(), row.invoice().getId());
     assertEquals(order.number(), row.salesOrderNumber());
@@ -179,10 +186,12 @@ class InvoiceReadsIT {
     Invoice foreign =
         seedInvoice(otherOrg, otherOrder, "100.00", InvoiceStatus.ISSUED, base.plusMinutes(1));
 
-    List<UUID> ours = ids(invoiceAdminService.list(orgId, null, 0, 20));
+    List<UUID> ours = ids(invoiceAdminService.list(orgId, InvoiceListFilter.none(), 0, 20));
     assertEquals(List.of(mine.id()), ours);
     assertTrue(ours.stream().noneMatch(foreign.id()::equals));
-    assertEquals(List.of(foreign.id()), ids(invoiceAdminService.list(otherOrg, null, 0, 20)));
+    assertEquals(
+        List.of(foreign.id()),
+        ids(invoiceAdminService.list(otherOrg, InvoiceListFilter.none(), 0, 20)));
   }
 
   // helpers
