@@ -4,6 +4,7 @@ import static com.loai.inventory.repository.generated.Tables.NOTIFICATION;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY_EMAIL;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY_IN_APP;
+import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY_PUSH;
 import static com.loai.inventory.repository.generated.Tables.NOTIFICATION_DELIVERY_WHATSAPP;
 
 import com.loai.inventory.domain.model.DeliveryStatus;
@@ -120,6 +121,24 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .set(
             NOTIFICATION_DELIVERY_WHATSAPP.TEMPLATE_PARAMS,
             templateParamsJson == null ? null : JSONB.valueOf(templateParamsJson))
+        .execute();
+  }
+
+  @Override
+  public void insertPushDelivery(
+      UUID deliveryId,
+      UUID subscriptionId,
+      String endpoint,
+      String p256dh,
+      String auth,
+      String payloadJson) {
+    dsl.insertInto(NOTIFICATION_DELIVERY_PUSH)
+        .set(NOTIFICATION_DELIVERY_PUSH.DELIVERY_ID, deliveryId)
+        .set(NOTIFICATION_DELIVERY_PUSH.SUBSCRIPTION_ID, subscriptionId)
+        .set(NOTIFICATION_DELIVERY_PUSH.ENDPOINT, endpoint)
+        .set(NOTIFICATION_DELIVERY_PUSH.P256DH, p256dh)
+        .set(NOTIFICATION_DELIVERY_PUSH.AUTH, auth)
+        .set(NOTIFICATION_DELIVERY_PUSH.PAYLOAD_JSON, JSONB.valueOf(payloadJson))
         .execute();
   }
 
@@ -268,6 +287,38 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
     dsl.update(NOTIFICATION_DELIVERY_WHATSAPP)
         .set(NOTIFICATION_DELIVERY_WHATSAPP.PROVIDER_MESSAGE_ID, providerMessageId)
         .where(NOTIFICATION_DELIVERY_WHATSAPP.DELIVERY_ID.eq(deliveryId))
+        .execute();
+  }
+
+  @Override
+  public Optional<PushDeliveryContent> findPushDeliveryContent(UUID deliveryId) {
+    return dsl.select(
+            NOTIFICATION_DELIVERY_PUSH.SUBSCRIPTION_ID,
+            NOTIFICATION_DELIVERY_PUSH.ENDPOINT,
+            NOTIFICATION_DELIVERY_PUSH.P256DH,
+            NOTIFICATION_DELIVERY_PUSH.AUTH,
+            NOTIFICATION_DELIVERY_PUSH.PAYLOAD_JSON)
+        .from(NOTIFICATION_DELIVERY_PUSH)
+        .where(NOTIFICATION_DELIVERY_PUSH.DELIVERY_ID.eq(deliveryId))
+        .fetchOptional()
+        .map(
+            r ->
+                new PushDeliveryContent(
+                    r.get(NOTIFICATION_DELIVERY_PUSH.SUBSCRIPTION_ID),
+                    r.get(NOTIFICATION_DELIVERY_PUSH.ENDPOINT),
+                    r.get(NOTIFICATION_DELIVERY_PUSH.P256DH),
+                    r.get(NOTIFICATION_DELIVERY_PUSH.AUTH),
+                    r.get(NOTIFICATION_DELIVERY_PUSH.PAYLOAD_JSON).data()));
+  }
+
+  @Override
+  public void markPushProviderStatus(UUID deliveryId, Integer providerStatus) {
+    if (providerStatus == null) {
+      return; // a transport fault never reached the push service — the column honestly stays null
+    }
+    dsl.update(NOTIFICATION_DELIVERY_PUSH)
+        .set(NOTIFICATION_DELIVERY_PUSH.PROVIDER_STATUS, providerStatus)
+        .where(NOTIFICATION_DELIVERY_PUSH.DELIVERY_ID.eq(deliveryId))
         .execute();
   }
 

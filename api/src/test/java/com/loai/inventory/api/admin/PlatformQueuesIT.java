@@ -302,6 +302,24 @@ class PlatformQueuesIT {
     assertTrue(row.hasNonNull("failed_at"));
   }
 
+  /**
+   * Since V96 the queue is narrowed to {@code channel = 'email'}. A failed WhatsApp delivery (V82)
+   * or a failed push delivery — a dead phone the sweeper prunes, not an operator queue — must not
+   * count on a tile called "failed emails". The tile and the list move together, by construction.
+   */
+  @Test
+  void failedEmails_doNotCountFailedWhatsAppOrPushDeliveries() {
+    UUID org = createOrg("acme");
+    createFailedEmail(org);
+    createFailedDeliveryOn(org, "whatsapp");
+    createFailedDeliveryOn(org, "push");
+
+    assertEquals(1, list(PlatformQueueKind.FAILED_EMAILS).path("total").asLong());
+    assertEquals(
+        1, overview().path("queues").path(countField(PlatformQueueKind.FAILED_EMAILS)).asLong());
+    assertEquals(1, list(PlatformQueueKind.FAILED_EMAILS).path("data").size());
+  }
+
   /** A credit-note-backed refund names its note; a payment-backed one names its order. */
   @Test
   void pendingRefunds_carryWhicheverSourceNumberExists() {
@@ -717,6 +735,31 @@ class PlatformQueuesIT {
 
   private void createFailedEmail(UUID orgId) {
     createDelivery(orgId, "FAILED");
+  }
+
+  /** A FAILED delivery on a non-email channel — no subtype row is needed for the predicate. */
+  private void createFailedDeliveryOn(UUID orgId, String channel) {
+    UUID customer = createCustomer(orgId);
+    UUID notificationId = UUID.randomUUID();
+    dsl.insertInto(NOTIFICATION)
+        .set(NOTIFICATION.ID, notificationId)
+        .set(NOTIFICATION.ORG_ID, orgId)
+        .set(NOTIFICATION.RECIPIENT_TYPE, "CUSTOMER")
+        .set(NOTIFICATION.RECIPIENT_CUSTOMER_ID, customer)
+        .set(NOTIFICATION.TYPE, "ORDER_SHIPPED")
+        .set(NOTIFICATION.TITLE, "t")
+        .set(NOTIFICATION.BODY, "b")
+        .set(NOTIFICATION.STATUS, "DISPATCHED")
+        .execute();
+    dsl.insertInto(NOTIFICATION_DELIVERY)
+        .set(NOTIFICATION_DELIVERY.ID, UUID.randomUUID())
+        .set(NOTIFICATION_DELIVERY.NOTIFICATION_ID, notificationId)
+        .set(NOTIFICATION_DELIVERY.CHANNEL, channel)
+        .set(NOTIFICATION_DELIVERY.STATUS, "FAILED")
+        .set(NOTIFICATION_DELIVERY.ATTEMPTS, 5)
+        .set(NOTIFICATION_DELIVERY.LAST_ERROR, channel + " said no")
+        .set(NOTIFICATION_DELIVERY.FAILED_AT, now().minusHours(1))
+        .execute();
   }
 
   private void createDelivery(UUID orgId, String status) {

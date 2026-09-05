@@ -243,6 +243,35 @@ class NotificationPreferenceIT {
                 List.of(new PreferenceInput("NOT_A_TYPE", NotificationChannel.IN_APP, false))));
   }
 
+  /**
+   * The {@code push} channel (V96) is accepted by the same parser and the same CHECK as its three
+   * siblings — the widened {@code notification_preference} constraint is what this pins, since the
+   * two CHECKs are independent and V82's lesson was a PUT that 500'd on one of them.
+   */
+  @Test
+  void pushChannel_roundTripsThroughThePreferences_onBothPlanes() {
+    UUID org = createOrg("acme");
+    UUID user = createUser("staff@acme.test");
+    UUID customer = createCustomer(org, "shopper@acme.test");
+
+    assertEquals(NotificationChannel.PUSH, NotificationChannel.fromDbValue("push"));
+    List<NotificationPreference> set =
+        service.setUserPreferences(
+            org, user, List.of(new PreferenceInput("LOW_STOCK", NotificationChannel.PUSH, false)));
+    assertEquals(1, set.size());
+    assertEquals(NotificationChannel.PUSH, set.get(0).channel());
+    assertFalse(set.get(0).enabled());
+
+    // The portal parser accepts it too; channelsFor(CUSTOMER) never offers it, so the row is inert.
+    List<NotificationPreference> customerSet =
+        service.setCustomerPreferences(
+            org,
+            customer,
+            List.of(new PreferenceInput("ORDER_SHIPPED", NotificationChannel.PUSH, false)));
+    assertEquals(1, customerSet.size());
+    assertThrows(IllegalArgumentException.class, () -> NotificationChannel.fromDbValue("sms"));
+  }
+
   /** Unsubscribe: mint token → resolve → apply → the customer's next email is suppressed. */
   @Test
   void customerUnsubscribe_suppressesEmail() {

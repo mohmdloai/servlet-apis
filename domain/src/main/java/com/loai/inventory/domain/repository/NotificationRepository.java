@@ -49,6 +49,20 @@ public interface NotificationRepository {
       String templateLanguage,
       String templateParamsJson);
 
+  /**
+   * The Web Push subtype row (V96). Freezes the target device's endpoint and keys plus the JSON
+   * payload at produce time — the email precedent one level down — so what was sent is
+   * reconstructable from the row, not re-derived from a device that may since have re-subscribed.
+   * One row per (notification, subscription).
+   */
+  void insertPushDelivery(
+      UUID deliveryId,
+      UUID subscriptionId,
+      String endpoint,
+      String p256dh,
+      String auth,
+      String payloadJson);
+
   // Worker (delivery sweeper)
   List<UUID> findPendingDeliveryIds(NotificationChannel channel, int limit);
 
@@ -117,6 +131,21 @@ public interface NotificationRepository {
 
   /** Record the provider's message id on a sent WhatsApp delivery (null when it returned none). */
   void markWhatsAppProviderMessageId(UUID deliveryId, String providerMessageId);
+
+  /** The frozen push target + payload for a claimed delivery. */
+  Optional<PushDeliveryContent> findPushDeliveryContent(UUID deliveryId);
+
+  /**
+   * Push fields captured at produce time. {@code subscriptionId} is null once the device was pruned
+   * ({@code ON DELETE SET NULL}) — the sweeper fails such a delivery at the claim without a send.
+   */
+  record PushDeliveryContent(
+      UUID subscriptionId, String endpoint, String p256dh, String auth, String payloadJson) {}
+
+  /**
+   * Record the push service's HTTP status on a push delivery (null when the send never reached it).
+   */
+  void markPushProviderStatus(UUID deliveryId, Integer providerStatus);
 
   /**
    * The org that owns a delivery, via its parent notification. The WhatsApp sweeper needs it to

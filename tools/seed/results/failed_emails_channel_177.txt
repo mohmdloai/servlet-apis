@@ -1,0 +1,142 @@
+# Story web_push_channel.md (branch 177_feat/web-push) — FAILED_EMAILS narrowed to channel='email'.
+# Captured 2026-09-05 against perfdb after hand-migrating V95 + V96 (standing procedure in
+# tools/seed/README.md; history rows copied, Flyway still never pointed here).
+#
+# WHAT CHANGED: PlatformQueuePredicates.FAILED_EMAILS was `status = 'FAILED'` with no channel
+# narrowing — stale since V82 (a failed WhatsApp delivery counted as a failed email) and wrong for
+# V96 (a failed push is a pruned phone, not an operator queue). It is now
+# `status = 'FAILED' AND channel = 'email'`. V73's rule: re-measure the index the queue rides.
+#
+# FINDING: same plan. notification_delivery_failed_global_idx (created_at, id) WHERE
+# status = 'FAILED' still drives both the count (Bitmap Index Scan → nested loop over
+# notification_pkey, 5,069 loops) and the first page (Index Scan, LIMIT 20); the channel test is a
+# plain Filter on the index-qualified rows — every FAILED row on perfdb is 'email', so
+# Rows Removed by Filter: 0, and the predicate can only ever be MORE selective than before.
+# Warm, three runs each (ms): before 45.6 / 10.0 / 21.9, after 9.5 / 10.6 / 11.1 — the same
+# ~10 ms nested loop, the spread is cache noise (the very first touch below was 427 ms cold,
+# 15,212 buffers read). First page of the queue: 0.6 ms warm. ?org_id= rides notification_org_idx
+# exactly as V73 measured (7 ms first touch).
+# VERDICT: no new index, no partial-index rewrite. The narrowing costs nothing.
+#
+SET
+ failed_any_channel | failed_email | deliveries 
+--------------------+--------------+------------
+               5069 |         5069 |    1000025
+(1 row)
+
+                                                                                   QUERY PLAN                                                                                   
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=17217.94..17217.95 rows=1 width=8) (actual time=425.860..427.204 rows=1 loops=1)
+   Buffers: shared hit=12204 read=3127
+   ->  Gather  (cost=17217.72..17217.93 rows=2 width=8) (actual time=424.958..427.199 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=12204 read=3127
+         ->  Partial Aggregate  (cost=16217.72..16217.73 rows=1 width=8) (actual time=420.455..420.455 rows=1 loops=3)
+               Buffers: shared hit=12204 read=3127
+               ->  Nested Loop  (cost=135.34..16212.38 rows=2139 width=0) (actual time=5.959..420.064 rows=1690 loops=3)
+                     Buffers: shared hit=12204 read=3127
+                     ->  Parallel Bitmap Heap Scan on notification_delivery nd  (cost=134.91..9716.89 rows=2139 width=16) (actual time=4.955..5.382 rows=1690 loops=3)
+                           Recheck Cond: (status = 'FAILED'::text)
+                           Heap Blocks: exact=31
+                           Buffers: shared hit=93 read=26
+                           ->  Bitmap Index Scan on notification_delivery_failed_global_idx  (cost=0.00..133.63 rows=5133 width=0) (actual time=8.437..8.437 rows=5069 loops=1)
+                                 Buffers: shared read=26
+                     ->  Index Only Scan using notification_pkey on notification n  (cost=0.42..3.04 rows=1 width=16) (actual time=0.245..0.245 rows=1 loops=5069)
+                           Index Cond: (id = nd.notification_id)
+                           Heap Fetches: 0
+                           Buffers: shared hit=12111 read=3101
+ Planning:
+   Buffers: shared hit=248 read=15
+ Planning Time: 8.239 ms
+ Execution Time: 427.275 ms
+(24 rows)
+
+                                                                                   QUERY PLAN                                                                                   
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=17223.29..17223.30 rows=1 width=8) (actual time=10.372..10.475 rows=1 loops=1)
+   Buffers: shared hit=15331
+   ->  Gather  (cost=17223.07..17223.28 rows=2 width=8) (actual time=8.737..10.471 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=15331
+         ->  Partial Aggregate  (cost=16223.07..16223.08 rows=1 width=8) (actual time=5.085..5.086 rows=1 loops=3)
+               Buffers: shared hit=15331
+               ->  Nested Loop  (cost=135.34..16217.72 rows=2139 width=0) (actual time=0.173..4.999 rows=1690 loops=3)
+                     Buffers: shared hit=15331
+                     ->  Parallel Bitmap Heap Scan on notification_delivery nd  (cost=134.91..9722.23 rows=2139 width=16) (actual time=0.138..0.355 rows=1690 loops=3)
+                           Recheck Cond: (status = 'FAILED'::text)
+                           Filter: (channel = 'email'::text)
+                           Heap Blocks: exact=72
+                           Buffers: shared hit=119
+                           ->  Bitmap Index Scan on notification_delivery_failed_global_idx  (cost=0.00..133.63 rows=5133 width=0) (actual time=0.328..0.328 rows=5069 loops=1)
+                                 Buffers: shared hit=26
+                     ->  Index Only Scan using notification_pkey on notification n  (cost=0.42..3.04 rows=1 width=16) (actual time=0.003..0.003 rows=1 loops=5069)
+                           Index Cond: (id = nd.notification_id)
+                           Heap Fetches: 0
+                           Buffers: shared hit=15212
+ Planning:
+   Buffers: shared hit=14
+ Planning Time: 0.288 ms
+ Execution Time: 10.511 ms
+(25 rows)
+
+                                                                                         QUERY PLAN                                                                                          
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=1.13..328.94 rows=20 width=123) (actual time=2.021..18.160 rows=20 loops=1)
+   Buffers: shared hit=116 read=66
+   ->  Nested Loop Left Join  (cost=1.13..84132.09 rows=5133 width=123) (actual time=2.020..18.156 rows=20 loops=1)
+         Buffers: shared hit=116 read=66
+         ->  Nested Loop  (cost=0.71..51128.74 rows=5133 width=94) (actual time=0.418..5.531 rows=20 loops=1)
+               Buffers: shared hit=82 read=20
+               ->  Index Scan using notification_delivery_failed_global_idx on notification_delivery nd  (cost=0.28..17221.39 rows=5133 width=81) (actual time=0.008..0.034 rows=20 loops=1)
+                     Filter: (channel = 'email'::text)
+                     Buffers: shared hit=22
+               ->  Index Scan using notification_pkey on notification n  (cost=0.42..6.61 rows=1 width=45) (actual time=0.274..0.274 rows=1 loops=20)
+                     Index Cond: (id = nd.notification_id)
+                     Buffers: shared hit=60 read=20
+         ->  Index Scan using notification_delivery_email_pkey on notification_delivery_email e  (cost=0.42..6.43 rows=1 width=45) (actual time=0.630..0.630 rows=1 loops=20)
+               Index Cond: (delivery_id = nd.id)
+               Buffers: shared hit=34 read=46
+ Planning:
+   Buffers: shared hit=58 read=14
+ Planning Time: 3.965 ms
+ Execution Time: 18.212 ms
+(19 rows)
+
+                                                                                         QUERY PLAN                                                                                          
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=10071.19..10071.20 rows=1 width=8) (actual time=7.250..7.257 rows=1 loops=1)
+   Buffers: shared hit=127 read=33
+   InitPlan 2
+     ->  Index Scan using notification_pkey on notification  (cost=4.06..12.08 rows=1 width=16) (actual time=0.011..0.012 rows=1 loops=1)
+           Index Cond: (id = (InitPlan 1).col1)
+           Buffers: shared hit=7
+           InitPlan 1
+             ->  Limit  (cost=0.28..3.63 rows=1 width=16) (actual time=0.006..0.006 rows=1 loops=1)
+                   Buffers: shared hit=3
+                   ->  Index Scan using notification_delivery_failed_global_idx on notification_delivery  (cost=0.28..17208.55 rows=5133 width=16) (actual time=0.006..0.006 rows=1 loops=1)
+                         Buffers: shared hit=3
+   ->  Hash Join  (cost=413.34..10059.05 rows=26 width=0) (actual time=6.494..7.252 rows=31 loops=1)
+         Hash Cond: (nd.notification_id = n.id)
+         Buffers: shared hit=127 read=33
+         ->  Bitmap Heap Scan on notification_delivery nd  (cost=134.91..9767.15 rows=5133 width=16) (actual time=0.125..0.614 rows=5069 loops=1)
+               Recheck Cond: (status = 'FAILED'::text)
+               Filter: (channel = 'email'::text)
+               Heap Blocks: exact=93
+               Buffers: shared hit=119
+               ->  Bitmap Index Scan on notification_delivery_failed_global_idx  (cost=0.00..133.63 rows=5133 width=0) (actual time=0.115..0.115 rows=5069 loops=1)
+                     Buffers: shared hit=26
+         ->  Hash  (cost=215.93..215.93 rows=5000 width=16) (actual time=6.290..6.290 rows=5000 loops=1)
+               Buckets: 8192  Batches: 1  Memory Usage: 299kB
+               Buffers: shared hit=8 read=33
+               ->  Index Only Scan using notification_org_idx on notification n  (cost=0.42..215.93 rows=5000 width=16) (actual time=1.021..5.799 rows=5000 loops=1)
+                     Index Cond: (org_id = (InitPlan 2).col1)
+                     Heap Fetches: 0
+                     Buffers: shared hit=8 read=33
+ Planning:
+   Buffers: shared hit=10
+ Planning Time: 0.165 ms
+ Execution Time: 7.325 ms
+(32 rows)
+

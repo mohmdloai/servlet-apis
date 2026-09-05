@@ -47,6 +47,7 @@ import com.loai.inventory.domain.repository.ProductListingRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductRepository;
 import com.loai.inventory.domain.repository.ProductRepositoryFactory;
 import com.loai.inventory.domain.repository.ProductVariantRepositoryFactory;
+import com.loai.inventory.domain.repository.PushSubscriptionRepositoryFactory;
 import com.loai.inventory.domain.repository.RefundAllocationRepositoryFactory;
 import com.loai.inventory.domain.repository.RefundRepositoryFactory;
 import com.loai.inventory.domain.repository.ReportRepository;
@@ -95,6 +96,7 @@ import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductRepositoryImpl;
 import com.loai.inventory.repository.ProductVariantRepositoryFactoryImpl;
+import com.loai.inventory.repository.PushSubscriptionRepositoryFactoryImpl;
 import com.loai.inventory.repository.RefundAllocationRepositoryFactoryImpl;
 import com.loai.inventory.repository.RefundRepositoryFactoryImpl;
 import com.loai.inventory.repository.ReportRepositoryImpl;
@@ -136,6 +138,7 @@ import com.loai.inventory.service.PresignedOgImageSource;
 import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductService;
 import com.loai.inventory.service.ProductVariantService;
+import com.loai.inventory.service.PushSubscriptionService;
 import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReportService;
 import com.loai.inventory.service.ReservationService;
@@ -171,6 +174,9 @@ import com.loai.inventory.service.platform.PlatformOverviewService;
 import com.loai.inventory.service.platform.PlatformQueueService;
 import com.loai.inventory.service.platform.PlatformSearchService;
 import com.loai.inventory.service.platform.UserAdminService;
+import com.loai.inventory.service.push.WebPushConfig;
+import com.loai.inventory.service.push.WebPushSender;
+import com.loai.inventory.service.push.WebPushSenderFactory;
 import com.loai.inventory.service.whatsapp.WhatsAppSender;
 import com.loai.inventory.service.whatsapp.WhatsAppSenderFactory;
 import com.zaxxer.hikari.HikariDataSource;
@@ -321,6 +327,14 @@ public class AppConfig {
   public final OrgWhatsAppConfigRepositoryFactory orgWhatsAppConfigRepositoryFactory;
 
   public final OrgWhatsAppService orgWhatsAppService;
+
+  /**
+   * Web Push (V96): the VAPID identity from {@code WEB_PUSH_VAPID_*}, disabled when unset; the
+   * user's own device subscriptions behind {@code /api/me/push-subscriptions}.
+   */
+  public final WebPushConfig webPushConfig;
+
+  public final PushSubscriptionService pushSubscriptionService;
   public final MagicLinkService magicLinkService;
   public final CustomerOtpStore customerOtpStore;
   public final CustomerSessionStore customerSessionStore;
@@ -570,6 +584,22 @@ public class AppConfig {
     this.orgWhatsAppConfigRepositoryFactory = orgWhatsAppConfigRepositoryFactory;
     this.orgWhatsAppService =
         new OrgWhatsAppService(dsl, orgWhatsAppConfigRepositoryFactory, whatsAppSecretBox);
+    // Web Push (stories/web_push_channel.md). The SecretBox rule: both keys unset → disabled (the
+    // logging sender, and GET /api/me/push/config says enabled:false); a key present but malformed
+    // → startup failure. The push leg draws on the email attempt budget unless told otherwise.
+    this.webPushConfig =
+        WebPushConfig.fromEnv(
+            System.getenv("WEB_PUSH_VAPID_PUBLIC_KEY"),
+            System.getenv("WEB_PUSH_VAPID_PRIVATE_KEY"),
+            System.getenv("WEB_PUSH_SUBJECT"));
+    WebPushSender webPushSender = WebPushSenderFactory.build(webPushConfig);
+    PushSubscriptionRepositoryFactory pushSubscriptionRepositoryFactory =
+        new PushSubscriptionRepositoryFactoryImpl();
+    int pushMaxAttempts =
+        (int) parseLong(System.getenv("WEB_PUSH_MAX_ATTEMPTS"), (long) emailMaxAttempts);
+    this.pushSubscriptionService =
+        new PushSubscriptionService(
+            dsl, pushSubscriptionRepositoryFactory, userRepositoryFactory, webPushConfig);
     this.notificationService =
         new NotificationService(
             dsl,
@@ -582,7 +612,10 @@ public class AppConfig {
             emailSender,
             magicLinkService,
             whatsAppSender,
-            emailMaxAttempts);
+            emailMaxAttempts,
+            pushSubscriptionRepositoryFactory,
+            webPushSender,
+            pushMaxAttempts);
     // The reorder-point check the two sale sites run (stories/reorder_point.md): reads the
     // product, calls the one staff fan-out above — composition, not a second alerting path.
     LowStockNotifier lowStockNotifier =
