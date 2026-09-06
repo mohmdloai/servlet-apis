@@ -5,8 +5,11 @@ import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Inventory;
+import com.loai.inventory.domain.model.InventoryListFilter;
+import com.loai.inventory.domain.model.InventoryListStats;
 import com.loai.inventory.domain.model.InventoryLog;
 import com.loai.inventory.domain.model.InventoryReservation;
+import com.loai.inventory.domain.model.InventoryStockCounts;
 import com.loai.inventory.domain.model.InventoryStockFilter;
 import com.loai.inventory.domain.model.ReservationStatus;
 import com.loai.inventory.domain.model.SalesOrder;
@@ -69,8 +72,17 @@ public class InventoryService {
 
   // ---- reads (stories/inventory_reads.md) ----
 
-  /** One page of the stock-overview list plus the filtered total (drives the pager). */
-  public record OverviewPage(List<InventoryRepository.OverviewRow> rows, long total) {}
+  /**
+   * One page of the stock-overview list plus the filtered total (drives the pager) and the filtered
+   * set's stock summary ({@code stories/inventory_filters.md}) — all three from one predicate.
+   */
+  public record OverviewPage(
+      List<InventoryRepository.OverviewRow> rows, long total, InventoryListStats stats) {
+    /** Rows + total only; the summary is the empty one (pre-slice callers and tests). */
+    public OverviewPage(List<InventoryRepository.OverviewRow> rows, long total) {
+      this(rows, total, InventoryListStats.empty());
+    }
+  }
 
   /**
    * The stock-overview list ({@code GET /inventory}): every product in {@code orgId} LEFT JOINed to
@@ -80,17 +92,36 @@ public class InventoryService {
    */
   public OverviewPage listOverview(
       UUID orgId, String q, InventoryStockFilter stock, Integer lowLte, int page, int size) {
+    return listOverview(orgId, InventoryListFilter.of(q, stock, lowLte), page, size);
+  }
+
+  /**
+   * As {@link #listOverview(UUID, String, InventoryStockFilter, Integer, int, int)} with the whole
+   * {@link InventoryListFilter}: search, tab, category, holds, reorder rule, changed window and
+   * sort. The rows, their total and the stock summary come from exactly the same WHERE.
+   */
+  public OverviewPage listOverview(UUID orgId, InventoryListFilter filter, int page, int size) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
     // Guard the unbox trap: `cond ? 5 : lowLte` promotes to int and NPEs on a null lowLte even when
     // the condition is false. Keep both arms Integer.
     Integer bound =
-        (stock == InventoryStockFilter.LOW && lowLte == null) ? Integer.valueOf(5) : lowLte;
+        (filter.stock() == InventoryStockFilter.LOW && filter.lowLte() == null)
+            ? Integer.valueOf(5)
+            : filter.lowLte();
+    InventoryListFilter resolved = filter.withLowLte(bound);
     InventoryRepository repo = repoFactory.create(rootDsl);
-    List<InventoryRepository.OverviewRow> rows =
-        repo.listOverview(orgId, q, stock, bound, p * s, s);
-    long total = repo.countOverview(orgId, q, stock, bound);
-    return new OverviewPage(rows, total);
+    List<InventoryRepository.OverviewRow> rows = repo.listOverview(orgId, resolved, p * s, s);
+    InventoryListStats stats = repo.statsOverview(orgId, resolved);
+    return new OverviewPage(rows, stats.products(), stats);
+  }
+
+  /**
+   * The tabs' numbers ({@code GET /inventory/stock-counts}): org totals, one query; {@code lowLte}
+   * is the caller's alert level, defaulted to 5 like the LOW tab.
+   */
+  public InventoryStockCounts stockCounts(UUID orgId, Integer lowLte) {
+    return repoFactory.create(rootDsl).stockCounts(orgId, lowLte == null ? 5 : lowLte);
   }
 
   /** One page of a product's movement ledger + batch-loaded order numbers + the total. */

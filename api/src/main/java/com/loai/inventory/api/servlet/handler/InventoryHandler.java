@@ -5,6 +5,7 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.InitInventoryRequest;
 import com.loai.inventory.api.dto.InventoryAdjustRequest;
+import com.loai.inventory.api.dto.InventoryListResponse;
 import com.loai.inventory.api.dto.InventoryQtyRequest;
 import com.loai.inventory.api.dto.InventoryResponse;
 import com.loai.inventory.api.dto.PageResponse;
@@ -14,7 +15,7 @@ import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.Inventory;
-import com.loai.inventory.domain.model.InventoryStockFilter;
+import com.loai.inventory.domain.model.InventoryListFilter;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.StockReason;
@@ -30,7 +31,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Handles /api/orgs/{orgId}/inventory[/{productId}[/{action}]].
+ * Handles /api/orgs/{orgId}/inventory[/{productId}[/{action}]] and the one collection-level read
+ * {@code GET /inventory/stock-counts} ({@code stories/inventory_filters.md}).
  *
  * <p>Actor for inventory_log is derived from SecurityContext, never from request headers.
  */
@@ -60,6 +62,14 @@ public class InventoryHandler implements OrgResourceHandler {
       String remainingPath)
       throws IOException {
     try {
+      if (isStockCountsPath(remainingPath)) {
+        if ("GET".equals(method)) {
+          doStockCounts(req, resp, orgId);
+        } else {
+          writeError(resp, 405, "Method not allowed");
+        }
+        return;
+      }
       PathParts path = parsePath(remainingPath);
 
       switch (method) {
@@ -99,7 +109,13 @@ public class InventoryHandler implements OrgResourceHandler {
     }
   }
 
-  /** {@code GET /inventory?page=&size=&q=&stock=&low_lte=} — the stock-overview list. */
+  /**
+   * {@code GET
+   * /inventory?page=&size=&q=&stock=&low_lte=&category=&held=&rule=&changed_from=&changed_to=&sort=}
+   * — the stock-overview list ({@code stories/inventory_reads.md}, narrowed by {@code
+   * stories/inventory_filters.md}). The envelope carries the filtered set's stock summary; its
+   * {@code cost_value} crosses only with manager authority.
+   */
   private void doGetOverview(
       HttpServletRequest req, HttpServletResponse resp, UUID orgId, boolean costVisible)
       throws IOException {
@@ -108,10 +124,18 @@ public class InventoryHandler implements OrgResourceHandler {
         Math.min(
             Math.max(intParam(req, "size", InventoryService.DEFAULT_PAGE_SIZE), 1),
             InventoryService.MAX_PAGE_SIZE);
-    InventoryStockFilter stock = InventoryMapper.parseStockFilter(req.getParameter("stock"));
-    Integer lowLte = lowLteParam(req);
-    OverviewPage result =
-        inventoryService.listOverview(orgId, req.getParameter("q"), stock, lowLte, page, size);
+    InventoryListFilter filter =
+        InventoryMapper.toListFilter(
+            req.getParameter("q"),
+            req.getParameter("stock"),
+            lowLteParam(req),
+            req.getParameter("category"),
+            req.getParameter("held"),
+            req.getParameter("rule"),
+            req.getParameter("changed_from"),
+            req.getParameter("changed_to"),
+            req.getParameter("sort"));
+    OverviewPage result = inventoryService.listOverview(orgId, filter, page, size);
     // Batch-load each row's storefront listing thumbnail (product → listing → primary image),
     // presigned. One extra query per page; products without a listing image are simply omitted.
     var productIds = result.rows().stream().map(r -> r.productId()).toList();
@@ -119,11 +143,32 @@ public class InventoryHandler implements OrgResourceHandler {
     writeJson(
         resp,
         200,
-        new PageResponse<>(
+        new InventoryListResponse(
             InventoryMapper.toOverviewRows(result.rows(), imageUrls, costVisible),
             result.total(),
             page,
-            size));
+            size,
+            InventoryMapper.toSummaryResponse(result.stats(), costVisible)));
+  }
+
+  /** {@code GET /inventory/stock-counts?low_lte=} — the tabs' numbers (VIEWER), one query. */
+  private void doStockCounts(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
+      throws IOException {
+    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    writeJson(
+        resp,
+        200,
+        InventoryMapper.toStockCountsResponse(
+            inventoryService.stockCounts(orgId, lowLteParam(req))));
+  }
+
+  /** {@code /stock-counts} is a collection read, not a product id — routed before the id parse. */
+  private static boolean isStockCountsPath(String remainingPath) {
+    if (remainingPath == null) {
+      return false;
+    }
+    String raw = remainingPath.startsWith("/") ? remainingPath.substring(1) : remainingPath;
+    return raw.equals("stock-counts") || raw.equals("stock-counts/");
   }
 
   /** {@code GET /inventory/{productId}/log?page=&size=} — the movement ledger. */

@@ -1,8 +1,10 @@
 package com.loai.inventory.api.inventory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -11,6 +13,8 @@ import static org.mockito.Mockito.when;
 import com.loai.inventory.api.servlet.handler.InventoryHandler;
 import com.loai.inventory.api.servlet.handler.SalesOrderHandler;
 import com.loai.inventory.domain.model.ActorType;
+import com.loai.inventory.domain.model.InventoryListFilter;
+import com.loai.inventory.domain.model.InventoryStockCounts;
 import com.loai.inventory.domain.model.InventoryStockFilter;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.OrgRole;
@@ -84,7 +88,7 @@ class InventoryReadsHandlerAuthTest {
   @Test
   void overview_allowedForViewer_serviceCalledWithParsedFilters() throws IOException {
     InventoryService service = Mockito.mock(InventoryService.class);
-    when(service.listOverview(eq(ORG), any(), any(), any(), anyInt(), anyInt()))
+    when(service.listOverview(eq(ORG), any(InventoryListFilter.class), anyInt(), anyInt()))
         .thenReturn(new OverviewPage(List.of(), 0));
     Resp resp = new Resp();
 
@@ -98,7 +102,136 @@ class InventoryReadsHandlerAuthTest {
 
     assertEquals(200, resp.status, "VIEWER stock overview must succeed");
     verify(service)
-        .listOverview(eq(ORG), any(), eq(InventoryStockFilter.LOW), eq(5), eq(0), anyInt());
+        .listOverview(
+            eq(ORG),
+            argThat(
+                (InventoryListFilter f) ->
+                    f.stock() == InventoryStockFilter.LOW
+                        && Integer.valueOf(5).equals(f.lowLte())
+                        && f.q() == null
+                        && f.categoryId() == null
+                        && f.held() == null
+                        && f.rule() == null
+                        && f.changedFrom() == null
+                        && f.changedTo() == null
+                        && f.sort() == null),
+            eq(0),
+            anyInt());
+    // The envelope always carries the summary (inventory_filters.md); cost_value stays off for a
+    // VIEWER — the cost_price rule.
+    String body = resp.body.toString();
+    assertTrue(body.contains("\"summary\""), body);
+    assertTrue(body.contains("\"units_on_hand\""), body);
+    assertTrue(!body.contains("cost_value"), "cost_value must not cross for a VIEWER: " + body);
+  }
+
+  @Test
+  void overview_everyFilterDimension_isParsedIntoTheOneFilter() throws IOException {
+    InventoryService service = Mockito.mock(InventoryService.class);
+    when(service.listOverview(eq(ORG), any(InventoryListFilter.class), anyInt(), anyInt()))
+        .thenReturn(new OverviewPage(List.of(), 0));
+    Resp resp = new Resp();
+    UUID category = UUID.randomUUID();
+    Map<String, String> params = new java.util.HashMap<>();
+    params.put("q", "  sugar ");
+    params.put("category", category.toString());
+    params.put("held", "true");
+    params.put("rule", "none");
+    params.put("changed_from", "2026-06-07T21:00:00Z");
+    params.put("changed_to", "2026-09-05T21:00:00Z");
+    params.put("sort", "on_hand");
+
+    inventoryHandler(service)
+        .handle("GET", reqWith(ctxWith(ORG, OrgRole.MANAGER), params), resp.mock, ORG, "");
+
+    assertEquals(200, resp.status);
+    verify(service)
+        .listOverview(
+            eq(ORG),
+            argThat(
+                (InventoryListFilter f) ->
+                    "sugar".equals(f.q())
+                        && f.stock() == null
+                        && category.equals(f.categoryId())
+                        && Boolean.TRUE.equals(f.held())
+                        && f.rule() == InventoryListFilter.ReorderRule.NONE
+                        && f.changedFrom() != null
+                        && f.changedTo() != null
+                        && f.changedFrom().isBefore(f.changedTo())
+                        && f.sort() == InventoryListFilter.Sort.ON_HAND),
+            eq(0),
+            anyInt());
+    // A MANAGER sees the cost figure on the summary.
+    assertTrue(resp.body.toString().contains("\"cost_value\""), resp.body.toString());
+  }
+
+  @Test
+  void overview_badFilterValues_are400_serviceNeverCalled() throws IOException {
+    Map<String, Map<String, String>> bad =
+        Map.of(
+            "category not a uuid", Map.of("category", "food"),
+            "held not boolean", Map.of("held", "yes"),
+            "rule unknown", Map.of("rule", "maybe"),
+            "sort unknown", Map.of("sort", "price"),
+            "changed_from not a date-time", Map.of("changed_from", "yesterday"),
+            "changed window inverted",
+                Map.of(
+                    "changed_from", "2026-09-05T00:00:00Z", "changed_to", "2026-09-01T00:00:00Z"));
+    for (var entry : bad.entrySet()) {
+      InventoryService service = Mockito.mock(InventoryService.class);
+      Resp resp = new Resp();
+
+      inventoryHandler(service)
+          .handle(
+              "GET", reqWith(ctxWith(ORG, OrgRole.VIEWER), entry.getValue()), resp.mock, ORG, "");
+
+      assertEquals(400, resp.status, entry.getKey() + " must be a 400");
+      verify(service, never())
+          .listOverview(any(), any(InventoryListFilter.class), anyInt(), anyInt());
+    }
+  }
+
+  // GET /inventory/stock-counts — the tabs' numbers
+
+  @Test
+  void stockCounts_allowedForViewer_routedBeforeTheIdParse_andPassesLowLte() throws IOException {
+    InventoryService service = Mockito.mock(InventoryService.class);
+    when(service.stockCounts(eq(ORG), any())).thenReturn(new InventoryStockCounts(9, 2, 1, 1, 3));
+    Resp resp = new Resp();
+
+    inventoryHandler(service)
+        .handle(
+            "GET",
+            reqWith(ctxWith(ORG, OrgRole.VIEWER), Map.of("low_lte", "7")),
+            resp.mock,
+            ORG,
+            "/stock-counts");
+
+    assertEquals(200, resp.status, "'stock-counts' is a collection read, never an invalid id");
+    verify(service).stockCounts(ORG, 7);
+    String body = resp.body.toString();
+    assertTrue(body.contains("\"all\":9"), body);
+    assertTrue(body.contains("\"untracked\":3"), body);
+  }
+
+  @Test
+  void stockCounts_unauthenticated_is401_andPostIs405() throws IOException {
+    InventoryService service = Mockito.mock(InventoryService.class);
+    Resp anon = new Resp();
+    inventoryHandler(service)
+        .handle("GET", reqWith(null, Map.of()), anon.mock, ORG, "/stock-counts");
+    assertEquals(401, anon.status);
+    verify(service, never()).stockCounts(any(), any());
+
+    Resp post = new Resp();
+    inventoryHandler(service)
+        .handle(
+            "POST",
+            reqWith(ctxWith(ORG, OrgRole.OWNER), Map.of()),
+            post.mock,
+            ORG,
+            "/stock-counts");
+    assertEquals(405, post.status);
   }
 
   @Test
@@ -109,7 +242,8 @@ class InventoryReadsHandlerAuthTest {
     inventoryHandler(service).handle("GET", reqWith(null, Map.of()), resp.mock, ORG, "");
 
     assertEquals(401, resp.status);
-    verify(service, never()).listOverview(any(), any(), any(), any(), anyInt(), anyInt());
+    verify(service, never())
+        .listOverview(any(), any(InventoryListFilter.class), anyInt(), anyInt());
   }
 
   @Test
@@ -126,7 +260,8 @@ class InventoryReadsHandlerAuthTest {
             "");
 
     assertEquals(400, resp.status, "unknown stock filter must fail loudly");
-    verify(service, never()).listOverview(any(), any(), any(), any(), anyInt(), anyInt());
+    verify(service, never())
+        .listOverview(any(), any(InventoryListFilter.class), anyInt(), anyInt());
   }
 
   @Test
@@ -143,7 +278,8 @@ class InventoryReadsHandlerAuthTest {
             "");
 
     assertEquals(400, resp.status);
-    verify(service, never()).listOverview(any(), any(), any(), any(), anyInt(), anyInt());
+    verify(service, never())
+        .listOverview(any(), any(InventoryListFilter.class), anyInt(), anyInt());
   }
 
   @Test
@@ -160,7 +296,8 @@ class InventoryReadsHandlerAuthTest {
             "");
 
     assertEquals(400, resp.status);
-    verify(service, never()).listOverview(any(), any(), any(), any(), anyInt(), anyInt());
+    verify(service, never())
+        .listOverview(any(), any(InventoryListFilter.class), anyInt(), anyInt());
   }
 
   // GET /inventory/{productId}/log — movement ledger

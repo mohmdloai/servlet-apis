@@ -1,18 +1,26 @@
 package com.loai.inventory.api.mapper;
 
+import com.loai.inventory.api.dto.InventoryListSummaryResponse;
 import com.loai.inventory.api.dto.InventoryLogRow;
 import com.loai.inventory.api.dto.InventoryOverviewRow;
+import com.loai.inventory.api.dto.InventoryStockCountsResponse;
 import com.loai.inventory.api.dto.OrderReservationsResponse;
 import com.loai.inventory.api.dto.ProductReservationsResponse;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.InventoryListFilter;
+import com.loai.inventory.domain.model.InventoryListStats;
 import com.loai.inventory.domain.model.InventoryLog;
+import com.loai.inventory.domain.model.InventoryStockCounts;
 import com.loai.inventory.domain.model.InventoryStockFilter;
 import com.loai.inventory.domain.model.ReservationStatus;
 import com.loai.inventory.domain.repository.InventoryRepository;
 import com.loai.inventory.service.InventoryService.LogPage;
 import com.loai.inventory.service.InventoryService.OrderReservations;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 /** Maps inventory read query params + domain reads → response DTOs. Lives in api/. */
 public final class InventoryMapper {
@@ -33,6 +41,102 @@ public final class InventoryMapper {
       throw new ValidationException(
           "Unknown stock filter: " + raw + " (expected out|low|reorder|tracked|untracked)");
     }
+  }
+
+  /**
+   * The whole {@code GET /inventory} query string as one {@link InventoryListFilter} ({@code
+   * stories/inventory_filters.md}). Every parameter is optional; blank is absent. What can 400: an
+   * unknown {@code stock}, {@code held}, {@code rule} or {@code sort}; a {@code category} that is
+   * not a UUID; a {@code changed_from}/{@code changed_to} that is not an ISO-8601 date-time (the
+   * {@code /reports} convention) or a window with {@code from >= to}; a negative or non-integer
+   * {@code low_lte} (parsed by the caller). {@code q} cannot fail — any text is a valid search.
+   */
+  public static InventoryListFilter toListFilter(
+      String q,
+      String stock,
+      Integer lowLte,
+      String category,
+      String held,
+      String rule,
+      String changedFrom,
+      String changedTo,
+      String sort) {
+    OffsetDateTime from = parseTs("changed_from", changedFrom);
+    OffsetDateTime to = parseTs("changed_to", changedTo);
+    if (from != null && to != null && !from.isBefore(to)) {
+      throw new ValidationException("'changed_from' must be strictly before 'changed_to'");
+    }
+    return new InventoryListFilter(
+        q == null || q.isBlank() ? null : q.trim(),
+        parseStockFilter(stock),
+        lowLte,
+        parseUuid("category", category),
+        parseBoolean("held", held),
+        parseEnum("rule", rule, InventoryListFilter.ReorderRule.class, "set, none"),
+        from,
+        to,
+        parseEnum(
+            "sort", sort, InventoryListFilter.Sort.class, "name, available, on_hand, updated"));
+  }
+
+  private static UUID parseUuid(String name, String value) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(value.trim());
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("'" + name + "' must be a UUID");
+    }
+  }
+
+  private static Boolean parseBoolean(String name, String value) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    return switch (value.trim().toLowerCase(Locale.ROOT)) {
+      case "true" -> Boolean.TRUE;
+      case "false" -> Boolean.FALSE;
+      default -> throw new ValidationException("'" + name + "' must be true or false");
+    };
+  }
+
+  private static <E extends Enum<E>> E parseEnum(
+      String name, String value, Class<E> type, String allowed) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    try {
+      return Enum.valueOf(type, value.trim().toUpperCase(Locale.ROOT));
+    } catch (IllegalArgumentException e) {
+      throw new ValidationException("'" + name + "' must be one of: " + allowed);
+    }
+  }
+
+  private static OffsetDateTime parseTs(String name, String value) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    try {
+      return OffsetDateTime.parse(value.trim());
+    } catch (DateTimeParseException e) {
+      throw new ValidationException("'" + name + "' must be an ISO-8601 date-time");
+    }
+  }
+
+  /** The envelope summary; {@code cost_value} crosses only with manager authority. */
+  public static InventoryListSummaryResponse toSummaryResponse(
+      InventoryListStats stats, boolean costVisible) {
+    return new InventoryListSummaryResponse(
+        stats.products(),
+        stats.unitsOnHand(),
+        stats.unitsAvailable(),
+        stats.costedProducts(),
+        costVisible ? stats.costValue() : null);
+  }
+
+  public static InventoryStockCountsResponse toStockCountsResponse(InventoryStockCounts c) {
+    return new InventoryStockCountsResponse(c.all(), c.low(), c.reorder(), c.out(), c.untracked());
   }
 
   /**
