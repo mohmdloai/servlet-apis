@@ -14,6 +14,7 @@ import java.security.interfaces.ECPublicKey;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Date;
 import org.junit.jupiter.api.Test;
 
 /** RFC 8292 — the header shape, the audience, the lifetime, and the key-pair validation. */
@@ -40,8 +41,16 @@ class VapidSignerTest {
     assertFalse(k.contains("="), "base64url without padding");
     assertEquals(65, Base64.getUrlDecoder().decode(k).length);
 
+    // Verify against the SAME fixed clock the token was signed with: the vector's `now` is a
+    // date, so a parser on the wall clock starts throwing ExpiredJwt 12 h after that date (it did,
+    // on 2026-09-06). The test is about the header's shape, not the wall clock.
     Claims claims =
-        Jwts.parser().verifyWith(pair.getPublic()).build().parseSignedClaims(token).getPayload();
+        Jwts.parser()
+            .verifyWith(pair.getPublic())
+            .clock(() -> Date.from(now))
+            .build()
+            .parseSignedClaims(token)
+            .getPayload();
     // aud is the ORIGIN — scheme + host only, never the path that identifies the subscription.
     assertEquals(java.util.Set.of("https://fcm.googleapis.com"), claims.getAudience());
     assertEquals("mailto:ops@yabta3.com", claims.getSubject());
