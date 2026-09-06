@@ -3,12 +3,15 @@ package com.loai.inventory.api.mapper;
 import com.loai.inventory.api.dto.CancelOrderResponse;
 import com.loai.inventory.api.dto.CounterReturnRequest;
 import com.loai.inventory.api.dto.InStoreSaleResponse;
+import com.loai.inventory.api.dto.OrderListSummaryResponse;
 import com.loai.inventory.api.dto.OrderStatusCountsResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.dto.SalesOrderResponse;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.OrderChannel;
+import com.loai.inventory.domain.model.OrderListFilter;
+import com.loai.inventory.domain.model.OrderListStats;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.Refund;
@@ -22,6 +25,8 @@ import com.loai.inventory.service.SalesOrderService.OrderLineInput;
 import com.loai.inventory.service.SalesOrderService.OrderStatusCounts;
 import com.loai.inventory.service.SalesOrderService.PaymentInput;
 import com.loai.inventory.service.SalesOrderService.Placed;
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /** Maps DTOs ↔ service inputs and domain → response. Lives in api/ — never imported by service. */
@@ -137,6 +142,52 @@ public final class SalesOrderMapper {
       throw new ValidationException(
           "Unknown order channel: " + raw + " (expected ONLINE, PHONE or IN_STORE)");
     }
+  }
+
+  /**
+   * The whole {@code GET /sales-orders} query string as one {@link OrderListFilter} ({@code
+   * stories/order_filters.md}). Every parameter is optional; blank is absent. What can 400: an
+   * unknown {@code status}, {@code channel}, {@code balance} or {@code sort}; a {@code from}/{@code
+   * to} that is not an ISO-8601 date-time (the {@code /reports} convention) or a window with {@code
+   * from >= to}; a {@code min}/{@code max} that is not a number, is negative, or has {@code min >
+   * max}. {@code q} cannot fail — any text is a valid search.
+   */
+  public static OrderListFilter toListFilter(
+      String status,
+      String channel,
+      String q,
+      String from,
+      String to,
+      String balance,
+      String min,
+      String max,
+      String sort) {
+    OffsetDateTime createdFrom = QueryParams.parseTs("from", from);
+    OffsetDateTime createdTo = QueryParams.parseTs("to", to);
+    if (createdFrom != null && createdTo != null && !createdFrom.isBefore(createdTo)) {
+      throw new ValidationException("'from' must be strictly before 'to'");
+    }
+    BigDecimal minTotal = QueryParams.parseMoney("min", min);
+    BigDecimal maxTotal = QueryParams.parseMoney("max", max);
+    if (minTotal != null && maxTotal != null && minTotal.compareTo(maxTotal) > 0) {
+      throw new ValidationException("'min' must not exceed 'max'");
+    }
+    return new OrderListFilter(
+        toOrderStatus(status),
+        toOrderChannel(channel),
+        q == null || q.isBlank() ? null : q.trim(),
+        createdFrom,
+        createdTo,
+        QueryParams.parseEnum(
+            "balance", balance, OrderListFilter.Balance.class, "owing, settled, overpaid"),
+        minTotal,
+        maxTotal,
+        QueryParams.parseEnum(
+            "sort", sort, OrderListFilter.Sort.class, "newest, oldest, total, balance, expiring"));
+  }
+
+  public static OrderListSummaryResponse toSummaryResponse(OrderListStats stats) {
+    return new OrderListSummaryResponse(stats.outstanding(), stats.value());
   }
 
   /** The counter-return body → command; {@code restock} defaults to true. */

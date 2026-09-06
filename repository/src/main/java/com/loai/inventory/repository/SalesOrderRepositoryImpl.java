@@ -11,6 +11,8 @@ import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.CouponType;
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.OrderChannel;
+import com.loai.inventory.domain.model.OrderListFilter;
+import com.loai.inventory.domain.model.OrderListStats;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
@@ -18,6 +20,7 @@ import com.loai.inventory.domain.repository.SalesOrderRepository;
 import com.loai.inventory.repository.generated.tables.records.CustomerRecord;
 import com.loai.inventory.repository.generated.tables.records.SalesOrderLineRecord;
 import com.loai.inventory.repository.generated.tables.records.SalesOrderRecord;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -28,6 +31,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.Field;
+import org.jooq.SortField;
 import org.jooq.TableField;
 import org.jooq.impl.DSL;
 import org.slf4j.Logger;
@@ -184,14 +188,55 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   @Override
   public List<SalesOrder> list(
       UUID orgId, OrderStatus status, OrderChannel channel, String q, int offset, int limit) {
-    var query = dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status, channel, q));
-    // Queue vs ledger: a status filter is a worklist — oldest first; no filter is the ledger —
-    // newest first (mirrors the payment/refund worklists).
-    var ordered =
-        status != null
-            ? query.orderBy(SALES_ORDER.CREATED_AT.asc(), SALES_ORDER.ID.asc())
-            : query.orderBy(SALES_ORDER.CREATED_AT.desc(), SALES_ORDER.ID.desc());
-    return ordered.offset(offset).limit(limit).fetch().map(this::toSalesOrder);
+    return list(orgId, OrderListFilter.of(status, channel, q), offset, limit);
+  }
+
+  @Override
+  public List<SalesOrder> list(UUID orgId, OrderListFilter filter, int offset, int limit) {
+    OrderListFilter f = filter == null ? OrderListFilter.none() : filter;
+    return dsl.selectFrom(SALES_ORDER)
+        .where(listConditions(orgId, f))
+        .orderBy(listOrder(f))
+        .offset(offset)
+        .limit(limit)
+        .fetch()
+        .map(this::toSalesOrder);
+  }
+
+  /**
+   * The ORDER BY ({@code stories/order_filters.md}). No explicit sort: queue vs ledger — a status
+   * filter is a worklist, oldest first; no filter is the ledger, newest first (mirrors the
+   * payment/refund worklists). An explicit sort overrides that rule and every one is tie-broken on
+   * {@code (created_at, id)} so a page boundary never shuffles equal keys.
+   */
+  private static List<? extends SortField<?>> listOrder(OrderListFilter f) {
+    if (f.sort() == null) {
+      return f.isQueue()
+          ? List.of(SALES_ORDER.CREATED_AT.asc(), SALES_ORDER.ID.asc())
+          : List.of(SALES_ORDER.CREATED_AT.desc(), SALES_ORDER.ID.desc());
+    }
+    List<SortField<?>> newest = List.of(SALES_ORDER.CREATED_AT.desc(), SALES_ORDER.ID.desc());
+    return switch (f.sort()) {
+      case NEWEST -> newest;
+      case OLDEST -> List.of(SALES_ORDER.CREATED_AT.asc(), SALES_ORDER.ID.asc());
+      case TOTAL -> withTail(SALES_ORDER.GRAND_TOTAL.desc(), newest);
+      case BALANCE -> withTail(balance().desc(), newest);
+      case EXPIRING -> withTail(SALES_ORDER.EXPIRES_AT.asc().nullsLast(), newest);
+    };
+  }
+
+  private static List<SortField<?>> withTail(SortField<?> head, List<SortField<?>> tail) {
+    List<SortField<?>> all = new ArrayList<>();
+    all.add(head);
+    all.addAll(tail);
+    return all;
+  }
+
+  /**
+   * {@code grand_total − prepaid_amount}: positive = owing, zero = settled, negative = overpaid.
+   */
+  private static Field<BigDecimal> balance() {
+    return SALES_ORDER.GRAND_TOTAL.minus(SALES_ORDER.PREPAID_AMOUNT);
   }
 
   @Override
@@ -207,7 +252,44 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
   @Override
   public long count(UUID orgId, OrderStatus status, OrderChannel channel, String q) {
     return dsl.fetchCount(
-        dsl.selectFrom(SALES_ORDER).where(listConditions(orgId, status, channel, q)));
+        dsl.selectFrom(SALES_ORDER)
+            .where(listConditions(orgId, OrderListFilter.of(status, channel, q))));
+  }
+
+  @Override
+  public OrderListStats stats(UUID orgId, OrderListFilter filter) {
+    OrderListFilter f = filter == null ? OrderListFilter.none() : filter;
+    // One pass over the filtered set: the count the pager needs and the two money figures the
+    // worklist line shows. Only live statuses carry money in force — a DRAFT, CANCELLED or EXPIRED
+    // order's total is not owed and was never taken (the invoice summary's VOID rule).
+    Field<BigDecimal> zero = DSL.inline(BigDecimal.ZERO);
+    var live = SALES_ORDER.STATUS.in(LIVE_STATUSES);
+    Field<BigDecimal> outstanding =
+        DSL.sum(DSL.when(live.and(balance().gt(BigDecimal.ZERO)), balance()).otherwise(zero));
+    Field<BigDecimal> value = DSL.sum(DSL.when(live, SALES_ORDER.GRAND_TOTAL).otherwise(zero));
+    var row =
+        dsl.select(DSL.count(), outstanding, value)
+            .from(SALES_ORDER)
+            .where(listConditions(orgId, f))
+            .fetchOne();
+    if (row == null) {
+      return OrderListStats.empty();
+    }
+    return new OrderListStats(row.value1().longValue(), money(row.value2()), money(row.value3()));
+  }
+
+  /** The statuses whose money is in force — what {@link #stats} sums. */
+  private static final List<com.loai.inventory.repository.generated.enums.OrderStatus>
+      LIVE_STATUSES =
+          List.of(
+              com.loai.inventory.repository.generated.enums.OrderStatus.PENDING_PAYMENT,
+              com.loai.inventory.repository.generated.enums.OrderStatus.PAID,
+              com.loai.inventory.repository.generated.enums.OrderStatus.FULFILLING,
+              com.loai.inventory.repository.generated.enums.OrderStatus.FULFILLED,
+              com.loai.inventory.repository.generated.enums.OrderStatus.CLOSED);
+
+  private static BigDecimal money(BigDecimal sum) {
+    return (sum == null ? BigDecimal.ZERO : sum).setScale(2, java.math.RoundingMode.HALF_EVEN);
   }
 
   @Override
@@ -216,7 +298,7 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
     // total are the same rows by construction (stories/order_status_counts.md).
     return dsl.select(SALES_ORDER.STATUS, DSL.count())
         .from(SALES_ORDER)
-        .where(listConditions(orgId, null))
+        .where(listConditions(orgId, OrderListFilter.none()))
         .groupBy(SALES_ORDER.STATUS)
         .fetchMap(r -> OrderStatus.valueOf(r.value1().name()), r -> r.value2().longValue());
   }
@@ -239,15 +321,6 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
             .where(SALES_ORDER.ORG_ID.eq(orgId).and(SALES_ORDER.CUSTOMER_ID.eq(customerId))));
   }
 
-  private static org.jooq.Condition listConditions(UUID orgId, OrderStatus status) {
-    return listConditions(orgId, status, null);
-  }
-
-  private static org.jooq.Condition listConditions(
-      UUID orgId, OrderStatus status, OrderChannel channel) {
-    return listConditions(orgId, status, channel, null);
-  }
-
   /**
    * The worklist predicate — one definition for the list and its count, so a total can never
    * disagree with its rows. The {@code q} legs ({@code stories/order_search.md}):
@@ -268,26 +341,50 @@ public final class SalesOrderRepositoryImpl implements SalesOrderRepository {
    * <p>No minimum length, for the reason the customer search measured: the predicate is org-scoped,
    * so the planner never chooses a trigram index and the cost is linear in the tenant's own ledger.
    * The {@code EXISTS} is one index hit per candidate row ({@code customer} PK).
+   *
+   * <p>The filter dimensions ({@code stories/order_filters.md}) only ever narrow: the {@code
+   * created_at} window is half-open {@code [from, to)} (either side may be open — the frontend's
+   * "since"/"until" halves), {@code balance} reads {@code grand_total − prepaid_amount} on the row,
+   * and the {@code grand_total} band is inclusive on both ends.
    */
-  private static org.jooq.Condition listConditions(
-      UUID orgId, OrderStatus status, OrderChannel channel, String q) {
+  private static org.jooq.Condition listConditions(UUID orgId, OrderListFilter f) {
     org.jooq.Condition c = SALES_ORDER.ORG_ID.eq(orgId);
-    if (status != null) {
+    if (f.status() != null) {
       c =
           c.and(
               SALES_ORDER.STATUS.eq(
                   com.loai.inventory.repository.generated.enums.OrderStatus.valueOf(
-                      status.name())));
+                      f.status().name())));
     }
-    if (channel != null) {
+    if (f.channel() != null) {
       c =
           c.and(
               SALES_ORDER.CHANNEL.eq(
                   com.loai.inventory.repository.generated.enums.OrderChannel.valueOf(
-                      channel.name())));
+                      f.channel().name())));
     }
-    if (q != null && !q.isBlank()) {
-      c = c.and(searchLegs(q.trim()));
+    if (f.hasQuery()) {
+      c = c.and(searchLegs(f.q().trim()));
+    }
+    if (f.createdFrom() != null) {
+      c = c.and(SALES_ORDER.CREATED_AT.ge(f.createdFrom()));
+    }
+    if (f.createdTo() != null) {
+      c = c.and(SALES_ORDER.CREATED_AT.lt(f.createdTo()));
+    }
+    if (f.balance() != null) {
+      c =
+          switch (f.balance()) {
+            case OWING -> c.and(SALES_ORDER.PREPAID_AMOUNT.lt(SALES_ORDER.GRAND_TOTAL));
+            case SETTLED -> c.and(SALES_ORDER.PREPAID_AMOUNT.eq(SALES_ORDER.GRAND_TOTAL));
+            case OVERPAID -> c.and(SALES_ORDER.PREPAID_AMOUNT.gt(SALES_ORDER.GRAND_TOTAL));
+          };
+    }
+    if (f.minTotal() != null) {
+      c = c.and(SALES_ORDER.GRAND_TOTAL.ge(f.minTotal()));
+    }
+    if (f.maxTotal() != null) {
+      c = c.and(SALES_ORDER.GRAND_TOTAL.le(f.maxTotal()));
     }
     return c;
   }
