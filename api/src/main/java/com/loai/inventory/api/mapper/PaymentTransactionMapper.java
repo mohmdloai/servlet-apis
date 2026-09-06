@@ -4,16 +4,23 @@ import com.loai.inventory.api.dto.OrphanRefundResponse;
 import com.loai.inventory.api.dto.PaymentTransactionResponse;
 import com.loai.inventory.api.dto.RefundOrphanRequest;
 import com.loai.inventory.api.dto.ResolveOrphanRequest;
+import com.loai.inventory.api.dto.TransactionListSummaryResponse;
 import com.loai.inventory.api.dto.VerifyClaimRequest;
 import com.loai.inventory.api.dto.VerifyPaymentTransactionRequest;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.PaymentProvider;
+import com.loai.inventory.domain.model.PaymentReconciliationStatus;
+import com.loai.inventory.domain.model.PaymentVerificationStatus;
+import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListFilter;
+import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListStats;
 import com.loai.inventory.service.PaymentService.OrderRef;
 import com.loai.inventory.service.PaymentTransactionService.ClaimContext;
 import com.loai.inventory.service.PaymentTransactionService.OrphanRefundResult;
 import com.loai.inventory.service.PaymentTransactionService.VerifyClaimCommand;
 import com.loai.inventory.service.PaymentTransactionService.VerifyCommand;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -93,6 +100,55 @@ public final class PaymentTransactionMapper {
    * Optional {@code provider} list filter: absent/blank → null (no filter); otherwise the enum name
    * or DB literal, unknown value → 400.
    */
+  /**
+   * The whole {@code GET /payment-transactions} query string as one {@link ListFilter} ({@code
+   * stories/transaction_filters.md}). The state predicates arrive parsed (the handler's enum / bool
+   * / uuid helpers); the ledger dimensions parse here the worklist way ({@link QueryParams}): blank
+   * is absent, a malformed value is a 400 naming the parameter, {@code from} must precede {@code
+   * to}, {@code min} must not exceed {@code max}.
+   */
+  public static ListFilter toListFilter(
+      PaymentVerificationStatus verificationStatus,
+      PaymentReconciliationStatus reconciliationStatus,
+      Boolean hasPayment,
+      String provider,
+      String providerRef,
+      UUID claimedSalesOrderId,
+      String q,
+      String from,
+      String to,
+      String min,
+      String max,
+      String sort) {
+    OffsetDateTime occurredFrom = QueryParams.parseTs("from", from);
+    OffsetDateTime occurredTo = QueryParams.parseTs("to", to);
+    if (occurredFrom != null && occurredTo != null && !occurredFrom.isBefore(occurredTo)) {
+      throw new ValidationException("'from' must be strictly before 'to'");
+    }
+    BigDecimal minAmount = QueryParams.parseMoney("min", min);
+    BigDecimal maxAmount = QueryParams.parseMoney("max", max);
+    if (minAmount != null && maxAmount != null && minAmount.compareTo(maxAmount) > 0) {
+      throw new ValidationException("'min' must not exceed 'max'");
+    }
+    return new ListFilter(
+        verificationStatus,
+        reconciliationStatus,
+        hasPayment,
+        toProviderFilter(provider),
+        providerRef,
+        claimedSalesOrderId,
+        q,
+        occurredFrom,
+        occurredTo,
+        minAmount,
+        maxAmount,
+        QueryParams.parseEnum("sort", sort, ListFilter.Sort.class, "newest, oldest"));
+  }
+
+  public static TransactionListSummaryResponse toSummaryResponse(ListStats stats) {
+    return new TransactionListSummaryResponse(stats.moneyIn(), stats.moneyOut());
+  }
+
   public static PaymentProvider toProviderFilter(String raw) {
     if (raw == null || raw.isBlank()) {
       return null;

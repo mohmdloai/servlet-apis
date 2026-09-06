@@ -23,6 +23,7 @@ import com.loai.inventory.domain.repository.PaymentRepository;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListFilter;
+import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListStats;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.service.PaymentService.OrderRef;
@@ -1070,11 +1071,40 @@ public final class PaymentTransactionService {
       List<PaymentTransaction> items,
       long total,
       Map<UUID, Customer> customers,
-      Map<UUID, SalesOrder> claimedOrders) {
+      Map<UUID, SalesOrder> claimedOrders,
+      Map<UUID, SalesOrder> matchedOrders,
+      Map<UUID, Customer> matchedCustomers,
+      ListStats stats) {
 
     /** The pre-claims shape: no context. */
     public TransactionPage(List<PaymentTransaction> items, long total) {
       this(items, total, Map.of(), Map.of());
+    }
+
+    /** The pre-ledger-filters shape: claim context only, no money summary. */
+    public TransactionPage(
+        List<PaymentTransaction> items,
+        long total,
+        Map<UUID, Customer> customers,
+        Map<UUID, SalesOrder> claimedOrders) {
+      this(
+          items,
+          total,
+          customers,
+          claimedOrders,
+          Map.of(),
+          Map.of(),
+          new ListStats(total, BigDecimal.ZERO.setScale(2), BigDecimal.ZERO.setScale(2)));
+    }
+
+    /** The order a row's money went to (through its 1:1 payment), keyed by transaction id. */
+    public SalesOrder matchedOrder(UUID transactionId) {
+      return matchedOrders.get(transactionId);
+    }
+
+    /** The customer behind a row's payment or matched order, keyed by transaction id. */
+    public Customer matchedCustomer(UUID transactionId) {
+      return matchedCustomers.get(transactionId);
     }
   }
 
@@ -1124,22 +1154,69 @@ public final class PaymentTransactionService {
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
     PaymentTransactionRepository repo = txnRepoFactory.create(rootDsl);
     List<PaymentTransaction> items = repo.list(orgId, filter, p * s, s);
-    long total = repo.count(orgId, filter);
+    // The pager's total and the money line come from one pass over the rows' own predicate.
+    ListStats stats = repo.stats(orgId, filter);
 
-    Set<UUID> customerIds =
-        items.stream()
-            .map(PaymentTransaction::getClaimedByCustomerId)
-            .filter(Objects::nonNull)
-            .collect(Collectors.toSet());
-    Set<UUID> orderIds =
-        items.stream()
-            .map(PaymentTransaction::getClaimedSalesOrderId)
-            .filter(Objects::nonNull)
-            .collect(Collectors.toSet());
+    // The matched order (stories/transaction_filters.md): through the row's 1:1 payment, the way
+    // the detail finds it — batch-loaded per page, so a ledger row can say which order its money
+    // went to. The payment itself stays a detail read.
+    Map<UUID, Payment> payments =
+        paymentRepoFactory
+            .create(rootDsl)
+            .findByTransactionIds(orgId, items.stream().map(PaymentTransaction::getId).toList());
+
+    Set<UUID> orderIds = new HashSet<>();
+    Set<UUID> customerIds = new HashSet<>();
+    for (PaymentTransaction txn : items) {
+      if (txn.getClaimedSalesOrderId() != null) {
+        orderIds.add(txn.getClaimedSalesOrderId());
+      }
+      if (txn.getClaimedByCustomerId() != null) {
+        customerIds.add(txn.getClaimedByCustomerId());
+      }
+      Payment payment = payments.get(txn.getId());
+      if (payment != null && payment.getSalesOrderId() != null) {
+        orderIds.add(payment.getSalesOrderId());
+      }
+      if (payment != null && payment.getCustomerId() != null) {
+        customerIds.add(payment.getCustomerId());
+      }
+    }
+    Map<UUID, SalesOrder> orders = paymentService.findOrders(rootDsl, orgId, orderIds);
+    // A matched order's CRM customer, when the payment itself names none.
+    orders.values().stream()
+        .map(SalesOrder::getCustomerId)
+        .filter(Objects::nonNull)
+        .forEach(customerIds::add);
     Map<UUID, Customer> customers =
         customerRepoFactory.create(rootDsl).findByIds(orgId, customerIds);
-    Map<UUID, SalesOrder> orders = paymentService.findOrders(rootDsl, orgId, orderIds);
-    return new TransactionPage(items, total, customers, orders);
+
+    Map<UUID, SalesOrder> claimedOrders = new java.util.HashMap<>();
+    Map<UUID, SalesOrder> matchedOrders = new java.util.HashMap<>();
+    Map<UUID, Customer> matchedCustomers = new java.util.HashMap<>();
+    for (PaymentTransaction txn : items) {
+      if (txn.getClaimedSalesOrderId() != null
+          && orders.containsKey(txn.getClaimedSalesOrderId())) {
+        claimedOrders.put(txn.getClaimedSalesOrderId(), orders.get(txn.getClaimedSalesOrderId()));
+      }
+      Payment payment = payments.get(txn.getId());
+      if (payment == null || payment.getSalesOrderId() == null) {
+        continue;
+      }
+      SalesOrder order = orders.get(payment.getSalesOrderId());
+      if (order != null) {
+        matchedOrders.put(txn.getId(), order);
+      }
+      UUID customerId =
+          payment.getCustomerId() != null
+              ? payment.getCustomerId()
+              : order != null ? order.getCustomerId() : null;
+      if (customerId != null && customers.containsKey(customerId)) {
+        matchedCustomers.put(txn.getId(), customers.get(customerId));
+      }
+    }
+    return new TransactionPage(
+        items, stats.total(), customers, claimedOrders, matchedOrders, matchedCustomers, stats);
   }
 
   /**

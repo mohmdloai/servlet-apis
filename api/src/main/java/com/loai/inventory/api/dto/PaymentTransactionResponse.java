@@ -347,13 +347,18 @@ public class PaymentTransactionResponse {
     }
   }
 
-  /** The order whose payment state the transaction touched. */
+  /**
+   * The order whose payment state the transaction touched. {@code customerName} is the walk-in
+   * contact typed at the counter (V87) — null for an order with a CRM customer or none — so a
+   * ledger row can name who paid without a second read ({@code stories/transaction_filters.md}).
+   */
   public static class OrderSummary {
     private UUID id;
     private String orderNumber;
     private OrderStatus status;
     private BigDecimal grandTotal;
     private BigDecimal prepaidAmount;
+    private String customerName;
 
     private OrderSummary() {}
 
@@ -364,7 +369,12 @@ public class PaymentTransactionResponse {
       s.status = o.getStatus();
       s.grandTotal = o.getGrandTotal();
       s.prepaidAmount = o.getPrepaidAmount();
+      s.customerName = o.getCustomerName();
       return s;
+    }
+
+    public String getCustomerName() {
+      return customerName;
     }
 
     public UUID getId() {

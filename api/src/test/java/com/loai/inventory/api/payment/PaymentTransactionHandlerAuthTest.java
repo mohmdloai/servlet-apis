@@ -3,6 +3,7 @@ package com.loai.inventory.api.payment;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -15,6 +16,8 @@ import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
 import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.SecurityContext;
+import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListFilter;
+import com.loai.inventory.domain.repository.PaymentTransactionRepository.ListStats;
 import com.loai.inventory.service.PaymentService.OrderRef;
 import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.PaymentTransactionService.VerifyResult;
@@ -31,6 +34,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -272,6 +276,118 @@ class PaymentTransactionHandlerAuthTest {
     String body = resp.body.toString(StandardCharsets.UTF_8);
     assertTrue(body.contains("\"verification_status\":\"NOT_FOUND\""), body);
     assertTrue(body.contains("\"not_found_note\":\"nothing arrived\""), body);
+  }
+
+  // GET / — the ledger filters (stories/transaction_filters.md)
+
+  private static PaymentTransactionHandler handler(PaymentTransactionService service) {
+    return new PaymentTransactionHandler(
+        service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+  }
+
+  @Test
+  void list_bareGet_isTheLedger_withASummaryOnTheEnvelope() throws IOException {
+    PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+    when(service.list(eq(ORG), any(ListFilter.class), anyInt(), anyInt()))
+        .thenReturn(new PaymentTransactionService.TransactionPage(List.of(), 0));
+    Resp resp = new Resp();
+
+    handler(service).handle("GET", reqWith(ctxWith(OrgRole.VIEWER), null), resp.mock, ORG, "");
+
+    assertEquals(200, resp.status);
+    var captor = org.mockito.ArgumentCaptor.forClass(ListFilter.class);
+    verify(service).list(eq(ORG), captor.capture(), anyInt(), anyInt());
+    assertTrue(captor.getValue().isEmpty(), "no parameter → the unfiltered ledger");
+    String body = resp.body.toString(StandardCharsets.UTF_8);
+    assertTrue(body.contains("\"summary\":{\"money_in\":0.00,\"money_out\":0.00}"), body);
+  }
+
+  @Test
+  void list_filtersReachTheService_asOneFilter() throws IOException {
+    PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+    when(service.list(eq(ORG), any(ListFilter.class), anyInt(), anyInt()))
+        .thenReturn(
+            new PaymentTransactionService.TransactionPage(
+                List.of(),
+                0,
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                new ListStats(0, new BigDecimal("14320.00"), new BigDecimal("250.00"))));
+    HttpServletRequest req = reqWith(ctxWith(OrgRole.VIEWER), null);
+    when(req.getParameter("reconciliation_status")).thenReturn("ORPHAN");
+    when(req.getParameter("has_payment")).thenReturn("false");
+    when(req.getParameter("provider")).thenReturn("instapay_manual");
+    when(req.getParameter("q")).thenReturn("  7766 ");
+    when(req.getParameter("from")).thenReturn("2026-09-04T21:00:00Z");
+    when(req.getParameter("to")).thenReturn("2026-09-05T21:00:00Z");
+    when(req.getParameter("min")).thenReturn("1240");
+    when(req.getParameter("max")).thenReturn("1240.00");
+    when(req.getParameter("sort")).thenReturn("oldest");
+    Resp resp = new Resp();
+
+    handler(service).handle("GET", req, resp.mock, ORG, "");
+
+    assertEquals(200, resp.status);
+    var captor = org.mockito.ArgumentCaptor.forClass(ListFilter.class);
+    verify(service).list(eq(ORG), captor.capture(), anyInt(), anyInt());
+    ListFilter f = captor.getValue();
+    assertEquals(PaymentReconciliationStatus.ORPHAN, f.reconciliationStatus());
+    assertEquals(Boolean.FALSE, f.hasPayment());
+    assertEquals(PaymentProvider.INSTAPAY_MANUAL, f.provider());
+    assertEquals("7766", f.q(), "q is trimmed");
+    assertEquals(OffsetDateTime.parse("2026-09-04T21:00:00Z"), f.occurredFrom());
+    assertEquals(OffsetDateTime.parse("2026-09-05T21:00:00Z"), f.occurredTo());
+    assertEquals(0, new BigDecimal("1240").compareTo(f.minAmount()));
+    assertEquals(0, new BigDecimal("1240.00").compareTo(f.maxAmount()));
+    assertEquals(ListFilter.Sort.OLDEST, f.sort());
+    String body = resp.body.toString(StandardCharsets.UTF_8);
+    assertTrue(body.contains("\"money_in\":14320.00"), body);
+    assertTrue(body.contains("\"money_out\":250.00"), body);
+  }
+
+  @Test
+  void list_badFilterValues_are400_serviceNeverCalled() throws IOException {
+    record Bad(String param, String value, String why) {}
+    List<Bad> cases =
+        List.of(
+            new Bad("from", "2026-09-05", "a bare date is not an ISO-8601 date-time"),
+            new Bad("to", "yesterday", "prose is not a date-time"),
+            new Bad("sort", "amount", "sort is newest|oldest — the band does amount's job"),
+            new Bad("min", "abc", "min must be a number"),
+            new Bad("max", "-1", "max must not be negative"),
+            new Bad("provider", "VODAFONE_CASH", "provider names the three"));
+    for (Bad bad : cases) {
+      PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+      HttpServletRequest req = reqWith(ctxWith(OrgRole.VIEWER), null);
+      when(req.getParameter(bad.param())).thenReturn(bad.value());
+      Resp resp = new Resp();
+
+      handler(service).handle("GET", req, resp.mock, ORG, "");
+
+      assertEquals(400, resp.status, bad.why());
+      verify(service, never()).list(any(), any(ListFilter.class), anyInt(), anyInt());
+    }
+  }
+
+  @Test
+  void list_invertedWindowOrBounds_are400() throws IOException {
+    for (String[] pair :
+        List.of(
+            new String[] {"from", "2026-09-06T00:00:00Z", "to", "2026-09-05T00:00:00Z"},
+            new String[] {"min", "900", "max", "100"})) {
+      PaymentTransactionService service = Mockito.mock(PaymentTransactionService.class);
+      HttpServletRequest req = reqWith(ctxWith(OrgRole.VIEWER), null);
+      when(req.getParameter(pair[0])).thenReturn(pair[1]);
+      when(req.getParameter(pair[2])).thenReturn(pair[3]);
+      Resp resp = new Resp();
+
+      handler(service).handle("GET", req, resp.mock, ORG, "");
+
+      assertEquals(400, resp.status, pair[0] + " > " + pair[2] + " must be a 400");
+      verify(service, never()).list(any(), any(ListFilter.class), anyInt(), anyInt());
+    }
   }
 
   @Test
