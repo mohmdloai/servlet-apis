@@ -1,6 +1,9 @@
 package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Inventory;
+import com.loai.inventory.domain.model.InventoryListFilter;
+import com.loai.inventory.domain.model.InventoryListStats;
+import com.loai.inventory.domain.model.InventoryStockCounts;
 import com.loai.inventory.domain.model.InventoryStockFilter;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -45,19 +48,31 @@ public interface InventoryRepository {
 
   /**
    * One page of the stock overview — every product in {@code orgId} LEFT JOINed to inventory,
-   * ordered {@code name ASC, product_id ASC} (catalog order — not a queue), except {@code REORDER},
-   * the replenishment worklist, which is ordered deepest below its point first. {@code q} is a
-   * case-insensitive substring on name OR sku (blank ⇒ no filter). {@code stock} narrows by
-   * trackedness / availability ({@code LOW} uses {@code lowLte} as the bound, defaulted upstream).
-   * {@code lowLte} is ignored for every filter but {@code LOW}.
+   * narrowed by every dimension of the {@link InventoryListFilter} ({@code
+   * stories/inventory_filters.md}). Order: the filter's {@code sort} when given; otherwise {@code
+   * name ASC, product_id ASC} (catalog order — not a queue), except {@code REORDER}, the
+   * replenishment worklist, which is ordered deepest below its point first. {@code LOW} uses the
+   * filter's {@code lowLte} as its bound (defaulted upstream).
    */
-  List<OverviewRow> listOverview(
-      UUID orgId, String q, InventoryStockFilter stock, Integer lowLte, int offset, int limit);
+  List<OverviewRow> listOverview(UUID orgId, InventoryListFilter filter, int offset, int limit);
 
   /**
-   * Count of the filtered stock overview (drives the pager). Same filters as {@link #listOverview}.
+   * Count of the filtered stock overview (drives the pager). Same predicate as {@link
+   * #listOverview}.
    */
-  long countOverview(UUID orgId, String q, InventoryStockFilter stock, Integer lowLte);
+  long countOverview(UUID orgId, InventoryListFilter filter);
+
+  /**
+   * The filtered set's stock summary — products, units on hand / available, costed products and
+   * their cost value — from the same predicate as {@link #listOverview}, one aggregate query.
+   */
+  InventoryListStats statsOverview(UUID orgId, InventoryListFilter filter);
+
+  /**
+   * The tabs' numbers for the whole org, one query: all / low (at {@code lowLte}) / reorder / out /
+   * untracked, each the exact rows the matching {@link InventoryStockFilter} lists.
+   */
+  InventoryStockCounts stockCounts(UUID orgId, int lowLte);
 
   Inventory insert(Inventory inventory);
 

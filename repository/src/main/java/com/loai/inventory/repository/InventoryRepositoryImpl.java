@@ -2,13 +2,21 @@ package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.INVENTORY;
 import static com.loai.inventory.repository.generated.Tables.PRODUCT;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_LISTING_CATEGORY;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT_VARIANT;
 
 import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.NotFoundException;
 import com.loai.inventory.domain.model.Inventory;
+import com.loai.inventory.domain.model.InventoryListFilter;
+import com.loai.inventory.domain.model.InventoryListStats;
+import com.loai.inventory.domain.model.InventoryStockCounts;
 import com.loai.inventory.domain.model.InventoryStockFilter;
 import com.loai.inventory.domain.repository.InventoryRepository;
 import com.loai.inventory.repository.generated.tables.records.InventoryRecord;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -20,6 +28,8 @@ import org.jooq.Condition;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Record;
+import org.jooq.SortField;
+import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,7 +66,7 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
 
   @Override
   public List<OverviewRow> listOverview(
-      UUID orgId, String q, InventoryStockFilter stock, Integer lowLte, int offset, int limit) {
+      UUID orgId, InventoryListFilter filter, int offset, int limit) {
     return dsl.select(
             PRODUCT.ID,
             PRODUCT.NAME,
@@ -72,62 +82,199 @@ public final class InventoryRepositoryImpl implements InventoryRepository {
         .from(PRODUCT)
         .leftJoin(INVENTORY)
         .on(INVENTORY.PRODUCT_ID.eq(PRODUCT.ID).and(INVENTORY.ORG_ID.eq(PRODUCT.ORG_ID)))
-        .where(overviewConditions(orgId, q, stock, lowLte))
-        // Catalog order — this is a list, not a queue; the created_at convention does not apply.
-        // The one exception is the reorder worklist: deepest below its own point first, so the
-        // empty shelf tops a long list (stories/reorder_point.md).
-        .orderBy(
-            stock == InventoryStockFilter.REORDER
-                ? List.of(
-                    INVENTORY
-                        .STOCK_QTY
-                        .minus(INVENTORY.RESERVED_QTY)
-                        .minus(PRODUCT.REORDER_POINT)
-                        .asc(),
-                    PRODUCT.NAME.asc(),
-                    PRODUCT.ID.asc())
-                : List.of(PRODUCT.NAME.asc(), PRODUCT.ID.asc()))
+        .where(overviewConditions(orgId, filter))
+        .orderBy(overviewOrder(filter))
         .offset(offset)
         .limit(limit)
         .fetch(this::toOverviewRow);
   }
 
   @Override
-  public long countOverview(UUID orgId, String q, InventoryStockFilter stock, Integer lowLte) {
+  public long countOverview(UUID orgId, InventoryListFilter filter) {
     return dsl.fetchCount(
         dsl.selectOne()
             .from(PRODUCT)
             .leftJoin(INVENTORY)
             .on(INVENTORY.PRODUCT_ID.eq(PRODUCT.ID).and(INVENTORY.ORG_ID.eq(PRODUCT.ORG_ID)))
-            .where(overviewConditions(orgId, q, stock, lowLte)));
+            .where(overviewConditions(orgId, filter)));
   }
 
-  /** Shared filter for {@link #listOverview} / {@link #countOverview}. */
-  private static Condition overviewConditions(
-      UUID orgId, String q, InventoryStockFilter stock, Integer lowLte) {
-    Condition c = PRODUCT.ORG_ID.eq(orgId);
-    if (q != null && !q.isBlank()) {
-      String term = q.trim();
-      c = c.and(PRODUCT.NAME.containsIgnoreCase(term).or(PRODUCT.SKU.containsIgnoreCase(term)));
+  @Override
+  public InventoryListStats statsOverview(UUID orgId, InventoryListFilter filter) {
+    // One pass over the filtered set: the pager's total and the shelf figures. Untracked rows
+    // contribute to the count only — their stock columns are NULL and SUM skips them. The cost
+    // value sums costed rows only; costedProducts lets the reader see when that is a subset.
+    Field<Integer> available = INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY);
+    Field<BigDecimal> costOfRow =
+        INVENTORY.STOCK_QTY.cast(BigDecimal.class).mul(PRODUCT.COST_PRICE);
+    var row =
+        dsl.select(
+                DSL.count(),
+                DSL.coalesce(DSL.sum(INVENTORY.STOCK_QTY), DSL.inline(0)),
+                DSL.coalesce(DSL.sum(available), DSL.inline(0)),
+                DSL.count()
+                    .filterWhere(
+                        INVENTORY.PRODUCT_ID.isNotNull().and(PRODUCT.COST_PRICE.isNotNull())),
+                DSL.coalesce(DSL.sum(costOfRow), DSL.inline(BigDecimal.ZERO)))
+            .from(PRODUCT)
+            .leftJoin(INVENTORY)
+            .on(INVENTORY.PRODUCT_ID.eq(PRODUCT.ID).and(INVENTORY.ORG_ID.eq(PRODUCT.ORG_ID)))
+            .where(overviewConditions(orgId, filter))
+            .fetchOne();
+    if (row == null) {
+      return InventoryListStats.empty();
     }
-    if (stock != null) {
-      // available = stock - reserved; null (untracked) makes the comparison null → excluded, which
-      // is exactly right for OUT/LOW (both also require a tracked row).
-      Field<Integer> available = INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY);
+    return new InventoryListStats(
+        row.value1().longValue(),
+        row.value2().longValue(),
+        row.value3().longValue(),
+        row.value4().longValue(),
+        row.value5().setScale(2, RoundingMode.HALF_EVEN));
+  }
+
+  @Override
+  public InventoryStockCounts stockCounts(UUID orgId, int lowLte) {
+    // The same LEFT JOIN as the list, partitioned with FILTER clauses that restate each
+    // InventoryStockFilter arm of overviewConditions — a tab's chip and its list's total are the
+    // same rows by construction. Org totals only: search and the sheet never narrow the tabs.
+    Field<Integer> available = INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY);
+    Condition tracked = INVENTORY.PRODUCT_ID.isNotNull();
+    var row =
+        dsl.select(
+                DSL.count(),
+                DSL.count().filterWhere(tracked.and(available.le(lowLte))),
+                DSL.count()
+                    .filterWhere(
+                        tracked
+                            .and(PRODUCT.REORDER_POINT.isNotNull())
+                            .and(available.le(PRODUCT.REORDER_POINT))),
+                DSL.count().filterWhere(tracked.and(available.eq(0))),
+                DSL.count().filterWhere(INVENTORY.PRODUCT_ID.isNull()))
+            .from(PRODUCT)
+            .leftJoin(INVENTORY)
+            .on(INVENTORY.PRODUCT_ID.eq(PRODUCT.ID).and(INVENTORY.ORG_ID.eq(PRODUCT.ORG_ID)))
+            .where(PRODUCT.ORG_ID.eq(orgId))
+            .fetchOne();
+    if (row == null) {
+      return new InventoryStockCounts(0, 0, 0, 0, 0);
+    }
+    return new InventoryStockCounts(
+        row.value1(), row.value2(), row.value3(), row.value4(), row.value5());
+  }
+
+  /**
+   * The list's order. An explicit {@code sort} wins; without one the catalog order applies — name
+   * ASC — except on the REORDER tab, the one segment that is a queue: deepest below its own point
+   * first, so the empty shelf tops a long list ({@code stories/reorder_point.md}). Every order
+   * breaks ties on (name, id) so paging is stable; the untracked rows (NULL stock) go last on the
+   * stock-driven sorts.
+   */
+  private static List<? extends SortField<?>> overviewOrder(InventoryListFilter f) {
+    Field<Integer> available = INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY);
+    if (f.sort() == null) {
+      return f.stock() == InventoryStockFilter.REORDER
+          ? List.of(
+              available.minus(PRODUCT.REORDER_POINT).asc(), PRODUCT.NAME.asc(), PRODUCT.ID.asc())
+          : List.of(PRODUCT.NAME.asc(), PRODUCT.ID.asc());
+    }
+    return switch (f.sort()) {
+      case NAME -> List.of(PRODUCT.NAME.asc(), PRODUCT.ID.asc());
+      case AVAILABLE -> List.of(available.asc().nullsLast(), PRODUCT.NAME.asc(), PRODUCT.ID.asc());
+      case ON_HAND ->
+          List.of(INVENTORY.STOCK_QTY.desc().nullsLast(), PRODUCT.NAME.asc(), PRODUCT.ID.asc());
+      case UPDATED ->
+          List.of(INVENTORY.UPDATED_AT.desc().nullsLast(), PRODUCT.NAME.asc(), PRODUCT.ID.asc());
+    };
+  }
+
+  /**
+   * The overview predicate — one definition for the rows, their total, the stock summary and (arm
+   * by arm) the tab counts, so none of them can disagree ({@code stories/inventory_filters.md}).
+   * Every dimension of the {@link InventoryListFilter} ANDs onto the org scope:
+   *
+   * <ul>
+   *   <li><b>q</b> — OR of: {@code name ILIKE '%q%'}; the generated {@code name_search} key against
+   *       the same {@code fold_search} of the term (so Arabic spelling variants match — the {@code
+   *       ProductRepositoryImpl.searchCondition} precedent); {@code sku ILIKE '%q%'}; and {@code
+   *       barcode = q} exactly, so a scanned code lands on its one product.
+   *   <li><b>stock</b> — the tab, exactly as before; {@code available = stock - reserved}, and a
+   *       NULL (untracked) comparison excludes the row, which is right for every arm but UNTRACKED.
+   *   <li><b>category</b> — EXISTS a listing in the org whose category set holds the id and which
+   *       is either the product's own listing or the listing a variant child is attached to.
+   *   <li><b>held</b> — tracked and {@code reserved_qty > 0} / {@code = 0}.
+   *   <li><b>rule</b> — {@code reorder_point IS NOT NULL} / {@code IS NULL}, product-side.
+   *   <li><b>changed window</b> — tracked and half-open on {@code updated_at}: {@code >= from},
+   *       {@code < to}.
+   * </ul>
+   */
+  private static Condition overviewConditions(UUID orgId, InventoryListFilter f) {
+    Condition c = PRODUCT.ORG_ID.eq(orgId);
+    if (f.hasQuery()) {
+      String term = f.q().trim();
+      Field<String> foldedTerm = DSL.field("fold_search({0})", String.class, DSL.val(term));
+      Condition arabicName =
+          PRODUCT.NAME_SEARCH.like(DSL.concat(DSL.inline("%"), foldedTerm, DSL.inline("%")));
       c =
-          switch (stock) {
-            case TRACKED -> c.and(INVENTORY.PRODUCT_ID.isNotNull());
+          c.and(
+              PRODUCT
+                  .NAME
+                  .containsIgnoreCase(term)
+                  .or(arabicName)
+                  .or(PRODUCT.SKU.containsIgnoreCase(term))
+                  .or(PRODUCT.BARCODE.eq(term)));
+    }
+    Field<Integer> available = INVENTORY.STOCK_QTY.minus(INVENTORY.RESERVED_QTY);
+    Condition tracked = INVENTORY.PRODUCT_ID.isNotNull();
+    if (f.stock() != null) {
+      c =
+          switch (f.stock()) {
+            case TRACKED -> c.and(tracked);
             case UNTRACKED -> c.and(INVENTORY.PRODUCT_ID.isNull());
-            case OUT -> c.and(INVENTORY.PRODUCT_ID.isNotNull()).and(available.eq(0));
-            case LOW ->
-                c.and(INVENTORY.PRODUCT_ID.isNotNull())
-                    .and(available.le(lowLte != null ? lowLte : 5));
+            case OUT -> c.and(tracked).and(available.eq(0));
+            case LOW -> c.and(tracked).and(available.le(f.lowLte() != null ? f.lowLte() : 5));
             // The product's own rule (V94): a NULL point makes the comparison null → excluded.
             case REORDER ->
-                c.and(INVENTORY.PRODUCT_ID.isNotNull())
+                c.and(tracked)
                     .and(PRODUCT.REORDER_POINT.isNotNull())
                     .and(available.le(PRODUCT.REORDER_POINT));
           };
+    }
+    if (f.categoryId() != null) {
+      Condition ownListing = PRODUCT_LISTING.PRODUCT_ID.eq(PRODUCT.ID);
+      Condition variantOfListing =
+          DSL.exists(
+              DSL.selectOne()
+                  .from(PRODUCT_VARIANT)
+                  .where(PRODUCT_VARIANT.PRODUCT_LISTING_ID.eq(PRODUCT_LISTING.ID))
+                  .and(PRODUCT_VARIANT.PRODUCT_ID.eq(PRODUCT.ID)));
+      c =
+          c.and(
+              DSL.exists(
+                  DSL.selectOne()
+                      .from(PRODUCT_LISTING)
+                      .join(PRODUCT_LISTING_CATEGORY)
+                      .on(PRODUCT_LISTING_CATEGORY.LISTING_ID.eq(PRODUCT_LISTING.ID))
+                      .where(PRODUCT_LISTING.ORG_ID.eq(orgId))
+                      .and(PRODUCT_LISTING_CATEGORY.CATEGORY_ID.eq(f.categoryId()))
+                      .and(ownListing.or(variantOfListing))));
+    }
+    if (f.held() != null) {
+      c =
+          c.and(tracked)
+              .and(f.held() ? INVENTORY.RESERVED_QTY.gt(0) : INVENTORY.RESERVED_QTY.eq(0));
+    }
+    if (f.rule() != null) {
+      c =
+          switch (f.rule()) {
+            case SET -> c.and(PRODUCT.REORDER_POINT.isNotNull());
+            case NONE -> c.and(PRODUCT.REORDER_POINT.isNull());
+          };
+    }
+    if (f.changedFrom() != null) {
+      c = c.and(tracked).and(INVENTORY.UPDATED_AT.ge(f.changedFrom()));
+    }
+    if (f.changedTo() != null) {
+      c = c.and(tracked).and(INVENTORY.UPDATED_AT.lt(f.changedTo()));
     }
     return c;
   }
