@@ -6,7 +6,7 @@ import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.CancelOrderRequest;
 import com.loai.inventory.api.dto.CounterReturnRequest;
 import com.loai.inventory.api.dto.CounterReturnResponse;
-import com.loai.inventory.api.dto.PageResponse;
+import com.loai.inventory.api.dto.OrderListResponse;
 import com.loai.inventory.api.dto.PlaceSalesOrderRequest;
 import com.loai.inventory.api.dto.ReturnableResponse;
 import com.loai.inventory.api.mapper.FulfillmentMapper;
@@ -19,6 +19,7 @@ import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.OrderChannel;
+import com.loai.inventory.domain.model.OrderListFilter;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.service.CounterReturnService;
@@ -283,10 +284,14 @@ public class SalesOrderHandler implements OrgResourceHandler {
    *   <li>{@code ?order_number=SO-…} — exact-match, case-sensitive lookup (trimmed: numbers arrive
    *       by copy-paste from transfer notes); a single {@code SalesOrderResponse}, not a page
    *       ({@code stories/lookup_order_by_number.md}).
-   *   <li>otherwise — the order <b>worklist</b>: {@code ?status=&channel=&q=&page=&size=}, a {@code
-   *       PageResponse} of full order rows. Filtered by status = queue (oldest first); unfiltered =
-   *       ledger (newest first). {@code q} matches the order number or the customer's name / phone
-   *       ({@code stories/order_search.md}); blank = absent. Unknown status ⇒ 400.
+   *   <li>otherwise — the order <b>worklist</b>: {@code
+   *       ?status=&channel=&q=&from=&to=&balance=&min=&max=&sort=&page=&size=}, a {@code
+   *       PageResponse} of full order rows plus a {@code summary} of the whole filtered set ({@code
+   *       stories/order_filters.md}). Filtered by status = queue (oldest first); unfiltered =
+   *       ledger (newest first); an explicit {@code sort} overrides that. {@code q} matches the
+   *       order number or the customer's name / phone ({@code stories/order_search.md}); blank =
+   *       absent. Every dimension is parsed by {@link SalesOrderMapper#toListFilter}; a malformed
+   *       one is a 400 naming the parameter.
    * </ul>
    */
   private void doGetOrList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
@@ -302,16 +307,24 @@ public class SalesOrderHandler implements OrgResourceHandler {
         Math.min(
             Math.max(intParam(req, "size", SalesOrderService.DEFAULT_PAGE_SIZE), 1),
             SalesOrderService.MAX_PAGE_SIZE);
-    SalesOrderService.OrderListPage result =
-        service.list(
-            orgId,
-            SalesOrderMapper.toOrderStatus(req.getParameter("status")),
-            SalesOrderMapper.toOrderChannel(req.getParameter("channel")),
+    OrderListFilter filter =
+        SalesOrderMapper.toListFilter(
+            req.getParameter("status"),
+            req.getParameter("channel"),
             req.getParameter("q"),
-            page,
-            size);
+            req.getParameter("from"),
+            req.getParameter("to"),
+            req.getParameter("balance"),
+            req.getParameter("min"),
+            req.getParameter("max"),
+            req.getParameter("sort"));
+    SalesOrderService.OrderListPage result = service.list(orgId, filter, page, size);
     var data = result.items().stream().map(SalesOrderMapper::toResponse).toList();
-    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+    writeJson(
+        resp,
+        200,
+        new OrderListResponse(
+            data, result.total(), page, size, SalesOrderMapper.toSummaryResponse(result.stats())));
   }
 
   private static int intParam(HttpServletRequest req, String name, int defaultValue) {

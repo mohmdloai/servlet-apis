@@ -2,6 +2,8 @@ package com.loai.inventory.domain.repository;
 
 import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.OrderChannel;
+import com.loai.inventory.domain.model.OrderListFilter;
+import com.loai.inventory.domain.model.OrderListStats;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.model.SalesOrderLine;
@@ -116,6 +118,14 @@ public interface SalesOrderRepository {
   List<SalesOrder> list(
       UUID orgId, OrderStatus status, OrderChannel channel, String q, int offset, int limit);
 
+  /**
+   * The worklist read with every dimension in one {@link OrderListFilter} ({@code
+   * stories/order_filters.md}): status, channel, q, the {@code created_at} window, the balance
+   * meter, the {@code grand_total} band and an explicit sort. The older overloads delegate here.
+   * Ordering: {@code filter.sort()} when given; else the queue-vs-ledger rule keyed on status.
+   */
+  List<SalesOrder> list(UUID orgId, OrderListFilter filter, int offset, int limit);
+
   /** Count of the filtered orders (drives the pager / tab badges). */
   long count(UUID orgId, OrderStatus status);
 
@@ -124,6 +134,13 @@ public interface SalesOrderRepository {
 
   /** {@link #count} narrowed by {@code channel} and {@code q} — the same predicate as the list. */
   long count(UUID orgId, OrderStatus status, OrderChannel channel, String q);
+
+  /**
+   * The filtered set's count and money in one grouped scan over the same predicate as {@link
+   * #list(UUID, OrderListFilter, int, int)} — the pager's {@code total} and the worklist's summary
+   * line can never disagree with the rows ({@code stories/order_filters.md}).
+   */
+  OrderListStats stats(UUID orgId, OrderListFilter filter);
 
   /**
    * Live count of the org's orders per status in one grouped scan ({@code

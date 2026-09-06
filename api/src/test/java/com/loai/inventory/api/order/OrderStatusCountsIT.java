@@ -233,7 +233,7 @@ class OrderStatusCountsIT {
     assertEquals(1L, counts.counts().get(OrderStatus.PAID));
     assertEquals(1L, counts.counts().get(OrderStatus.EXPIRED));
     assertEquals(
-        service.list(org, null, 0, 1).total(),
+        service.list(org, (OrderStatus) null, 0, 1).total(),
         counts.total(),
         "total must equal the unfiltered ledger's total");
     assertEquals(

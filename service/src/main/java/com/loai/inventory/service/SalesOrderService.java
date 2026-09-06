@@ -13,6 +13,8 @@ import com.loai.inventory.domain.model.DiscountMath;
 import com.loai.inventory.domain.model.Fulfillment;
 import com.loai.inventory.domain.model.NotificationType;
 import com.loai.inventory.domain.model.OrderChannel;
+import com.loai.inventory.domain.model.OrderListFilter;
+import com.loai.inventory.domain.model.OrderListStats;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.Org;
 import com.loai.inventory.domain.model.OrgRole;
@@ -882,9 +884,10 @@ public class SalesOrderService {
   public static final int MAX_PAGE_SIZE = 100;
 
   /**
-   * One page of the order worklist ({@link Placed} rows carry the order + its lines) + the total.
+   * One page of the order worklist ({@link Placed} rows carry the order + its lines), the total,
+   * and what the whole filtered set adds up to ({@code stories/order_filters.md}).
    */
-  public record OrderListPage(List<Placed> items, long total) {}
+  public record OrderListPage(List<Placed> items, long total, OrderListStats stats) {}
 
   /**
    * The order worklist ({@code GET /sales-orders?status=&page=&size=}): filtered by {@code status}
@@ -914,19 +917,47 @@ public class SalesOrderService {
    */
   public OrderListPage list(
       UUID orgId, OrderStatus status, OrderChannel channel, String q, int page, int size) {
+    return list(orgId, OrderListFilter.of(status, channel, q), page, size);
+  }
+
+  /**
+   * The worklist read with every dimension in one {@link OrderListFilter} ({@code
+   * stories/order_filters.md}): status, channel, q, the {@code created_at} window, the balance
+   * meter, the {@code grand_total} band and an explicit sort. The rows and the stats (count +
+   * money) come from one predicate, so the pager and the summary line can never disagree with the
+   * list. Lines are batch-loaded (one query per page). Read-only on {@code rootDsl}.
+   */
+  public OrderListPage list(UUID orgId, OrderListFilter filter, int page, int size) {
     int p = Math.max(page, 0);
     int s = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
-    String term = (q == null || q.isBlank()) ? null : q.trim();
+    OrderListFilter f = normalize(filter == null ? OrderListFilter.none() : filter);
     SalesOrderRepository repo = repoFactory.create(rootDsl);
-    List<SalesOrder> orders = repo.list(orgId, status, channel, term, p * s, s);
-    long total = repo.count(orgId, status, channel, term);
+    OrderListStats stats = repo.stats(orgId, f);
+    List<SalesOrder> orders = stats.total() == 0 ? List.of() : repo.list(orgId, f, p * s, s);
     Map<UUID, List<SalesOrderLine>> linesByOrder =
-        repo.findLinesByOrderIds(orders.stream().map(SalesOrder::getId).toList());
+        orders.isEmpty()
+            ? Map.of()
+            : repo.findLinesByOrderIds(orders.stream().map(SalesOrder::getId).toList());
     List<Placed> items =
         orders.stream()
             .map(o -> new Placed(o, linesByOrder.getOrDefault(o.getId(), List.of()), null))
             .toList();
-    return new OrderListPage(items, total);
+    return new OrderListPage(items, stats.total(), stats);
+  }
+
+  /** Whitespace-only {@code q} is absent, not a search for spaces. */
+  private static OrderListFilter normalize(OrderListFilter f) {
+    String term = f.hasQuery() ? f.q().trim() : null;
+    return new OrderListFilter(
+        f.status(),
+        f.channel(),
+        term,
+        f.createdFrom(),
+        f.createdTo(),
+        f.balance(),
+        f.minTotal(),
+        f.maxTotal(),
+        f.sort());
   }
 
   /**

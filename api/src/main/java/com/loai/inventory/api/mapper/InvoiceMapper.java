@@ -18,7 +18,6 @@ import com.loai.inventory.service.InvoiceAdminService.ReissueLine;
 import com.loai.inventory.service.InvoiceService.Issued;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
-import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Locale;
 
@@ -85,13 +84,13 @@ public final class InvoiceMapper {
    */
   public static InvoiceListFilter toListFilter(
       String status, String q, String from, String to, String paid, String min, String max) {
-    OffsetDateTime issuedFrom = parseTs("from", from);
-    OffsetDateTime issuedTo = parseTs("to", to);
+    OffsetDateTime issuedFrom = QueryParams.parseTs("from", from);
+    OffsetDateTime issuedTo = QueryParams.parseTs("to", to);
     if (issuedFrom != null && issuedTo != null && !issuedFrom.isBefore(issuedTo)) {
       throw new ValidationException("'from' must be strictly before 'to'");
     }
-    BigDecimal minTotal = parseMoney("min", min);
-    BigDecimal maxTotal = parseMoney("max", max);
+    BigDecimal minTotal = QueryParams.parseMoney("min", min);
+    BigDecimal maxTotal = QueryParams.parseMoney("max", max);
     if (minTotal != null && maxTotal != null && minTotal.compareTo(maxTotal) > 0) {
       throw new ValidationException("'min' must not exceed 'max'");
     }
@@ -115,33 +114,6 @@ public final class InvoiceMapper {
     } catch (IllegalArgumentException e) {
       throw new ValidationException("'paid' must be one of: none, partial");
     }
-  }
-
-  private static OffsetDateTime parseTs(String name, String value) {
-    if (value == null || value.isBlank()) {
-      return null;
-    }
-    try {
-      return OffsetDateTime.parse(value.trim());
-    } catch (DateTimeParseException e) {
-      throw new ValidationException("'" + name + "' must be an ISO-8601 date-time");
-    }
-  }
-
-  private static BigDecimal parseMoney(String name, String value) {
-    if (value == null || value.isBlank()) {
-      return null;
-    }
-    BigDecimal parsed;
-    try {
-      parsed = new BigDecimal(value.trim());
-    } catch (NumberFormatException e) {
-      throw new ValidationException("'" + name + "' must be a number");
-    }
-    if (parsed.signum() < 0) {
-      throw new ValidationException("'" + name + "' must not be negative");
-    }
-    return parsed;
   }
 
   public static InvoiceListSummaryResponse toSummaryResponse(InvoiceListStats stats) {
