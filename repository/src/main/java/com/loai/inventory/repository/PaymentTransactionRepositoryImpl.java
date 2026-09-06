@@ -1,9 +1,11 @@
 package com.loai.inventory.repository;
 
+import static com.loai.inventory.repository.generated.Tables.CUSTOMER;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 
+import com.loai.inventory.common.text.Text;
 import com.loai.inventory.domain.model.PaymentDirection;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
@@ -11,13 +13,17 @@ import com.loai.inventory.domain.model.PaymentTransaction;
 import com.loai.inventory.domain.model.PaymentVerificationStatus;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository;
 import com.loai.inventory.repository.generated.tables.records.PaymentTransactionRecord;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.Condition;
 import org.jooq.DSLContext;
+import org.jooq.Field;
 import org.jooq.JSONB;
+import org.jooq.SortField;
 import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -164,17 +170,70 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
           .fetch(r -> toPaymentTransaction(r.into(PAYMENT_TRANSACTION)));
     }
     var query = dsl.selectFrom(PAYMENT_TRANSACTION).where(conditions(orgId, filter));
-    // Filtered = queue view, oldest first (FIFO worklist); unfiltered = ledger, newest first.
-    var ordered =
-        filter != null && !filter.isEmpty()
-            ? query.orderBy(PAYMENT_TRANSACTION.OCCURRED_AT.asc(), PAYMENT_TRANSACTION.ID.asc())
-            : query.orderBy(PAYMENT_TRANSACTION.RECORDED_AT.desc(), PAYMENT_TRANSACTION.ID.desc());
-    return ordered.offset(offset).limit(limit).fetch().map(this::toPaymentTransaction);
+    return query
+        .orderBy(order(filter))
+        .offset(offset)
+        .limit(limit)
+        .fetch()
+        .map(this::toPaymentTransaction);
+  }
+
+  /**
+   * A state queue reads oldest first (FIFO worklist); the ledger reads newest first. An explicit
+   * {@code sort} overrides both on {@code occurred_at} — the time the row shows — and the narrowing
+   * dimensions (method, window, band, search) never change the order on their own ({@code
+   * stories/transaction_filters.md}). {@code id} tiebreaks keep pagination deterministic.
+   */
+  private static List<SortField<?>> order(ListFilter filter) {
+    if (filter != null && filter.sort() != null) {
+      return switch (filter.sort()) {
+        case NEWEST ->
+            List.of(PAYMENT_TRANSACTION.OCCURRED_AT.desc(), PAYMENT_TRANSACTION.ID.desc());
+        case OLDEST -> List.of(PAYMENT_TRANSACTION.OCCURRED_AT.asc(), PAYMENT_TRANSACTION.ID.asc());
+      };
+    }
+    return filter != null && filter.isQueue()
+        ? List.of(PAYMENT_TRANSACTION.OCCURRED_AT.asc(), PAYMENT_TRANSACTION.ID.asc())
+        : List.of(PAYMENT_TRANSACTION.RECORDED_AT.desc(), PAYMENT_TRANSACTION.ID.desc());
   }
 
   @Override
   public long count(UUID orgId, ListFilter filter) {
     return dsl.fetchCount(dsl.selectFrom(PAYMENT_TRANSACTION).where(conditions(orgId, filter)));
+  }
+
+  @Override
+  public ListStats stats(UUID orgId, ListFilter filter) {
+    // One pass over the filtered set: the count the pager needs and the two money figures the
+    // ledger line shows. Only VERIFIED rows are money — a shopper's claim resting UNVERIFIED (or
+    // NOT_FOUND / ABANDONED) is a row in the ledger, not money that arrived.
+    Field<BigDecimal> zero = DSL.inline(BigDecimal.ZERO);
+    Condition verified =
+        PAYMENT_TRANSACTION.VERIFICATION_STATUS.eq(
+            com.loai.inventory.repository.generated.enums.PaymentVerificationStatus.VERIFIED);
+    Condition credit =
+        PAYMENT_TRANSACTION.DIRECTION.eq(
+            com.loai.inventory.repository.generated.enums.PaymentDirection.CREDIT);
+    Condition debit =
+        PAYMENT_TRANSACTION.DIRECTION.eq(
+            com.loai.inventory.repository.generated.enums.PaymentDirection.DEBIT);
+    Field<BigDecimal> moneyIn =
+        DSL.sum(DSL.when(verified.and(credit), PAYMENT_TRANSACTION.AMOUNT).otherwise(zero));
+    Field<BigDecimal> moneyOut =
+        DSL.sum(DSL.when(verified.and(debit), PAYMENT_TRANSACTION.AMOUNT).otherwise(zero));
+    var row =
+        dsl.select(DSL.count(), moneyIn, moneyOut)
+            .from(PAYMENT_TRANSACTION)
+            .where(conditions(orgId, filter))
+            .fetchOne();
+    if (row == null) {
+      return ListStats.empty();
+    }
+    return new ListStats(row.value1().longValue(), money(row.value2()), money(row.value3()));
+  }
+
+  private static BigDecimal money(BigDecimal sum) {
+    return (sum == null ? BigDecimal.ZERO : sum).setScale(2, RoundingMode.HALF_EVEN);
   }
 
   @Override
@@ -276,7 +335,105 @@ public final class PaymentTransactionRepositoryImpl implements PaymentTransactio
     if (filter.claimedSalesOrderId() != null) {
       c = c.and(PAYMENT_TRANSACTION.CLAIMED_SALES_ORDER_ID.eq(filter.claimedSalesOrderId()));
     }
+    if (filter.q() != null) {
+      c = c.and(searchLegs(orgId, filter.q()));
+    }
+    if (filter.occurredFrom() != null) {
+      c = c.and(PAYMENT_TRANSACTION.OCCURRED_AT.ge(filter.occurredFrom()));
+    }
+    if (filter.occurredTo() != null) {
+      c = c.and(PAYMENT_TRANSACTION.OCCURRED_AT.lt(filter.occurredTo()));
+    }
+    if (filter.minAmount() != null) {
+      c = c.and(PAYMENT_TRANSACTION.AMOUNT.ge(filter.minAmount()));
+    }
+    if (filter.maxAmount() != null) {
+      c = c.and(PAYMENT_TRANSACTION.AMOUNT.le(filter.maxAmount()));
+    }
     return c;
+  }
+
+  /**
+   * The {@code q} legs ({@code stories/transaction_filters.md}), ORed:
+   *
+   * <ul>
+   *   <li><b>reference</b> — {@code provider_ref ILIKE '%q%'}: the support question "did this
+   *       transfer arrive?" asked with the four digits the customer read out, not the exact string
+   *       the {@code provider_ref=} lookup needs.
+   *   <li><b>order</b> — the linked order's number by fragment, where the link is the 1:1 payment's
+   *       {@code sales_order_id} (a matched, underpaid or overpaid transaction, or a resolved
+   *       orphan) or the row's own {@code claimed_sales_order_id} (a shopper's claim).
+   *   <li><b>customer</b> — that order's customer by folded name ({@code fold_search} on both
+   *       sides, the orders search's rule: the CRM {@code name_search} through {@code customer_id},
+   *       the walk-in {@code customer_name} folded in the query) or by phone digits (CRM {@code
+   *       phone_e164}, walk-in {@code customer_phone} stripped to digits; Arabic-Indic folded) —
+   *       and the claimant ({@code claimed_by_customer_id}) the same way, for a claim that named no
+   *       order.
+   * </ul>
+   *
+   * <p>Org-scoped like the orders search, so the planner never leaves the tenant's own rows; the
+   * {@code EXISTS} legs are one index hit per candidate row.
+   */
+  private static Condition searchLegs(UUID orgId, String term) {
+    Field<String> folded = DSL.field("fold_search({0})", String.class, DSL.val(term));
+    Field<String> foldedPattern = DSL.concat(DSL.inline("%"), folded, DSL.inline("%"));
+    String numeric = Text.normalizeNumeric(term);
+    String digits = numeric == null ? "" : numeric.replaceAll("[^0-9]", "");
+    String digitsPattern = digits.isEmpty() ? null : "%" + digits + "%";
+
+    Condition byReference = PAYMENT_TRANSACTION.PROVIDER_REF.containsIgnoreCase(term);
+
+    // The linked order: through the payment, or the claim.
+    Condition orderMatches =
+        SALES_ORDER
+            .ORDER_NUMBER
+            .containsIgnoreCase(term)
+            .or(
+                DSL.field("fold_search({0})", String.class, SALES_ORDER.CUSTOMER_NAME)
+                    .like(foldedPattern))
+            .or(customerMatches(SALES_ORDER.CUSTOMER_ID, foldedPattern, digitsPattern));
+    if (digitsPattern != null) {
+      orderMatches =
+          orderMatches.or(
+              DSL.field(
+                      "regexp_replace({0}, '[^0-9]', '', 'g')",
+                      String.class, SALES_ORDER.CUSTOMER_PHONE)
+                  .like(digitsPattern));
+    }
+    Condition byLinkedOrder =
+        DSL.exists(
+            DSL.selectOne()
+                .from(SALES_ORDER)
+                .where(SALES_ORDER.ORG_ID.eq(orgId))
+                .and(
+                    SALES_ORDER
+                        .ID
+                        .eq(PAYMENT_TRANSACTION.CLAIMED_SALES_ORDER_ID)
+                        .or(
+                            SALES_ORDER.ID.in(
+                                DSL.select(PAYMENT.SALES_ORDER_ID)
+                                    .from(PAYMENT)
+                                    .where(
+                                        PAYMENT.PAYMENT_TRANSACTION_ID.eq(
+                                            PAYMENT_TRANSACTION.ID)))))
+                .and(orderMatches));
+
+    Condition byClaimant =
+        customerMatches(PAYMENT_TRANSACTION.CLAIMED_BY_CUSTOMER_ID, foldedPattern, digitsPattern);
+
+    return byReference.or(byLinkedOrder).or(byClaimant);
+  }
+
+  /**
+   * EXISTS on the CRM customer behind {@code customerId}: folded name, or phone digits when any.
+   */
+  private static Condition customerMatches(
+      Field<UUID> customerId, Field<String> foldedPattern, String digitsPattern) {
+    Condition match = CUSTOMER.NAME_SEARCH.like(foldedPattern);
+    if (digitsPattern != null) {
+      match = match.or(CUSTOMER.PHONE_E164.like(digitsPattern));
+    }
+    return DSL.exists(DSL.selectOne().from(CUSTOMER).where(CUSTOMER.ID.eq(customerId)).and(match));
   }
 
   private static JSONB toJsonb(String json) {

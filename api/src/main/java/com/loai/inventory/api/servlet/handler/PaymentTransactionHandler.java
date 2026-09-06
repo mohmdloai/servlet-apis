@@ -5,16 +5,17 @@ import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.ApiErrors;
 import com.loai.inventory.api.dto.MarkClaimNotFoundRequest;
 import com.loai.inventory.api.dto.OrphanRefundResponse;
-import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PaymentTransactionResponse;
 import com.loai.inventory.api.dto.RefundOrphanRequest;
 import com.loai.inventory.api.dto.ResolveOrphanRequest;
+import com.loai.inventory.api.dto.TransactionListResponse;
 import com.loai.inventory.api.dto.VerifyClaimRequest;
 import com.loai.inventory.api.dto.VerifyPaymentTransactionRequest;
 import com.loai.inventory.api.mapper.PaymentTransactionMapper;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
+import com.loai.inventory.domain.model.Customer;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
 import com.loai.inventory.domain.model.PaymentVerificationStatus;
@@ -148,15 +149,22 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
     AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
 
     ListFilter filter =
-        new ListFilter(
+        PaymentTransactionMapper.toListFilter(
             enumParam(req, "verification_status", PaymentVerificationStatus.class),
             enumParam(req, "reconciliation_status", PaymentReconciliationStatus.class),
             boolParam(req, "has_payment"),
-            PaymentTransactionMapper.toProviderFilter(req.getParameter("provider")),
+            req.getParameter("provider"),
             // ListFilter's canonical constructor trims (references arrive by copy-paste).
             req.getParameter("provider_ref"),
             // The claims filed against one order — the order page's claim card.
-            uuidParam(req, "sales_order_id"));
+            uuidParam(req, "sales_order_id"),
+            // The ledger dimensions (stories/transaction_filters.md).
+            req.getParameter("q"),
+            req.getParameter("from"),
+            req.getParameter("to"),
+            req.getParameter("min"),
+            req.getParameter("max"),
+            req.getParameter("sort"));
     // Clamp here too so the envelope echoes the page/size actually served.
     int page = Math.max(intParam(req, "page", 0), 0);
     int size =
@@ -165,25 +173,37 @@ public class PaymentTransactionHandler implements OrgResourceHandler {
             PaymentTransactionService.MAX_PAGE_SIZE);
 
     TransactionPage result = service.list(orgId, filter, page, size);
-    // Rows carry their batch-loaded claim context (customer + claimed order) but never the
-    // presigned proof URL and never the verifier's name — both are detail reads.
+    // Rows carry their batch-loaded context — the claim's customer + claimed order, and the
+    // matched order (through the 1:1 payment) with its customer — but never the payment itself,
+    // the presigned proof URL or the verifier's name: those are detail reads.
     List<PaymentTransactionResponse> data =
         result.items().stream()
             .map(
-                txn ->
-                    PaymentTransactionResponse.withContext(
-                        txn,
-                        null,
-                        null,
-                        txn.getClaimedByCustomerId() == null
-                            ? null
-                            : result.customers().get(txn.getClaimedByCustomerId()),
-                        txn.getClaimedSalesOrderId() == null
-                            ? null
-                            : result.claimedOrders().get(txn.getClaimedSalesOrderId()),
-                        null))
+                txn -> {
+                  Customer claimant =
+                      txn.getClaimedByCustomerId() == null
+                          ? null
+                          : result.customers().get(txn.getClaimedByCustomerId());
+                  return PaymentTransactionResponse.withContext(
+                      txn,
+                      null,
+                      result.matchedOrder(txn.getId()),
+                      claimant != null ? claimant : result.matchedCustomer(txn.getId()),
+                      txn.getClaimedSalesOrderId() == null
+                          ? null
+                          : result.claimedOrders().get(txn.getClaimedSalesOrderId()),
+                      null);
+                })
             .toList();
-    writeJson(resp, 200, new PageResponse<>(data, result.total(), page, size));
+    writeJson(
+        resp,
+        200,
+        new TransactionListResponse(
+            data,
+            result.total(),
+            page,
+            size,
+            PaymentTransactionMapper.toSummaryResponse(result.stats())));
   }
 
   /**

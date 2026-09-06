@@ -62,6 +62,22 @@ public final class PaymentRepositoryImpl implements PaymentRepository {
   }
 
   @Override
+  public Map<UUID, Payment> findByTransactionIds(
+      UUID orgId, Collection<UUID> paymentTransactionIds) {
+    if (paymentTransactionIds == null || paymentTransactionIds.isEmpty()) {
+      return Map.of();
+    }
+    return dsl
+        .selectFrom(PAYMENT)
+        .where(
+            PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.PAYMENT_TRANSACTION_ID.in(paymentTransactionIds)))
+        .fetch()
+        .stream()
+        .map(this::toPayment)
+        .collect(java.util.stream.Collectors.toMap(Payment::getPaymentTransactionId, p -> p));
+  }
+
+  @Override
   public Optional<Payment> findById(UUID orgId, UUID id) {
     return dsl.selectFrom(PAYMENT)
         .where(PAYMENT.ORG_ID.eq(orgId).and(PAYMENT.ID.eq(id)))

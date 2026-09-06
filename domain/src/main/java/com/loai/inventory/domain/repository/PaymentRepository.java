@@ -23,6 +23,13 @@ public interface PaymentRepository {
    */
   Optional<Payment> findByTransactionId(UUID orgId, UUID paymentTransactionId);
 
+  /**
+   * The payments bound to a set of transactions, keyed by {@code payment_transaction_id} — one read
+   * per worklist page so every ledger row can name the order its money went to ({@code
+   * stories/transaction_filters.md}). Transactions without a payment simply have no entry.
+   */
+  Map<UUID, Payment> findByTransactionIds(UUID orgId, Collection<UUID> paymentTransactionIds);
+
   /** Read a payment by id without locking. Used by the read-only GET endpoint. */
   Optional<Payment> findById(UUID orgId, UUID id);
 
