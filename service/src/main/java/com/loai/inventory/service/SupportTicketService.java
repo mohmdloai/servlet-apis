@@ -26,6 +26,7 @@ import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -68,6 +69,17 @@ public class SupportTicketService {
 
   private static final Set<OrgRole> MEMBER_ROLES =
       Set.of(OrgRole.VIEWER, OrgRole.STAFF, OrgRole.MANAGER, OrgRole.OWNER);
+
+  /**
+   * The ticket paths' clock, truncated to microseconds — Postgres keeps {@code timestamptz} at µs,
+   * so a stamp the caller gets back in the write's own response ({@code last_activity_at}, {@code
+   * status_since}, {@code resolved_at}) carries the precision it will read back with later. The JDK
+   * clock is ns on Linux and µs on macOS, so without this the same instant is two different values
+   * on one ticket — CI caught it on {@code first_response_at}.
+   */
+  public static OffsetDateTime ticketClock() {
+    return OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
+  }
 
   private final DSLContext rootDsl;
   private final SupportTicketRepositoryFactory ticketRepoFactory;
@@ -142,7 +154,7 @@ public class SupportTicketService {
     String body = requireText(cmd.body(), "body", BODY_MAX);
     List<AttachmentInput> attachments = validateAttachments(orgId, cmd.attachments());
     TicketRef ref = validateRef(cmd.ref());
-    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    OffsetDateTime now = ticketClock();
 
     return rootDsl.transactionResult(
         cfg -> {
@@ -223,7 +235,7 @@ public class SupportTicketService {
       List<AttachmentInput> rawAttachments) {
     String body = requireText(rawBody, "body", BODY_MAX);
     List<AttachmentInput> attachments = validateAttachments(orgId, rawAttachments);
-    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    OffsetDateTime now = ticketClock();
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
@@ -246,7 +258,7 @@ public class SupportTicketService {
 
   /** The merchant closes their ticket — terminal; the desk is told, nobody else. */
   public TicketView close(UUID orgId, UUID actor, boolean isManager, UUID ticketId) {
-    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    OffsetDateTime now = ticketClock();
     return rootDsl.transactionResult(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
