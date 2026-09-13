@@ -240,6 +240,10 @@ class SupportTicketIT {
     assertEquals(TicketStatus.AWAITING_MERCHANT, afterReply.view().ticket().getStatus());
     OffsetDateTime firstResponse = afterReply.view().ticket().getFirstResponseAt();
     assertNotNull(firstResponse);
+    assertEquals(
+        0,
+        firstResponse.getNano() % 1000,
+        "the write's own response carries Postgres' µs — an ns stamp drifts on the next read");
     assertEquals(1, statusRows(id, TicketStatus.AWAITING_MERCHANT));
 
     // merchant message → OPEN (the ball returns), a STATUS row

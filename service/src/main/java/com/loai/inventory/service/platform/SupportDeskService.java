@@ -24,7 +24,6 @@ import com.loai.inventory.service.SupportTicketService.AttachmentInput;
 import com.loai.inventory.service.SupportTicketService.Presign;
 import com.loai.inventory.service.SupportTicketService.TicketView;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -122,7 +121,7 @@ public class SupportDeskService {
       List<AttachmentInput> rawAttachments,
       boolean resolve) {
     String body = SupportTicketService.requireText(rawBody, "body", SupportTicketService.BODY_MAX);
-    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    OffsetDateTime now = SupportTicketService.ticketClock();
     return transition(
         sc,
         env,
@@ -167,7 +166,7 @@ public class SupportDeskService {
 
   /** Resolve without words: {@code OPEN | AWAITING_MERCHANT → RESOLVED}. */
   public DeskView resolve(SecurityContext sc, Environment env, UUID ticketId) {
-    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    OffsetDateTime now = SupportTicketService.ticketClock();
     return transition(
         sc,
         env,
@@ -194,7 +193,7 @@ public class SupportDeskService {
 
   /** The desk closes: terminal, audited, and deliberately silent (a merchant closed nothing). */
   public DeskView close(SecurityContext sc, Environment env, UUID ticketId) {
-    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    OffsetDateTime now = SupportTicketService.ticketClock();
     return transition(
         sc,
         env,
