@@ -134,6 +134,10 @@ public class OrgServlet extends HttpServlet {
             Map.entry("reviews", new ReviewHandler(config.listingReviewService, mapper)),
             Map.entry("comments", new CommentHandler(config.listingCommentService, mapper)),
             Map.entry(
+                "support-tickets",
+                new com.loai.inventory.api.servlet.handler.SupportTicketHandler(
+                    config.supportTicketService, mapper)),
+            Map.entry(
                 "invoices",
                 new InvoiceHandler(
                     config.invoiceAdminService, config.documentRenderService, mapper)),

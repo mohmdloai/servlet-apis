@@ -176,6 +176,21 @@ class NotificationTemplatesTest {
               "note", "nothing arrived",
               "held_until", "2026-07-14T09:12Z");
       case ORDER_PLACED, REVIEW_REQUESTED -> Map.of("order_number", "SO-1");
+      case SUPPORT_TICKET_OPENED ->
+          Map.of(
+              "ticket_number", "1042",
+              "subject", "Printer stops after 3 receipts",
+              "org_name", "Mart Cairo",
+              "blocking", "true");
+      case SUPPORT_TICKET_UPDATED ->
+          Map.of(
+              "ticket_number", "1042",
+              "subject", "Printer stops after 3 receipts",
+              "org_name", "Mart Cairo",
+              "blocking", "false",
+              "event", "reopened");
+      case SUPPORT_TICKET_REPLIED, SUPPORT_TICKET_RESOLVED ->
+          Map.of("ticket_number", "1042", "subject", "Printer stops after 3 receipts");
       case LOW_STOCK ->
           Map.of(
               "product_id", "11111111-1111-4111-8111-111111111111",

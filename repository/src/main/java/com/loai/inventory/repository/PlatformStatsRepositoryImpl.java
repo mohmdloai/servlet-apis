@@ -10,6 +10,7 @@ import com.loai.inventory.domain.model.PlatformQueueCounts;
 import com.loai.inventory.domain.model.PlatformQueueKind;
 import com.loai.inventory.domain.model.PlatformTenantCounts;
 import com.loai.inventory.domain.model.RecurringJobStats;
+import com.loai.inventory.domain.model.TicketDeskCounts;
 import com.loai.inventory.domain.repository.PlatformStatsRepository;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -205,6 +206,13 @@ public final class PlatformStatsRepositoryImpl implements PlatformStatsRepositor
   }
 
   /** One queue's size, straight off the shared definition. See {@link PlatformQueuePredicates}. */
+  @Override
+  public TicketDeskCounts ticketCounts() {
+    // The predicates live in TicketDeskPredicates, shared with PlatformTicketRepositoryImpl — the
+    // tile and the inbox tab are the same query (the queueCounts move, one table over).
+    return new PlatformTicketRepositoryImpl(dsl).counts(null);
+  }
+
   private long count(PlatformQueueKind kind) {
     return dsl.fetchCount(PlatformQueuePredicates.from(kind), PlatformQueuePredicates.where(kind));
   }

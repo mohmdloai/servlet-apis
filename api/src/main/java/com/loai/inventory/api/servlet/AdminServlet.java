@@ -42,6 +42,8 @@ import org.slf4j.LoggerFactory;
  *       overview's backlog tiles)
  *   <li>{@code /search?q=} → {@link SearchAdminHandler} (cross-org lookup by an identifier a
  *       customer quoted)
+ *   <li>{@code /tickets[/{id}[/…]]} → {@code TicketDeskAdminHandler} (the support desk — the one
+ *       resource where the SUPPORT tier writes; {@code stories/support_tickets.md})
  * </ul>
  *
  * <p>{@code /api/admin/impersonate/*} is mapped to the more-specific {@code
@@ -83,7 +85,10 @@ public class AdminServlet extends HttpServlet {
             "funnel",
             new FunnelAdminHandler(config.platformFunnelService, mapper),
             "growth",
-            new GrowthAdminHandler(config.platformGrowthService, mapper));
+            new GrowthAdminHandler(config.platformGrowthService, mapper),
+            "tickets",
+            new com.loai.inventory.api.servlet.handler.TicketDeskAdminHandler(
+                config.supportDeskService, mapper));
   }
 
   @Override

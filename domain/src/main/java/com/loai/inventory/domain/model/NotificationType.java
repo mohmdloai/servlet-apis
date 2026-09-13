@@ -109,5 +109,32 @@ public enum NotificationType {
    * product_id}, {@code name}, {@code sku}, {@code available}, {@code reorder_point}; source is the
    * product, and the link is its stock page.
    */
-  LOW_STOCK
+  LOW_STOCK,
+
+  /**
+   * A merchant opened a support ticket ({@code stories/support_tickets.md}). Recipients: every
+   * active platform ADMIN / SUPPORT user, each as a {@code USER} with {@code org_id} = the ticket's
+   * org (the tenant this concerns — the {@code platform_audit.org_id} semantics). Raised inside the
+   * create txn, so a ticket that exists has told the desk. Payload: {@code ticket_number}, {@code
+   * subject}, {@code org_name}, {@code blocking}; source is the ticket.
+   */
+  SUPPORT_TICKET_OPENED,
+
+  /**
+   * The merchant wrote on a ticket the desk had answered (a reply, a reopen) or closed it — the
+   * desk's "your move again". Same recipients and payload as {@link #SUPPORT_TICKET_OPENED}, plus
+   * {@code event} ({@code replied} / {@code reopened} / {@code closed}).
+   */
+  SUPPORT_TICKET_UPDATED,
+
+  /**
+   * The desk replied on the merchant's ticket. Recipients: the merchant participants (every active
+   * member who wrote on the merchant side; the OWNERs when none remain). In-app + push today — a
+   * USER recipient has no email leg (epic decision 8). Payload: {@code ticket_number}, {@code
+   * subject}; the link is the thread.
+   */
+  SUPPORT_TICKET_REPLIED,
+
+  /** The desk marked the merchant's ticket resolved — confirm, or reply to reopen. */
+  SUPPORT_TICKET_RESOLVED
 }

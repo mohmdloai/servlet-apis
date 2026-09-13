@@ -4,7 +4,9 @@ import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ApprovalRequiredException;
 import com.loai.inventory.common.exception.ClaimPendingException;
 import com.loai.inventory.common.exception.InsufficientStockException;
+import com.loai.inventory.common.exception.InvalidTicketTransitionException;
 import com.loai.inventory.common.exception.ShiftRequiredException;
+import com.loai.inventory.common.exception.TicketCapException;
 import com.loai.inventory.common.exception.TooManyAttemptsException;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -72,6 +74,12 @@ public final class ApiErrors {
     }
     if (e instanceof ShiftRequiredException) {
       return ApiError.ofKind(e.getStatusCode(), e.getMessage(), ShiftRequiredException.KIND);
+    }
+    if (e instanceof TicketCapException) {
+      return ApiError.ofKind(e.getStatusCode(), e.getMessage(), TicketCapException.KIND);
+    }
+    if (e instanceof InvalidTicketTransitionException itt) {
+      return ApiError.ofKind(e.getStatusCode(), e.getMessage(), itt.getKind());
     }
     return ApiError.of(e.getStatusCode(), e.getMessage());
   }

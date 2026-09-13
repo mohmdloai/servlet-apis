@@ -3,6 +3,7 @@ package com.loai.inventory.domain.repository;
 import com.loai.inventory.domain.model.PlatformQueueCounts;
 import com.loai.inventory.domain.model.PlatformTenantCounts;
 import com.loai.inventory.domain.model.RecurringJobStats;
+import com.loai.inventory.domain.model.TicketDeskCounts;
 import java.util.List;
 
 /**
@@ -40,6 +41,13 @@ public interface PlatformStatsRepository {
 
   /** The five operational backlogs across every org. */
   PlatformQueueCounts queueCounts();
+
+  /**
+   * The support desk's status counts across every org ({@code stories/support_tickets.md}) — read
+   * through the same predicates as the desk inbox, so the overview tile and the inbox agree by
+   * construction.
+   */
+  TicketDeskCounts ticketCounts();
 
   /**
    * Outcome facts for the given recurring-job ids, read off {@code jobrunr_recurring_jobs} (the

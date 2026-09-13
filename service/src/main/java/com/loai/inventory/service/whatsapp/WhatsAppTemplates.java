@@ -89,7 +89,15 @@ public final class WhatsAppTemplates {
       // spirit ("check your reference"), but it has no approved Meta template yet — the email +
       // feed carry it (stories/payment_claim_not_found.md); a template is a later, approved add.
       // LOW_STOCK is staff-facing (USER recipients are in-app only) — never a WhatsApp message.
-      case COMMENT_REPLIED, REVIEW_REQUESTED, PAYMENT_NOT_FOUND, LOW_STOCK -> null;
+      case COMMENT_REPLIED,
+          REVIEW_REQUESTED,
+          PAYMENT_NOT_FOUND,
+          LOW_STOCK,
+          SUPPORT_TICKET_OPENED,
+          SUPPORT_TICKET_UPDATED,
+          SUPPORT_TICKET_REPLIED,
+          SUPPORT_TICKET_RESOLVED ->
+          null;
     };
   }
 

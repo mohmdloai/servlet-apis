@@ -353,6 +353,8 @@ public class AppConfig {
   public final ReservationService reservationService;
   public final SalesOrderService salesOrderService;
   public final CashShiftService cashShiftService;
+  public final com.loai.inventory.service.SupportTicketService supportTicketService;
+  public final com.loai.inventory.service.platform.SupportDeskService supportDeskService;
   public final OrderExpiryService orderExpiryService;
   public final NumberSequenceReconciliationService numberSequenceReconciliationService;
   public final PaymentService paymentService;
@@ -711,6 +713,16 @@ public class AppConfig {
             new CashMovementRepositoryFactoryImpl(),
             orgRepositoryFactory,
             userRepositoryFactory);
+    // stories/support_tickets.md: the merchant's door to the desk. Needs notificationService (the
+    // desk is told inside the create txn) and objectStorage (screenshots are presigned keys).
+    this.supportTicketService =
+        new com.loai.inventory.service.SupportTicketService(
+            dsl,
+            new com.loai.inventory.repository.SupportTicketRepositoryFactoryImpl(),
+            userRepositoryFactory,
+            orgRepositoryFactory,
+            notificationService,
+            objectStorage);
     this.paymentService =
         new PaymentService(
             dsl,
@@ -933,6 +945,15 @@ public class AppConfig {
     // The rows behind the overview's five backlog tiles (slice 2). A separate repository from
     // platformStatsRepositoryFactory on purpose — see PlatformQueueRepository's Javadoc.
     this.platformQueueService = new PlatformQueueService(dsl, platformQueueRepositoryFactory);
+    // The support desk (stories/support_tickets.md) — the fifth enumerated cross-org sibling for
+    // its reads; its writes go through the org-scoped ticket repository once the tenant is named.
+    this.supportDeskService =
+        new com.loai.inventory.service.platform.SupportDeskService(
+            dsl,
+            new com.loai.inventory.repository.PlatformTicketRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.SupportTicketRepositoryFactoryImpl(),
+            supportTicketService,
+            platformAuditService);
     // Cross-org identifier search (slice 3). A third sibling for the same reason: the queue
     // repository's per-kind row whitelist is what makes it reviewable, and search results are a
     // different whitelist — see PlatformSearchRepository's Javadoc.

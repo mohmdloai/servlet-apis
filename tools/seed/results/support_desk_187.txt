@@ -1,0 +1,81 @@
+Support desk reads (stories/support_tickets.md, V97) — measured on a scratch DB, 2026-09-13
+==========================================================================================
+perfdb carries no support_ticket rows (like every platform-plane table — the standing
+"count(*) before EXPLAIN" lesson), so a scratch database `ticket_scratch` was created beside
+the dev DB, Flyway-migrated to V97 through the codegen profile, seeded, measured and dropped.
+
+Seed: 200 orgs, one OWNER each, 50 tickets per org = 10,000 tickets in the story's ratio
+(3 : 5 : 4 : 38 → 600 OPEN / 1,000 AWAITING_MERCHANT / 800 RESOLVED / 7,600 CLOSED),
+10 % of OPEN blocking (67), status_since and last_activity_at spread over 30 days, one
+MESSAGE per ticket, an attachment on 20 % of messages. ANALYZE run before any EXPLAIN.
+
+  SELECT status, count(*), count(*) FILTER (WHERE blocking) FROM support_ticket GROUP BY 1;
+       status       | count | blocking
+  ------------------+-------+---------
+  AWAITING_MERCHANT |  1000 |        0
+  CLOSED            |  7600 |        0
+  OPEN              |   600 |       67
+  RESOLVED          |   800 |        0
+
+EXPLAIN (ANALYZE, BUFFERS), each shape run twice (warm) — the second run is quoted
+--------------------------------------------------------------------------------
+
+1. The desk OPEN page (the queue): the repository's join, blocking DESC, status_since ASC,
+   id ASC, LIMIT 20 OFFSET 0
+
+   Limit → Incremental Sort (quicksort, 30 kB) → Nested Loop (org_pkey) → Nested Loop
+   (app_user_pkey) → Index Scan using ix_support_ticket_desk (rows=21 read for 20 returned)
+   Execution Time: 0.259 ms   (first run 0.231 ms)
+
+   VERDICT: served by the index exactly as designed — the index's (status, blocking DESC,
+   status_since) order IS the queue's order, so the scan stops after 21 rows and the sort
+   is incremental over one group. This is the read an operator waits on.
+
+2. The desk CLOSED tab (a ledger): last_activity_at DESC, id DESC, LIMIT 20
+
+   Limit → Sort (top-N heapsort, 29 kB) → Hash Join (app_user) → Hash Join (org) →
+   Seq Scan on support_ticket (rows=7600)
+   Execution Time: 3.688 ms   (first run 4.192 ms)
+
+   VERDICT: the planner declines ix_support_ticket_desk for a status that is 76 % of the
+   table and sorts the whole partition — the story predicted this ("expect the planner to
+   decline the index for the CLOSED tab") and it is the right call: the table is 10,000 rows
+   in cache, a Seq Scan + top-N heap is 4 ms, and an index on (status, last_activity_at)
+   would buy a ledger nobody pages through in anger. No third index.
+
+3. Counts (the tab badges and the overview tile), one predicate each
+
+   status = 'OPEN'                Bitmap Index Scan ix_support_ticket_desk   0.126 ms
+   status = 'OPEN' AND blocking   Bitmap Index Scan ix_support_ticket_desk   0.041 ms
+   status = 'CLOSED'              Seq Scan (rows=7600)                       1.095 ms
+
+   VERDICT: the desk counts are cheap; the CLOSED count is the same Seq Scan as its tab,
+   which is the point — the tile and the tab are one predicate (TicketDeskPredicates).
+
+4. The desk OPEN page narrowed to one tenant (?org_id=)
+
+   Limit → Sort (quicksort, 25 kB) → Bitmap Heap Scan on support_ticket (rows=3)
+   Execution Time: 0.050 ms
+
+   VERDICT: the org index takes over the moment a tenant is named; 3 open tickets/org.
+
+5. The merchant's ledger (org_id = ?, last_activity_at DESC, id DESC, LIMIT 20)
+
+   Limit → Index Scan Backward using ix_support_ticket_org_activity (rows=20 of 50)
+   Execution Time: < 0.1 ms
+
+6. The cap check (org_id = ? AND status <> 'CLOSED')
+
+   Aggregate → Index Scan / Bitmap on ix_support_ticket_org_activity, 50 rows filtered to 12
+   Execution Time: < 0.1 ms
+
+7. List extras for a page of 20 (attachment counts GROUP BY ticket_id; last MESSAGE per
+   ticket via DISTINCT ON over the 20 ids)
+
+   Both: Nested Loop over the 20 ids → Index Scan on the (ticket_id, …) indexes
+   Execution Time: < 0.5 ms each
+
+Nothing here was run against perfdb or the dev inventorydb; the scratch database was dropped
+after the capture. The 10,000-row corpus is the size class the epic expects for the first
+year (a few hundred tenants, a few tickets a week each); the OPEN queue's cost is bounded by
+the page, not the table, which is what an operator's inbox needs to stay true at any size.

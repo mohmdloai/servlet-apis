@@ -73,6 +73,22 @@ public final class AuthzHelper {
     return ctx;
   }
 
+  /**
+   * The support desk ({@code stories/support_tickets.md}): caller holds {@link SystemRole#ADMIN} or
+   * {@link SystemRole#SUPPORT}. <strong>The one place the SUPPORT tier writes.</strong> A ticket
+   * reply, resolve or close changes no tenant data — it is the desk's own record — so it is not the
+   * write {@link #requireAdmin} guards, and a read-only tier with no job would be a tier with no
+   * point. Named for the desk rather than reusing {@link #requirePlatformRead} so the next reader
+   * does not have to wonder why a "read" gate admits a POST.
+   */
+  public static SecurityContext requireSupportDesk(HttpServletRequest req) {
+    SecurityContext ctx = requireAuth(req);
+    if (!ctx.hasSystemRole(SystemRole.ADMIN) && !ctx.hasSystemRole(SystemRole.SUPPORT)) {
+      throw new AuthorizationException("Requires a platform role (ADMIN or SUPPORT)");
+    }
+    return ctx;
+  }
+
   public static SecurityContext requireAdminOrService(HttpServletRequest req) {
     SecurityContext ctx = requireAuth(req);
     if (!ctx.isSystemAdmin() && !ctx.isService()) {
