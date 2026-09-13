@@ -154,6 +154,22 @@ public final class UserRepositoryImpl implements UserRepository {
   }
 
   @Override
+  public Set<UUID> activeDeskUserIds() {
+    return dsl.selectDistinct(USER_SYSTEM_ROLE.USER_ID)
+        .from(USER_SYSTEM_ROLE)
+        .join(APP_USER)
+        .on(APP_USER.ID.eq(USER_SYSTEM_ROLE.USER_ID))
+        .where(
+            USER_SYSTEM_ROLE.ROLE.in(
+                com.loai.inventory.repository.generated.enums.SystemRole.lookupLiteral(
+                    SystemRole.ADMIN.name()),
+                com.loai.inventory.repository.generated.enums.SystemRole.lookupLiteral(
+                    SystemRole.SUPPORT.name())))
+        .and(APP_USER.ACTIVE.isTrue())
+        .fetchSet(USER_SYSTEM_ROLE.USER_ID);
+  }
+
+  @Override
   public Set<UUID> findActiveUserIdsByOrgAndRoles(UUID orgId, Set<OrgRole> roles) {
     if (roles == null || roles.isEmpty()) {
       return Set.of();

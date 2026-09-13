@@ -128,6 +128,38 @@ public final class ObjectStorage implements AutoCloseable {
     return orgId + "/payment-proof/";
   }
 
+  /**
+   * A tenant-scoped support-ticket screenshot key: {@code {orgId}/support/{uuid}-{name}} ({@code
+   * stories/support_tickets.md}). Org-scoped rather than ticket-scoped because the first message's
+   * screenshots are uploaded before the ticket exists; the guard on both ends is {@link
+   * #supportKeyPrefix}. The desk uploads under the <em>ticket's</em> org, so an operator's
+   * screenshot lives with the merchant's.
+   */
+  public String newSupportAttachmentKey(UUID orgId, String filename) {
+    return orgId + "/support/" + UUID.randomUUID() + "-" + sanitize(filename);
+  }
+
+  /**
+   * The key prefix every support attachment of this org must start with — checked on write AND
+   * read.
+   */
+  public static String supportKeyPrefix(UUID orgId) {
+    return orgId + "/support/";
+  }
+
+  /**
+   * The content types a support attachment may carry — the presigner's first allowlist. A ticket
+   * screenshot is the first upload a non-staff actor (the desk) and a staff actor share a prefix
+   * on, and "any bytes the client names" is not a contract to sign for either.
+   */
+  public static final java.util.Set<String> SUPPORT_IMAGE_TYPES =
+      java.util.Set.of("image/png", "image/jpeg", "image/webp");
+
+  public static boolean isSupportImageType(String contentType) {
+    return contentType != null
+        && SUPPORT_IMAGE_TYPES.contains(contentType.trim().toLowerCase(java.util.Locale.ROOT));
+  }
+
   /** A presigned PUT URL the client uploads bytes to directly. */
   public String presignPut(String objectKey, String contentType) {
     PutObjectRequest put =

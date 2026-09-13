@@ -3,6 +3,7 @@ package com.loai.inventory.api.dto;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.loai.inventory.domain.model.PlatformQueueCounts;
 import com.loai.inventory.domain.model.PlatformTenantCounts;
+import com.loai.inventory.domain.model.TicketDeskCounts;
 import com.loai.inventory.service.platform.PlatformOverviewService.Build;
 import com.loai.inventory.service.platform.PlatformOverviewService.Jobs;
 import com.loai.inventory.service.platform.PlatformOverviewService.Overview;
@@ -28,6 +29,7 @@ public record AdminOverviewResponse(
     Instant asOf,
     Tenants tenants,
     Queues queues,
+    Support support,
     JobsBlock jobs,
     BuildBlock build,
     List<String> degraded) {
@@ -51,6 +53,9 @@ public record AdminOverviewResponse(
       long orphanTransactions,
       long expiredPendingOrders) {}
 
+  /** The support desk: tickets waiting on the desk, and how many of those say "I can't sell". */
+  public record Support(long open, long blockingOpen) {}
+
   public record JobsBlock(boolean enabled, long servers, List<RecurringJob> recurring) {}
 
   /**
@@ -72,9 +77,14 @@ public record AdminOverviewResponse(
         overview.asOf(),
         tenants(overview.tenants()),
         queues(overview.queues()),
+        support(overview.support()),
         jobs(overview.jobs()),
         build(overview.build()),
         overview.degraded() == null || overview.degraded().isEmpty() ? null : overview.degraded());
+  }
+
+  private static Support support(TicketDeskCounts c) {
+    return c == null ? null : new Support(c.open(), c.blockingOpen());
   }
 
   private static Tenants tenants(PlatformTenantCounts t) {

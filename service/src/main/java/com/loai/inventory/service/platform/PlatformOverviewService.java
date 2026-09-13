@@ -3,6 +3,7 @@ package com.loai.inventory.service.platform;
 import com.loai.inventory.domain.model.PlatformQueueCounts;
 import com.loai.inventory.domain.model.PlatformTenantCounts;
 import com.loai.inventory.domain.model.RecurringJobStats;
+import com.loai.inventory.domain.model.TicketDeskCounts;
 import com.loai.inventory.domain.repository.PlatformStatsRepository;
 import com.loai.inventory.domain.repository.PlatformStatsRepositoryFactory;
 import java.time.Clock;
@@ -95,6 +96,7 @@ public class PlatformOverviewService {
       Instant asOf,
       PlatformTenantCounts tenants,
       PlatformQueueCounts queues,
+      TicketDeskCounts support,
       Jobs jobs,
       Build build,
       List<String> degraded) {}
@@ -153,10 +155,13 @@ public class PlatformOverviewService {
 
     PlatformTenantCounts tenants = section("tenants", degraded, repo::tenantCounts);
     PlatformQueueCounts queues = section("queues", degraded, repo::queueCounts);
+    // The support desk's counts (stories/support_tickets.md) — the same predicate the inbox tabs
+    // read, so the tile and the tab cannot disagree; degradable like every other section.
+    TicketDeskCounts support = section("support", degraded, repo::ticketCounts);
     Jobs jobs = section("jobs", degraded, () -> jobs(repo, asOf));
     Build build = section("build", degraded, () -> new Build(buildCommit, startedAt));
 
-    return new Overview(asOf, tenants, queues, jobs, build, List.copyOf(degraded));
+    return new Overview(asOf, tenants, queues, support, jobs, build, List.copyOf(degraded));
   }
 
   /**

@@ -106,6 +106,13 @@ public interface UserRepository {
    */
   Set<UUID> activeAdminIdsForUpdate();
 
+  /**
+   * Every active user holding a platform role (ADMIN or SUPPORT) — the support desk's fan-out
+   * ({@code stories/support_tickets.md}): who is told when a merchant opens or updates a ticket. No
+   * lock: a notification recipient set is a snapshot, not a guard.
+   */
+  Set<UUID> activeDeskUserIds();
+
   // ── Register verify-to-activate (story 88) ──
 
   /**

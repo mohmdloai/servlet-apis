@@ -297,6 +297,79 @@ final class NotificationTemplates {
                 available + " left of " + name + " (" + sku + ") — reorder point " + point + ".",
                 "View stock");
       }
+      case SUPPORT_TICKET_OPENED -> {
+        // Desk-facing (in-app + push): the tenant and the subject are the whole message.
+        String number = str(payload, "ticket_number");
+        String subject = str(payload, "subject");
+        String orgName = str(payload, "org_name");
+        boolean blocking = "true".equals(str(payload, "blocking"));
+        yield ar
+            ? new Rendered(
+                (blocking ? "لا يستطيع البيع — " : "")
+                    + "تذكرة جديدة #"
+                    + number
+                    + " من "
+                    + orgName,
+                subject + " — افتح التذكرة للرد.",
+                "افتح التذكرة")
+            : new Rendered(
+                (blocking ? "Can't sell — " : "") + "New ticket #" + number + " from " + orgName,
+                subject + " — open the ticket to reply.",
+                "Open ticket");
+      }
+      case SUPPORT_TICKET_UPDATED -> {
+        String number = str(payload, "ticket_number");
+        String subject = str(payload, "subject");
+        String orgName = str(payload, "org_name");
+        String event = str(payload, "event");
+        String verbEn =
+            switch (event) {
+              case "reopened" -> "reopened";
+              case "closed" -> "closed";
+              default -> "replied on";
+            };
+        String verbAr =
+            switch (event) {
+              case "reopened" -> "أعاد فتح";
+              case "closed" -> "أغلق";
+              default -> "ردّ على";
+            };
+        yield ar
+            ? new Rendered(
+                orgName + " " + verbAr + " التذكرة #" + number,
+                subject + " — افتح التذكرة للرد.",
+                "افتح التذكرة")
+            : new Rendered(
+                orgName + " " + verbEn + " #" + number,
+                subject + " — open the ticket to reply.",
+                "Open ticket");
+      }
+      case SUPPORT_TICKET_REPLIED -> {
+        String number = str(payload, "ticket_number");
+        String subject = str(payload, "subject");
+        yield ar
+            ? new Rendered(
+                "ردّ الدعم على تذكرتك #" + number,
+                subject + " — اقرأ الرد في التطبيق.",
+                "عرض التذكرة")
+            : new Rendered(
+                "Support replied on #" + number,
+                subject + " — read the reply in the app.",
+                "View ticket");
+      }
+      case SUPPORT_TICKET_RESOLVED -> {
+        String number = str(payload, "ticket_number");
+        String subject = str(payload, "subject");
+        yield ar
+            ? new Rendered(
+                "تم حل تذكرتك #" + number,
+                subject + " — إن لم تُحل، ردّ لإعادة فتحها.",
+                "عرض التذكرة")
+            : new Rendered(
+                "Ticket #" + number + " resolved",
+                subject + " — not fixed? Reply to reopen.",
+                "View ticket");
+      }
     };
   }
 

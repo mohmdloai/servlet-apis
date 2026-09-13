@@ -7,6 +7,22 @@
 > org app) and `157_st_support_desk.md` (the console). Merge this first; against the old API both
 > frontends 404 on their loaders and show the designed unavailable state, not a blank page.
 >
+> **Built 2026-09-13** on `187_feat/support-tickets`: V97 + `SupportTicket` (the transition table
+> as methods, every cell unit-tested) + the org-scoped repository + `PlatformTicketRepository` (the
+> fifth enumerated sibling) + `TicketDeskPredicates` shared with `PlatformStatsRepository.ticketCounts()`
+> + `SupportTicketService` / `SupportDeskService` + `SupportTicketHandler` (`support-tickets`) /
+> `TicketDeskAdminHandler` (`tickets`) + `AuthzHelper.requireSupportDesk` + `activeDeskUserIds()` +
+> four `NotificationType`s with ar/en templates + the presigner's first content-type allowlist +
+> the overview's `support` section. Green: `SupportTicketMachineTest` 11, `SupportTicketHandlerTest`
+> 8, `SupportTicketIT` 8, `NotificationTemplatesTest` 34, `WhatsAppTemplatesTest` 19, the service
+> suite 296, and the neighbours `PlatformOverviewIT` 14 · `PlatformQueuesIT` 25 ·
+> `PlatformTenantStatesIT` 10 · `PlatformOrgTimelineIT` 25 · `NotificationDeliveryIT` 6 ·
+> `LowStockNotificationIT` 11. Measurement in `tools/seed/results/support_desk_187.txt` (scratch
+> DB, 10,000 tickets): the OPEN queue is an index scan at 0.26 ms; the CLOSED tab is the Seq Scan
+> the story predicted (3.7 ms) — no third index. One deviation from the spec below: the two
+> conflict kinds ride `InvalidTicketTransitionException` (`TICKET_CLOSED` / `TICKET_TRANSITION`)
+> and `TicketCapException` (`TICKET_CAP`), both mapped once in `ApiErrors`.
+>
 > **Posture.** This is the first surface where a tenant *writes to the platform*. Everything it
 > writes is org-scoped and role-gated on the way in; everything the desk reads across tenants
 > goes through one whitelisted sibling repository, the way the console epic enumerated the other
