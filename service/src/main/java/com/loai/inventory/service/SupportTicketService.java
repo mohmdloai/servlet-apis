@@ -273,6 +273,42 @@ public class SupportTicketService {
   }
 
   /**
+   * The auto-close sweep ({@code stories/support_ticket_reach.md}): every {@code RESOLVED} ticket
+   * whose {@code resolved_at} is more than {@code days} ago becomes {@code CLOSED} with {@code
+   * closed_reason = AUTO}, {@code closed_by} null and a {@code STATUS} row with no author. One
+   * bounded read of candidates, then <b>one transaction per ticket</b> under {@code FOR UPDATE SKIP
+   * LOCKED}, re-checking the predicate — a ticket the merchant reopened in between is left alone.
+   * <b>No notification</b>: a merchant who did not answer a resolution in seven days is not waiting
+   * for news of it. Returns how many closed. {@code now} comes from {@link #ticketClock()}.
+   */
+  public int autoClose(OffsetDateTime now, int days, int batch) {
+    OffsetDateTime cutoff = now.minusDays(days);
+    List<UUID> candidates =
+        ticketRepoFactory.create(rootDsl).findAutoCloseCandidates(cutoff, batch);
+    int closed = 0;
+    for (UUID id : candidates) {
+      boolean done =
+          rootDsl.transactionResult(
+              cfg -> {
+                SupportTicketRepository repo = ticketRepoFactory.create(DSL.using(cfg));
+                Optional<SupportTicket> locked = repo.lockAutoCloseCandidate(id, cutoff);
+                if (locked.isEmpty()) {
+                  return false;
+                }
+                SupportTicket ticket = locked.get();
+                TicketStatus entered = ticket.close(null, TicketCloseReason.AUTO, now);
+                recordTransitionInTx(repo, ticket, TicketSide.SUPPORT, null, entered, now);
+                repo.update(ticket);
+                return true;
+              });
+      if (done) {
+        closed++;
+      }
+    }
+    return closed;
+  }
+
+  /**
    * A presigned PUT under the org's support prefix; images only — the presigner's first allowlist.
    */
   public Presign presignAttachment(UUID orgId, String filename, String contentType) {

@@ -11,6 +11,30 @@
 > the kind of gap the console epic learned to promote — *a place the system can see a problem and
 > not act on it.*
 
+
+> **Built 2026-09-13** on `188_feat/support-ticket-reach` (off `master` d621fb0), no migration:
+> `NotificationAdminHandler` at `/api/admin/notifications` (`AdminServlet` entry `notifications`;
+> `PlatformNotificationResponse` = the org row + `org {id,name}`) over
+> `NotificationService.getUserFeed / countUserFeed / markOwnRead / markOwnDismissed` and
+> `NotificationRepository.findUserInAppFeed / countUserInAppFeed / markUserInAppRead /
+> markUserInAppDismissed` — the org feed's queries with the org predicate dropped (`orgScope`),
+> so the two planes cannot drift; `SupportTicketAutoCloseJob` (`JOB_SUPPORT_TICKET_AUTO_CLOSE`,
+> `SUPPORT_AUTO_CLOSE_INTERVAL` / `_DAYS` / `_BATCH_LIMIT`, the activator branch, `scheduleRecurrently`)
+> over `SupportTicketService.autoClose(now, days, batch)` with
+> `SupportTicketRepository.findAutoCloseCandidates` + `lockAutoCloseCandidate` (`FOR UPDATE SKIP
+> LOCKED`, one txn per ticket, `ticketClock()` for the stamp); `AuthzHelper.requireOrgAccessThroughSuspension`
+> (the shared private body with `enforceSuspension`; `SupportTicketHandler` its only caller) and
+> `OrgSuspendedException` (`kind = ORG_SUSPENDED`, mapped in `ApiErrors.body`). Tests:
+> `OrgSuspensionEnforcementTest` (+5: the kind, the outsider's absence of it, the variant's admit /
+> membership / rank / read-only), `SupportTicketHandlerTest` (+2: the door at the wire, the feed's
+> gates + shapes), `AppConfigJobCronsTest`, `NotificationAdminIT`, `SupportTicketAutoCloseIT`,
+> `SuspendedDoorIT` (over a shared `SupportReachItBase`) — 34/34 with `SupportTicketIT`; the
+> module batteries green; `spotless:apply`; `CLAUDE.md` gained the paragraph. Two notes: the
+> "job id in the overview's health" criterion is asserted at its source (`resolveJobCrons`, now
+> package-private) rather than through JobRunr's tables, which hold no row for a job that never
+> ran; the suspended-door IT runs at the service seam (no HTTP layer in the ITs), so the 403 +
+> kind is covered by the gate's unit test and the handler test's mocked request.
+
 ---
 
 ## Goal

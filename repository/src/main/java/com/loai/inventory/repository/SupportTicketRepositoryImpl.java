@@ -17,6 +17,7 @@ import com.loai.inventory.domain.model.TicketSide;
 import com.loai.inventory.domain.model.TicketStatus;
 import com.loai.inventory.domain.repository.SupportTicketRepository;
 import com.loai.inventory.repository.generated.tables.records.SupportTicketRecord;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -141,6 +142,32 @@ public final class SupportTicketRepositoryImpl implements SupportTicketRepositor
     return dsl.fetchCount(
         SUPPORT_TICKET,
         SUPPORT_TICKET.ORG_ID.eq(orgId).and(SUPPORT_TICKET.STATUS.ne(TicketStatus.CLOSED.name())));
+  }
+
+  @Override
+  public List<UUID> findAutoCloseCandidates(OffsetDateTime cutoff, int limit) {
+    return dsl.select(SUPPORT_TICKET.ID)
+        .from(SUPPORT_TICKET)
+        .where(autoCloseDue(cutoff))
+        .orderBy(SUPPORT_TICKET.RESOLVED_AT.asc(), SUPPORT_TICKET.ID.asc())
+        .limit(limit)
+        .fetch(SUPPORT_TICKET.ID);
+  }
+
+  @Override
+  public Optional<SupportTicket> lockAutoCloseCandidate(UUID id, OffsetDateTime cutoff) {
+    return dsl.selectFrom(SUPPORT_TICKET)
+        .where(SUPPORT_TICKET.ID.eq(id).and(autoCloseDue(cutoff)))
+        .forUpdate()
+        .skipLocked()
+        .fetchOptional(SupportTicketRepositoryImpl::toTicket);
+  }
+
+  private static Condition autoCloseDue(OffsetDateTime cutoff) {
+    return SUPPORT_TICKET
+        .STATUS
+        .eq(TicketStatus.RESOLVED.name())
+        .and(SUPPORT_TICKET.RESOLVED_AT.lt(cutoff));
   }
 
   @Override

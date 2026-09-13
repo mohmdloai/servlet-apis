@@ -10,12 +10,16 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.loai.inventory.api.servlet.AuthzHelper;
+import com.loai.inventory.api.servlet.handler.NotificationAdminHandler;
 import com.loai.inventory.api.servlet.handler.SupportTicketHandler;
 import com.loai.inventory.api.servlet.handler.TicketDeskAdminHandler;
 import com.loai.inventory.common.exception.InvalidTicketTransitionException;
 import com.loai.inventory.common.exception.TicketCapException;
 import com.loai.inventory.domain.model.ActorType;
 import com.loai.inventory.domain.model.DeskTicketRow;
+import com.loai.inventory.domain.model.InAppFeedItem;
+import com.loai.inventory.domain.model.Notification;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.OrgStatus;
 import com.loai.inventory.domain.model.PlatformQueueOrg;
@@ -25,6 +29,7 @@ import com.loai.inventory.domain.model.SystemRole;
 import com.loai.inventory.domain.model.TicketCategory;
 import com.loai.inventory.domain.model.TicketDeskCounts;
 import com.loai.inventory.domain.model.TicketStatus;
+import com.loai.inventory.service.NotificationService;
 import com.loai.inventory.service.SupportTicketService;
 import com.loai.inventory.service.SupportTicketService.Person;
 import com.loai.inventory.service.SupportTicketService.TicketView;
@@ -45,6 +50,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -315,6 +321,110 @@ class SupportTicketHandlerTest {
   }
 
   // plumbing
+
+  // The suspended door + the operator's feed (stories/support_ticket_reach.md)
+
+  @AfterEach
+  void resetGate() {
+    AuthzHelper.configureOrgStatusGate(null);
+  }
+
+  @Test
+  void door_aSuspendedOrgsStaffStillReachesSupport_theServiceNeverHearsOfTheStatus()
+      throws IOException {
+    AuthzHelper.configureOrgStatusGate(orgId -> false); // every org suspended
+    SupportTicketService service = Mockito.mock(SupportTicketService.class);
+    SecurityContext staff = ctx(ORG, OrgRole.STAFF);
+    when(service.list(eq(ORG), eq(staff.actorId()), eq(false), eq(null), eq(0), eq(20)))
+        .thenReturn(new SupportTicketService.TicketPage(List.of(), 0));
+    Resp resp = new Resp();
+    orgHandler(service).handle("GET", reqWith(staff, null, Map.of()), resp.mock, ORG, "");
+    assertEquals(200, resp.status, resp.body());
+
+    when(service.open(eq(ORG), eq(staff.actorId()), any())).thenReturn(aView(staff.actorId()));
+    Resp opened = new Resp();
+    orgHandler(service)
+        .handle(
+            "POST",
+            reqWith(
+                staff,
+                "{\"category\":\"account\",\"subject\":\"Suspended\",\"body\":\"why?\"}",
+                Map.of()),
+            opened.mock,
+            ORG,
+            "");
+    assertEquals(201, opened.status, opened.body());
+
+    // Membership still gates the door: an outsider is the same generic 403, no kind.
+    Resp outsider = new Resp();
+    orgHandler(service)
+        .handle(
+            "GET",
+            reqWith(ctx(UUID.randomUUID(), OrgRole.OWNER), null, Map.of()),
+            outsider.mock,
+            ORG,
+            "");
+    assertEquals(403, outsider.status);
+    assertFalse(outsider.body().contains("\"kind\""), outsider.body());
+  }
+
+  @Test
+  void feed_supportReadsAndMarksOwnRows_withTheTenantOnEachRow_aTenantOwnerIs403()
+      throws IOException {
+    NotificationService service = Mockito.mock(NotificationService.class);
+    SecurityContext support = platform(SystemRole.SUPPORT);
+    Notification n = new Notification();
+    n.setId(UUID.randomUUID());
+    n.setOrgId(ORG);
+    n.setType("SUPPORT_TICKET_OPENED");
+    n.setTitle("#1042 Printer stops");
+    n.setSourceType("support_ticket");
+    n.setSourceId(TICKET);
+    n.setCreatedAt(NOW);
+    when(service.getUserFeed(eq(support.actorId()), eq(true), eq(0), eq(10)))
+        .thenReturn(
+            List.of(
+                new NotificationService.UserFeedItem(
+                    new InAppFeedItem(n, null, null, "/admin/tickets/" + TICKET),
+                    ORG,
+                    "Mart Cairo")));
+    when(service.countUserFeed(eq(support.actorId()), eq(true))).thenReturn(1L);
+    NotificationAdminHandler handler =
+        new NotificationAdminHandler(
+            service, com.loai.inventory.api.config.ObjectMapperProvider.build());
+
+    Resp resp = new Resp();
+    handler.handle("GET", reqWith(support, null, Map.of("unread", "true")), resp.mock, "");
+    assertEquals(200, resp.status, resp.body());
+    String body = resp.body();
+    assertTrue(body.contains("\"total\":1"), body);
+    assertTrue(body.contains("\"org\":{\"id\":\"" + ORG + "\",\"name\":\"Mart Cairo\"}"), body);
+    assertTrue(body.contains("\"source_id\":\"" + TICKET + "\""), body);
+
+    UUID row = n.getId();
+    Resp read = new Resp();
+    handler.handle("POST", reqWith(support, null, Map.of()), read.mock, "/" + row + "/read");
+    assertEquals(204, read.status);
+    verify(service).markOwnRead(support.actorId(), row);
+    Resp dismissed = new Resp();
+    handler.handle(
+        "POST", reqWith(support, null, Map.of()), dismissed.mock, "/" + row + "/dismiss");
+    assertEquals(204, dismissed.status);
+    verify(service).markOwnDismissed(support.actorId(), row);
+
+    // A tenant OWNER has no platform role: 403 on the read and on the write alike.
+    Resp owner = new Resp();
+    handler.handle("GET", reqWith(ctx(ORG, OrgRole.OWNER), null, Map.of()), owner.mock, "");
+    assertEquals(403, owner.status);
+    Resp ownerWrite = new Resp();
+    handler.handle(
+        "POST",
+        reqWith(ctx(ORG, OrgRole.OWNER), null, Map.of()),
+        ownerWrite.mock,
+        "/" + row + "/read");
+    assertEquals(403, ownerWrite.status);
+    verify(service, Mockito.times(1)).markOwnRead(any(), eq(row)); // SUPPORT's call only
+  }
 
   private static SupportTicketHandler orgHandler(SupportTicketService service) {
     return new SupportTicketHandler(
