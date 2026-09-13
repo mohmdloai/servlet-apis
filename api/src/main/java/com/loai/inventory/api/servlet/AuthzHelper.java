@@ -3,6 +3,7 @@ package com.loai.inventory.api.servlet;
 import com.loai.inventory.api.filter.JwtAuthFilter;
 import com.loai.inventory.common.exception.AuthenticationException;
 import com.loai.inventory.common.exception.AuthorizationException;
+import com.loai.inventory.common.exception.OrgSuspendedException;
 import com.loai.inventory.domain.model.OrgRole;
 import com.loai.inventory.domain.model.SecurityContext;
 import com.loai.inventory.domain.model.SystemRole;
@@ -107,10 +108,28 @@ public final class AuthzHelper {
 
   /**
    * Verify the caller has at least {@code minRole} in {@code orgId}, or is a system ADMIN. Throws
-   * 403 otherwise.
+   * 403 otherwise — {@link OrgSuspendedException} (kind {@code ORG_SUSPENDED}) for a member of a
+   * suspended org, so the org app can lead them to the one door that stays open.
    */
   public static SecurityContext requireOrgAccess(
       HttpServletRequest req, UUID orgId, OrgRole minRole) {
+    return requireOrgAccess(req, orgId, minRole, /* enforceSuspension= */ true);
+  }
+
+  /**
+   * {@link #requireOrgAccess} with the {@link OrgStatusGate} step skipped — membership, read-only
+   * impersonation and rank all still apply ({@code stories/support_ticket_reach.md}). Support is
+   * the one resource a suspended tenant must still reach, so this has <b>exactly one caller</b>:
+   * {@code SupportTicketHandler}. A {@code PENDING} org's members are unverified owners who cannot
+   * log in; the variant admits them too, harmlessly — nothing reaches it.
+   */
+  public static SecurityContext requireOrgAccessThroughSuspension(
+      HttpServletRequest req, UUID orgId, OrgRole minRole) {
+    return requireOrgAccess(req, orgId, minRole, /* enforceSuspension= */ false);
+  }
+
+  private static SecurityContext requireOrgAccess(
+      HttpServletRequest req, UUID orgId, OrgRole minRole, boolean enforceSuspension) {
     SecurityContext ctx = requireAuth(req);
     // A read-only (SUPPORT view-as) overlay may read but never write, whatever the target could do.
     if (ctx.impersonationReadOnly() && RANK.get(minRole) > RANK.get(OrgRole.VIEWER)) {
@@ -122,15 +141,16 @@ public final class AuthzHelper {
 
     // Membership is checked before suspension so a non-member gets the same generic "No access"
     // whether or not the org is suspended - otherwise an outsider could probe which orgs are
-    // suspended by comparing the two 403 messages.
+    // suspended by comparing the two 403s (the kind below is only ever thrown past this line).
     Set<OrgRole> roles = ctx.orgRoles() == null ? null : ctx.orgRoles().get(orgId);
     if (roles == null || roles.isEmpty()) {
       throw new AuthorizationException("No access to org " + orgId);
     }
 
-    // A suspended org then rejects all its members, whatever their role.
-    if (!orgStatusGate.isActive(orgId)) {
-      throw new AuthorizationException("Org suspended");
+    // A suspended org then rejects all its members, whatever their role — except through the
+    // support door.
+    if (enforceSuspension && !orgStatusGate.isActive(orgId)) {
+      throw new OrgSuspendedException();
     }
 
     int needed = RANK.get(minRole);

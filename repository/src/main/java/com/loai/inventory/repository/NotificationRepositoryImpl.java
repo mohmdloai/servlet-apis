@@ -414,6 +414,29 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .execute();
   }
 
+  // The user's feed across orgs (the platform plane — stories/support_ticket_reach.md)
+
+  @Override
+  public List<InAppFeedItem> findUserInAppFeed(
+      UUID userId, boolean unreadOnly, int offset, int limit) {
+    return findInAppFeed(null, userId, unreadOnly, offset, limit);
+  }
+
+  @Override
+  public long countUserInAppFeed(UUID userId, boolean unreadOnly) {
+    return countInAppFeed(null, userId, unreadOnly);
+  }
+
+  @Override
+  public int markUserInAppRead(UUID userId, UUID notificationId, OffsetDateTime now) {
+    return markInAppRead(null, userId, notificationId, now);
+  }
+
+  @Override
+  public int markUserInAppDismissed(UUID userId, UUID notificationId, OffsetDateTime now) {
+    return markInAppDismissed(null, userId, notificationId, now);
+  }
+
   // Customer feed (the portal plane — slice P5)
 
   @Override
@@ -490,15 +513,18 @@ public final class NotificationRepositoryImpl implements NotificationRepository 
         .on(NOTIFICATION.ID.eq(NOTIFICATION_DELIVERY.NOTIFICATION_ID))
         .where(NOTIFICATION_DELIVERY.CHANNEL.eq(NotificationChannel.IN_APP.dbValue()))
         .and(NOTIFICATION.ID.eq(notificationId))
-        .and(NOTIFICATION.ORG_ID.eq(orgId))
+        .and(orgScope(orgId))
         .and(NOTIFICATION.RECIPIENT_USER_ID.eq(userId));
+  }
+
+  /** {@code org_id = ?}, or no condition at all: a null org is the cross-org user feed. */
+  private static Condition orgScope(UUID orgId) {
+    return orgId == null ? DSL.noCondition() : NOTIFICATION.ORG_ID.eq(orgId);
   }
 
   private Condition feedCondition(UUID orgId, UUID userId, boolean unreadOnly) {
     Condition c =
-        NOTIFICATION
-            .ORG_ID
-            .eq(orgId)
+        orgScope(orgId)
             .and(NOTIFICATION.RECIPIENT_TYPE.eq(RecipientType.USER.name()))
             .and(NOTIFICATION.RECIPIENT_USER_ID.eq(userId))
             .and(NOTIFICATION_DELIVERY_IN_APP.DISMISSED_AT.isNull());

@@ -3,6 +3,7 @@ package com.loai.inventory.api.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.job.NotificationDeliverySweeperJob;
 import com.loai.inventory.api.job.OrderTtlSweeperJob;
+import com.loai.inventory.api.job.SupportTicketAutoCloseJob;
 import com.loai.inventory.api.job.UnverifiedAccountPurgeJob;
 import com.loai.inventory.api.servlet.AuthzHelper;
 import com.loai.inventory.common.DataSourceFactory;
@@ -221,6 +222,7 @@ public class AppConfig {
 
   public static final String JOB_NOTIFICATION_DELIVERY_SWEEPER = "notification-delivery-sweeper";
   public static final String JOB_UNVERIFIED_ACCOUNT_PURGE = "unverified-account-purge";
+  public static final String JOB_SUPPORT_TICKET_AUTO_CLOSE = "support-ticket-auto-close";
 
   // Infrastructure
   public final HikariDataSource dataSource;
@@ -373,6 +375,7 @@ public class AppConfig {
   public final OrderTtlSweeperJob orderTtlSweeperJob;
   public final NotificationDeliverySweeperJob notificationDeliverySweeperJob;
   public final UnverifiedAccountPurgeJob unverifiedAccountPurgeJob;
+  public final SupportTicketAutoCloseJob supportTicketAutoCloseJob;
   private final boolean jobRunrStarted;
 
   public AppConfig() {
@@ -920,6 +923,15 @@ public class AppConfig {
         new UnverifiedAccountPurgeJob(
             accountService, Duration.ofDays(purgeGraceDays), purgeBatchLimit);
 
+    // Support-ticket auto-close (stories/support_ticket_reach.md): a RESOLVED ticket the merchant
+    // never answered closes after the window, batch-bounded, one transaction per ticket; nobody is
+    // told — decided in the story.
+    int autoCloseDays = (int) parseLong(System.getenv("SUPPORT_AUTO_CLOSE_DAYS"), 7L);
+    int autoCloseBatchLimit =
+        (int) parseLong(System.getenv("SUPPORT_AUTO_CLOSE_BATCH_LIMIT"), 100L);
+    this.supportTicketAutoCloseJob =
+        new SupportTicketAutoCloseJob(supportTicketService, autoCloseDays, autoCloseBatchLimit);
+
     // The background scheduler is gated so tests (and any deployment that wants to drive expiry
     // only through POST /api/admin/sweep) can keep expiry deterministic. Default: enabled.
     boolean enableSweeper =
@@ -975,7 +987,7 @@ public class AppConfig {
    * The recurring jobs this app registers, id → cron, read from the same env vars (with the same
    * defaults) that {@link #startSweeperScheduler} schedules them with.
    */
-  private static Map<String, String> resolveJobCrons() {
+  static Map<String, String> resolveJobCrons() { // package-private for the test
     Map<String, String> crons = new LinkedHashMap<>();
     crons.put(JOB_ORDER_TTL_SWEEPER, getenvOrDefault("ORDER_SWEEPER_INTERVAL", "*/30 * * * * *"));
     crons.put(
@@ -984,6 +996,10 @@ public class AppConfig {
     // Daily is plenty — the login gate already neutralizes unverified accounts; this only GCs rows.
     crons.put(
         JOB_UNVERIFIED_ACCOUNT_PURGE, getenvOrDefault("UNVERIFIED_PURGE_INTERVAL", "0 0 4 * * *"));
+    // Hourly is plenty against a seven-day window; the minute offset keeps it off the others.
+    crons.put(
+        JOB_SUPPORT_TICKET_AUTO_CLOSE,
+        getenvOrDefault("SUPPORT_AUTO_CLOSE_INTERVAL", "0 15 * * * *"));
     return crons;
   }
 
@@ -1034,6 +1050,9 @@ public class AppConfig {
             if (type.isInstance(unverifiedAccountPurgeJob)) {
               return type.cast(unverifiedAccountPurgeJob);
             }
+            if (type.isInstance(supportTicketAutoCloseJob)) {
+              return type.cast(supportTicketAutoCloseJob);
+            }
             throw new IllegalArgumentException("No JobRunr bean for " + type.getName());
           }
         };
@@ -1060,6 +1079,11 @@ public class AppConfig {
     scheduler.<UnverifiedAccountPurgeJob>scheduleRecurrently(
         JOB_UNVERIFIED_ACCOUNT_PURGE, purgeCron, UnverifiedAccountPurgeJob::run);
     log.info("Unverified-account purge scheduled (cron='{}')", purgeCron);
+
+    String autoCloseCron = jobCrons.get(JOB_SUPPORT_TICKET_AUTO_CLOSE);
+    scheduler.<SupportTicketAutoCloseJob>scheduleRecurrently(
+        JOB_SUPPORT_TICKET_AUTO_CLOSE, autoCloseCron, SupportTicketAutoCloseJob::run);
+    log.info("Support-ticket auto-close scheduled (cron='{}')", autoCloseCron);
     return true;
   }
 

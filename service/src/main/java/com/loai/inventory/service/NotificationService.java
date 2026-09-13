@@ -54,6 +54,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
 import org.slf4j.Logger;
@@ -1303,15 +1304,68 @@ public class NotificationService {
     mutateOwn(orgId, userId, notificationId, /* dismiss= */ true);
   }
 
+  // The user's feed across orgs (the platform plane — stories/support_ticket_reach.md)
+
+  /**
+   * One row of the operator's feed: the item plus the tenant it concerns, named for the console.
+   */
+  public record UserFeedItem(InAppFeedItem item, UUID orgId, String orgName) {}
+
+  /**
+   * The caller's own rows across every org, newest first — a user-scoped read, never a cross-org
+   * one: it is keyed on {@code recipient_user_id} and nothing here can return another user's row.
+   * Tenant names are batched in one read so the console never resolves them itself.
+   */
+  public List<UserFeedItem> getUserFeed(UUID userId, boolean unreadOnly, int page, int size) {
+    int offset = Pagination.offset(page, size);
+    List<InAppFeedItem> items =
+        notificationRepoFactory.create(rootDsl).findUserInAppFeed(userId, unreadOnly, offset, size);
+    if (items.isEmpty()) {
+      return List.of();
+    }
+    List<UUID> orgIds = items.stream().map(i -> i.notification().getOrgId()).distinct().toList();
+    Map<UUID, String> names =
+        orgRepoFactory.create(rootDsl).findAllByIds(orgIds).stream()
+            .collect(Collectors.toMap(Org::getId, Org::getName));
+    return items.stream()
+        .map(
+            i ->
+                new UserFeedItem(
+                    i, i.notification().getOrgId(), names.get(i.notification().getOrgId())))
+        .toList();
+  }
+
+  public long countUserFeed(UUID userId, boolean unreadOnly) {
+    return notificationRepoFactory.create(rootDsl).countUserInAppFeed(userId, unreadOnly);
+  }
+
+  /** Own rows only, any org — a foreign id is the same opaque 404 as the org feed's. */
+  public void markOwnRead(UUID userId, UUID notificationId) {
+    mutateOwn(null, userId, notificationId, /* dismiss= */ false);
+  }
+
+  public void markOwnDismissed(UUID userId, UUID notificationId) {
+    mutateOwn(null, userId, notificationId, /* dismiss= */ true);
+  }
+
+  /** {@code orgId} null = the caller's row in any org (the platform plane). */
   private void mutateOwn(UUID orgId, UUID userId, UUID notificationId, boolean dismiss) {
     rootDsl.transaction(
         cfg -> {
           NotificationRepository repo = notificationRepoFactory.create(DSL.using(cfg));
           OffsetDateTime now = now();
-          int updated =
-              dismiss
-                  ? repo.markInAppDismissed(orgId, userId, notificationId, now)
-                  : repo.markInAppRead(orgId, userId, notificationId, now);
+          int updated;
+          if (orgId == null) {
+            updated =
+                dismiss
+                    ? repo.markUserInAppDismissed(userId, notificationId, now)
+                    : repo.markUserInAppRead(userId, notificationId, now);
+          } else {
+            updated =
+                dismiss
+                    ? repo.markInAppDismissed(orgId, userId, notificationId, now)
+                    : repo.markInAppRead(orgId, userId, notificationId, now);
+          }
           if (updated == 0) {
             throw new NotFoundException("Notification", notificationId);
           }

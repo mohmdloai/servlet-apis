@@ -168,6 +168,20 @@ public interface NotificationRepository {
 
   long countInAppFeed(UUID orgId, UUID userId, boolean unreadOnly);
 
+  /**
+   * The user's feed across every org ({@code stories/support_ticket_reach.md}) — the platform
+   * plane's read, keyed on {@code recipient_user_id} alone; nothing here can return another user's
+   * row.
+   */
+  List<InAppFeedItem> findUserInAppFeed(UUID userId, boolean unreadOnly, int offset, int limit);
+
+  long countUserInAppFeed(UUID userId, boolean unreadOnly);
+
+  /** Own-only, org-agnostic twins of {@link #markInAppRead} / {@link #markInAppDismissed}. */
+  int markUserInAppRead(UUID userId, UUID notificationId, OffsetDateTime now);
+
+  int markUserInAppDismissed(UUID userId, UUID notificationId, OffsetDateTime now);
+
   /** Marks the caller's in-app delivery for {@code notificationId} read; returns rows updated. */
   int markInAppRead(UUID orgId, UUID userId, UUID notificationId, OffsetDateTime now);
 

@@ -9,6 +9,7 @@ import com.loai.inventory.api.servlet.handler.AdminResourceHandler;
 import com.loai.inventory.api.servlet.handler.AuditAdminHandler;
 import com.loai.inventory.api.servlet.handler.FunnelAdminHandler;
 import com.loai.inventory.api.servlet.handler.GrowthAdminHandler;
+import com.loai.inventory.api.servlet.handler.NotificationAdminHandler;
 import com.loai.inventory.api.servlet.handler.OrgAdminHandler;
 import com.loai.inventory.api.servlet.handler.OverviewAdminHandler;
 import com.loai.inventory.api.servlet.handler.QueuesAdminHandler;
@@ -44,6 +45,8 @@ import org.slf4j.LoggerFactory;
  *       customer quoted)
  *   <li>{@code /tickets[/{id}[/…]]} → {@code TicketDeskAdminHandler} (the support desk — the one
  *       resource where the SUPPORT tier writes; {@code stories/support_tickets.md})
+ *   <li>{@code /notifications[/{id}/read|dismiss]} → {@link NotificationAdminHandler} (the
+ *       operator's own feed across tenants; {@code stories/support_ticket_reach.md})
  * </ul>
  *
  * <p>{@code /api/admin/impersonate/*} is mapped to the more-specific {@code
@@ -88,7 +91,9 @@ public class AdminServlet extends HttpServlet {
             new GrowthAdminHandler(config.platformGrowthService, mapper),
             "tickets",
             new com.loai.inventory.api.servlet.handler.TicketDeskAdminHandler(
-                config.supportDeskService, mapper));
+                config.supportDeskService, mapper),
+            "notifications",
+            new NotificationAdminHandler(config.notificationService, mapper));
   }
 
   @Override

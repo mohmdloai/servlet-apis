@@ -41,6 +41,12 @@ import org.slf4j.LoggerFactory;
  *
  * "Own" is decided in the service from the actor id; the handler only says whether the caller holds
  * manager authority ({@link AuthzHelper#hasManagerAuthority}) — the cash-shift precedent.
+ *
+ * <p><b>The suspended door</b> ({@code stories/support_ticket_reach.md}): every route here passes
+ * {@link AuthzHelper#requireOrgAccessThroughSuspension} — {@code requireOrgAccess} minus the {@code
+ * OrgStatusGate} step — because support is the one resource a suspended tenant must still reach.
+ * Membership, rank and read-only impersonation apply unchanged; this handler is that variant's only
+ * caller, on purpose.
  */
 public class SupportTicketHandler implements OrgResourceHandler {
 
@@ -118,7 +124,7 @@ public class SupportTicketHandler implements OrgResourceHandler {
 
   private void doList(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
       throws IOException {
-    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    SecurityContext sc = AuthzHelper.requireOrgAccessThroughSuspension(req, orgId, OrgRole.VIEWER);
     TicketStatus status = parseStatus(req.getParameter("status"));
     int page = Math.max(intParam(req, "page", 0), 0);
     int size =
@@ -135,7 +141,7 @@ public class SupportTicketHandler implements OrgResourceHandler {
 
   private void doOpen(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
       throws IOException {
-    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    SecurityContext sc = AuthzHelper.requireOrgAccessThroughSuspension(req, orgId, OrgRole.STAFF);
     SupportTicketRequests.Open body = readBody(req, SupportTicketRequests.Open.class);
     TicketCategory category;
     try {
@@ -157,7 +163,7 @@ public class SupportTicketHandler implements OrgResourceHandler {
 
   private void doPresign(HttpServletRequest req, HttpServletResponse resp, UUID orgId)
       throws IOException {
-    AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    AuthzHelper.requireOrgAccessThroughSuspension(req, orgId, OrgRole.STAFF);
     SupportTicketRequests.Presign body = readBody(req, SupportTicketRequests.Presign.class);
     writeJson(
         resp,
@@ -168,7 +174,7 @@ public class SupportTicketHandler implements OrgResourceHandler {
 
   private void doGet(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
       throws IOException {
-    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.VIEWER);
+    SecurityContext sc = AuthzHelper.requireOrgAccessThroughSuspension(req, orgId, OrgRole.VIEWER);
     writeJson(
         resp,
         200,
@@ -178,7 +184,7 @@ public class SupportTicketHandler implements OrgResourceHandler {
 
   private void doMessage(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
       throws IOException {
-    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    SecurityContext sc = AuthzHelper.requireOrgAccessThroughSuspension(req, orgId, OrgRole.STAFF);
     SupportTicketRequests.Message body = readBody(req, SupportTicketRequests.Message.class);
     writeJson(
         resp,
@@ -195,7 +201,7 @@ public class SupportTicketHandler implements OrgResourceHandler {
 
   private void doClose(HttpServletRequest req, HttpServletResponse resp, UUID orgId, UUID id)
       throws IOException {
-    SecurityContext sc = AuthzHelper.requireOrgAccess(req, orgId, OrgRole.STAFF);
+    SecurityContext sc = AuthzHelper.requireOrgAccessThroughSuspension(req, orgId, OrgRole.STAFF);
     writeJson(
         resp,
         200,
