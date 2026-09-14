@@ -90,7 +90,8 @@ final class PaymobFixture {
   PaymobFixture(DSLContext dsl, PaymobClient client) {
     this.dsl = dsl;
     OrgPaymobConfigRepositoryFactoryImpl configRepo = new OrgPaymobConfigRepositoryFactoryImpl();
-    this.orgPaymobService = new OrgPaymobService(dsl, configRepo, secretBox);
+    this.orgPaymobService =
+        new OrgPaymobService(dsl, configRepo, new PaymentIntentRepositoryFactoryImpl(), secretBox);
     this.paymentService =
         new PaymentService(
             dsl,

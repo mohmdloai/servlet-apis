@@ -20,8 +20,10 @@ import com.loai.inventory.service.PaymentService.CurrencyMismatch;
 import com.loai.inventory.service.PaymentService.OrderRef;
 import com.loai.inventory.service.PaymentService.Reconciliation;
 import com.loai.inventory.service.paymob.PaymobCallback;
+import com.loai.inventory.service.paymob.PaymobHosts;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
@@ -201,11 +203,14 @@ public final class PaymobWebhookService {
     }
 
     // 6–8. Everything that writes, in one transaction.
-    return rootDsl.transactionResult(cfg -> record(DSL.using(cfg), orgId, cb, rawBody));
+    ZoneId paymobZone = PaymobHosts.zoneForRegion(config.get().region());
+    return rootDsl.transactionResult(cfg -> record(DSL.using(cfg), orgId, cb, rawBody, paymobZone));
   }
 
-  private Outcome record(DSLContext txDsl, UUID orgId, PaymobCallback cb, String rawBody) {
+  private Outcome record(
+      DSLContext txDsl, UUID orgId, PaymobCallback cb, String rawBody, ZoneId paymobZone) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    OffsetDateTime occurredAt = cb.createdAt(paymobZone);
     PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
     PaymentIntentRepository intentRepo = intentRepoFactory.create(txDsl);
 
@@ -243,7 +248,7 @@ public final class PaymobWebhookService {
               null,
               null,
               PROOF,
-              cb.createdAt(),
+              occurredAt,
               now);
       declined.attachAudit(rawBody);
       declined.abandon(now); // closed by the system, never by a button — the ledger's "declined"
@@ -277,7 +282,7 @@ public final class PaymobWebhookService {
             null,
             null,
             PROOF,
-            cb.createdAt(),
+            occurredAt,
             now);
     txn.attachAudit(rawBody);
     txn.verifyByGateway(PROOF, now);

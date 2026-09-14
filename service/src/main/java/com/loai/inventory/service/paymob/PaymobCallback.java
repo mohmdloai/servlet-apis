@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.common.crypto.PaymobSignature;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.function.Function;
 
@@ -165,10 +165,11 @@ public final class PaymobCallback {
 
   /**
    * {@code obj.created_at} as an instant, or null. Paymob prints a naive local timestamp ({@code
-   * 2026-09-14T08:00:00.123456}); it is read as UTC — the ledger's {@code occurred_at} is
-   * informational and the recording clock is the server's own.
+   * 2026-09-14T14:27:50.358441}) in the merchant region's zone ({@link PaymobHosts#zoneForRegion})
+   * — an offset, when one is ever present, wins. Informational: the ledger's {@code occurred_at};
+   * the recording clock is the server's own.
    */
-  public OffsetDateTime createdAt() {
+  public OffsetDateTime createdAt(ZoneId naiveZone) {
     String raw = text(obj.path("created_at"));
     if (raw == null) {
       return null;
@@ -179,7 +180,7 @@ public final class PaymobCallback {
       // fall through — no zone on the wire
     }
     try {
-      return LocalDateTime.parse(raw).atOffset(ZoneOffset.UTC);
+      return LocalDateTime.parse(raw).atZone(naiveZone).toOffsetDateTime();
     } catch (DateTimeParseException e) {
       return null;
     }

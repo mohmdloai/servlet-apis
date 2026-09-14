@@ -5,6 +5,9 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgPaymobConfig;
 import com.loai.inventory.domain.repository.OrgPaymobConfigRepositoryFactory;
+import com.loai.inventory.domain.repository.PaymentIntentRepositoryFactory;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -38,12 +41,17 @@ public class OrgPaymobService {
 
   private final DSLContext rootDsl;
   private final OrgPaymobConfigRepositoryFactory repoFactory;
+  private final PaymentIntentRepositoryFactory intentRepoFactory;
   private final SecretBox secretBox;
 
   public OrgPaymobService(
-      DSLContext rootDsl, OrgPaymobConfigRepositoryFactory repoFactory, SecretBox secretBox) {
+      DSLContext rootDsl,
+      OrgPaymobConfigRepositoryFactory repoFactory,
+      PaymentIntentRepositoryFactory intentRepoFactory,
+      SecretBox secretBox) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
+    this.intentRepoFactory = intentRepoFactory;
     this.secretBox = secretBox;
   }
 
@@ -115,25 +123,37 @@ public class OrgPaymobService {
 
     String sealedSecret = secretBox.encrypt(secretKey.strip());
     String sealedHmac = secretBox.encrypt(hmacSecret.strip());
-    OrgPaymobConfig saved =
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    record Saved(OrgPaymobConfig config, int retiredIntents) {}
+    Saved saved =
         rootDsl.transactionResult(
-            cfg ->
-                repoFactory
-                    .create(DSL.using(cfg))
-                    .upsert(
-                        orgId,
-                        publicKey.strip(),
-                        sealedSecret,
-                        sealedHmac,
-                        cardIntegrationId,
-                        normalizedRegion));
+            cfg -> {
+              DSLContext txDsl = DSL.using(cfg);
+              OrgPaymobConfig config =
+                  repoFactory
+                      .create(txDsl)
+                      .upsert(
+                          orgId,
+                          publicKey.strip(),
+                          sealedSecret,
+                          sealedHmac,
+                          cardIntegrationId,
+                          normalizedRegion);
+              // A live intent was minted against the credentials and integration this call just
+              // replaced: its checkout secret is not valid for the new public key, and a callback
+              // for it would name the old integration. Retire them in the same transaction so a
+              // second tap on "pay" mints afresh (stories/paymob_card_checkout.md, Built notes).
+              int retired = intentRepoFactory.create(txDsl).expireLiveForOrg(orgId, now);
+              return new Saved(config, retired);
+            });
     // Never log a secret, and never log enough of one to be useful.
     log.info(
-        "Paymob connected for org {} (card_integration_id={} region={})",
+        "Paymob connected for org {} (card_integration_id={} region={}; retired {} live intent(s))",
         orgId,
-        saved.cardIntegrationId(),
-        saved.region());
-    return ConnectionStatus.of(saved);
+        saved.config().cardIntegrationId(),
+        saved.config().region(),
+        saved.retiredIntents());
+    return ConnectionStatus.of(saved.config());
   }
 
   /**
@@ -143,9 +163,25 @@ public class OrgPaymobService {
    * records money that really moved.
    */
   public void disconnect(UUID orgId) {
-    boolean removed =
-        rootDsl.transactionResult(cfg -> repoFactory.create(DSL.using(cfg)).delete(orgId));
-    log.info("Paymob disconnected for org {} (had a configuration: {})", orgId, removed);
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    record Removed(boolean hadConfig, int retiredIntents) {}
+    Removed removed =
+        rootDsl.transactionResult(
+            cfg -> {
+              DSLContext txDsl = DSL.using(cfg);
+              boolean had = repoFactory.create(txDsl).delete(orgId);
+              // The org no longer offers card; a live intent must not be handed back by …/pay.
+              // (A shopper already on Paymob's page can still complete — that callback is then a
+              // 400 with no config, which slice 3's inquiry cannot recover either; it is the one
+              // window a merchant opens by disconnecting mid-checkout, and it is logged loudly.)
+              int retired = intentRepoFactory.create(txDsl).expireLiveForOrg(orgId, now);
+              return new Removed(had, retired);
+            });
+    log.info(
+        "Paymob disconnected for org {} (had a configuration: {}; retired {} live intent(s))",
+        orgId,
+        removed.hadConfig(),
+        removed.retiredIntents());
   }
 
   /** The config a checkout/webhook needs, or empty — used by slice 2, never by a handler. */

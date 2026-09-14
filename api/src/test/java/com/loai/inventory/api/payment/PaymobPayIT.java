@@ -187,6 +187,39 @@ class PaymobPayIT {
     assertEquals(4, fx.intentCount(order.id()));
   }
 
+  /**
+   * Found on the first live sandbox run: a live intent minted under integration A was handed back
+   * by …/pay after the merchant reconnected with integration B — a checkout URL whose client secret
+   * belongs to the old credentials. A reconnect (and a disconnect) retires the org's live intents;
+   * the next tap mints afresh under the new integration.
+   */
+  @Test
+  void reconnect_retiresTheLiveIntent_soTheNextPayMintsUnderTheNewIntegration() {
+    UUID org = fx.createOrg("acme");
+    fx.connect(org);
+    PaymobFixture.Order order = fx.seedPendingOrder(org, null, "100.00");
+    PayResult underA = fx.intentService.pay(org, order.id(), null, "tok");
+
+    fx.orgPaymobService.connect(
+        org,
+        PaymobFixture.PUBLIC_KEY,
+        PaymobFixture.SECRET_KEY,
+        PaymobFixture.HMAC_SECRET,
+        7777,
+        "EGYPT");
+
+    assertEquals("EXPIRED", fx.intentStatus(underA.intent().getId()));
+    PayResult underB = fx.intentService.pay(org, order.id(), null, "tok");
+    assertFalse(underB.reused());
+    assertNotEquals(underA.intent().getId(), underB.intent().getId());
+    assertEquals(7777, fx.fakePaymob.lastRequest.integrationId());
+
+    // Disconnect retires the live one too; …/pay is then a 409 (no card channel).
+    fx.orgPaymobService.disconnect(org);
+    assertEquals("EXPIRED", fx.intentStatus(underB.intent().getId()));
+    assertThrows(ConflictException.class, () -> fx.intentService.pay(org, order.id(), null, "tok"));
+  }
+
   @Test
   void pay_onAnOrderNotAwaitingPayment_is409() {
     UUID org = fx.createOrg("acme");

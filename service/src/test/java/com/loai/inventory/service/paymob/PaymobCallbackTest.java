@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.common.crypto.PaymobSignature;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 
@@ -93,8 +94,13 @@ class PaymobCallbackTest {
     assertEquals("555000111", cb.paymobOrderId());
     assertEquals("3fa85f64-5717-4562-b3fc-2c963f66afa6", cb.merchantOrderId());
     assertEquals("3fa85f64-5717-4562-b3fc-2c963f66afa6", cb.extraIntentId());
+    // Paymob's naive created_at is the merchant region's local time, not UTC.
     assertEquals(
-        OffsetDateTime.of(2026, 9, 14, 8, 1, 2, 123_456_000, ZoneOffset.UTC), cb.createdAt());
+        OffsetDateTime.of(2026, 9, 14, 8, 1, 2, 123_456_000, ZoneOffset.ofHours(3)),
+        cb.createdAt(ZoneId.of("Africa/Cairo")));
+    assertEquals(
+        OffsetDateTime.of(2026, 9, 14, 5, 1, 2, 123_456_000, ZoneOffset.UTC).toInstant(),
+        cb.createdAt(PaymobHosts.zoneForRegion("EGYPT")).toInstant());
   }
 
   @Test
@@ -126,6 +132,6 @@ class PaymobCallbackTest {
     assertFalse(cb.success());
     assertNull(cb.paymobOrderId());
     assertNull(cb.merchantOrderId());
-    assertNull(cb.createdAt());
+    assertNull(cb.createdAt(ZoneId.of("Africa/Cairo")));
   }
 }

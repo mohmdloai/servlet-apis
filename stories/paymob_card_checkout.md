@@ -335,3 +335,31 @@ the text above, this is why:
   `OrderPaidNotificationIT` and `PaymobWebhookIT` — `ORPHAN` for the webhook).
 - Deploy: `deploy/docker-compose.prod.yml` passes `PAYMOB_CREDENTIAL_KEY` and sets `PUBLIC_API_URL`
   to `https://api.${DOMAIN}`; `env.prod.example` documents the key.
+
+### Verified against the real Paymob sandbox (2026-09-14)
+
+Run locally against `accept.paymob.com` test mode through an ngrok tunnel (`PUBLIC_API_URL`),
+org `cairo-home-goods`, order SO-2026-00001 (50.00 EGP): five hosted-page attempts, five
+webhooks through the tunnel, every one HMAC-verified with the merchant's real secret. Four
+declines landed as closed `ABANDONED` rows with Paymob's verdict preserved in `raw_payload`
+(`TIMED_OUT` ×2, `AUTHENTICATION_NOT_SUPPORTED`, `Do not honour`), each intent `FAILED`, the
+order untouched; the fifth (`Approved`) reconciled `MATCHED` → order `PAID`, one `payment`
+`RECEIVED`, intent `SETTLED`, hold deadline cleared, `ORDER_PAID` dispatched, public view
+`payment_claim: CONFIRMED`. Two things the run taught, both fixed on the branch:
+
+- **Paymob's `obj.created_at` is the merchant's local time with no offset** (`14:27:50` beside the
+  MIGS block's `11:27Z`). Reading it as UTC put `occurred_at` three hours late.
+  `PaymobCallback.createdAt(ZoneId)` now takes the region's zone (`PaymobHosts.zoneForRegion`,
+  `EGYPT → Africa/Cairo`).
+- **A reconnect must retire the org's live intents.** With a live `PENDING` intent minted under
+  integration A, reconnecting with integration B left `…/pay` handing back A's checkout URL (its
+  client secret belongs to the old credentials). `OrgPaymobService.connect` and `disconnect` now
+  call `PaymentIntentRepository.expireLiveForOrg` in the same transaction; a settlement that still
+  arrives for a retired intent settles (money moved), the reuse path is what closes.
+
+Sandbox facts worth not rediscovering: the MIGS simulator's verdict is keyed on the **expiry
+date** you type — Paymob's documented test card is `5123456789012346`, **`01/39`**, CVV `123`,
+"Test Account" (other expiries produce `TIMED_OUT` / `Do not honour`); the Visa test card is not
+3DS-enrolled there (`AUTHENTICATION_NOT_SUPPORTED`); a test account allows **one** MIGS
+integration per currency; the dashboard's per-integration callback URLs are ignored when the
+intention carries its own (ours always does).

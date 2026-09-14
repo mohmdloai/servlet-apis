@@ -624,8 +624,11 @@ public class AppConfig {
         new OrgPaymobConfigRepositoryFactoryImpl();
     this.paymobSecretBox = SecretBox.fromBase64Key(System.getenv("PAYMOB_CREDENTIAL_KEY"));
     this.orgPaymobConfigRepositoryFactory = orgPaymobConfigRepositoryFactory;
+    // Slice 2's intents are retired by a reconnect/disconnect, so connect needs the factory too.
+    this.paymentIntentRepositoryFactory = new PaymentIntentRepositoryFactoryImpl();
     this.orgPaymobService =
-        new OrgPaymobService(dsl, orgPaymobConfigRepositoryFactory, paymobSecretBox);
+        new OrgPaymobService(
+            dsl, orgPaymobConfigRepositoryFactory, paymentIntentRepositoryFactory, paymobSecretBox);
     // Web Push (stories/web_push_channel.md). The SecretBox rule: both keys unset → disabled (the
     // logging sender, and GET /api/me/push/config says enabled:false); a key present but malformed
     // → startup failure. The push leg draws on the email attempt budget unless told otherwise.
@@ -817,7 +820,6 @@ public class AppConfig {
     long paymobTimeoutMs = parseLong(System.getenv("PAYMOB_HTTP_TIMEOUT_MS"), 10_000L);
     long intentTtlMinutes = parseLong(System.getenv("PAYMENT_INTENT_TTL_MINUTES"), 20L);
     String publicApiUrl = getenvOrDefault("PUBLIC_API_URL", "http://localhost:8080");
-    this.paymentIntentRepositoryFactory = new PaymentIntentRepositoryFactoryImpl();
     this.paymobClient = new JdkPaymobClient(objectMapper, Duration.ofMillis(paymobTimeoutMs));
     this.paymentIntentService =
         new PaymentIntentService(

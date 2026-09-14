@@ -99,6 +99,19 @@ public final class PaymentIntentRepositoryImpl implements PaymentIntentRepositor
         .execute();
   }
 
+  @Override
+  public int expireLiveForOrg(UUID orgId, OffsetDateTime now) {
+    return dsl.update(PAYMENT_INTENT)
+        .set(PAYMENT_INTENT.STATUS, PaymentIntent.Status.EXPIRED.name())
+        .set(PAYMENT_INTENT.UPDATED_AT, now)
+        .where(
+            PAYMENT_INTENT
+                .ORG_ID
+                .eq(orgId)
+                .and(PAYMENT_INTENT.STATUS.eq(PaymentIntent.Status.PENDING.name())))
+        .execute();
+  }
+
   private static PaymentIntent toModel(PaymentIntentRecord r) {
     return PaymentIntent.rehydrate(
         r.getId(),

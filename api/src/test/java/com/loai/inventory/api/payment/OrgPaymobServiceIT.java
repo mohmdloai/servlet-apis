@@ -13,6 +13,7 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgPaymobConfig;
 import com.loai.inventory.repository.OrgPaymobConfigRepositoryFactoryImpl;
+import com.loai.inventory.repository.PaymentIntentRepositoryFactoryImpl;
 import com.loai.inventory.service.OrgPaymobService;
 import com.loai.inventory.service.OrgPaymobService.ConnectionStatus;
 import com.zaxxer.hikari.HikariConfig;
@@ -71,10 +72,18 @@ class OrgPaymobServiceIT {
     dsl = DSL.using(dataSource, SQLDialect.POSTGRES);
 
     secretBox = SecretBox.fromBase64Key(Base64.getEncoder().encodeToString(new byte[32]));
-    service = new OrgPaymobService(dsl, new OrgPaymobConfigRepositoryFactoryImpl(), secretBox);
+    service =
+        new OrgPaymobService(
+            dsl,
+            new OrgPaymobConfigRepositoryFactoryImpl(),
+            new PaymentIntentRepositoryFactoryImpl(),
+            secretBox);
     serviceNoKey =
         new OrgPaymobService(
-            dsl, new OrgPaymobConfigRepositoryFactoryImpl(), SecretBox.fromBase64Key(null));
+            dsl,
+            new OrgPaymobConfigRepositoryFactoryImpl(),
+            new PaymentIntentRepositoryFactoryImpl(),
+            SecretBox.fromBase64Key(null));
   }
 
   @AfterAll
@@ -86,7 +95,8 @@ class OrgPaymobServiceIT {
 
   @BeforeEach
   void fresh() {
-    dsl.execute("TRUNCATE org_paymob_config, org RESTART IDENTITY CASCADE");
+    dsl.execute(
+        "TRUNCATE payment_intent, sales_order, org_paymob_config, org RESTART IDENTITY CASCADE");
   }
 
   @Test
