@@ -56,7 +56,8 @@ table to remember what we asked for. Everything else is wiring.
 - `PspWebhookServlet` at `/api/psp/*`, JWT-bypassed, rate-limited.
 - `reconcileAndCreate` gains a **webhook-mode currency outcome** (ORPHAN instead of 400).
 - Env: `PSP_WEBHOOK_LIMIT` (default `600`), `PAYMOB_HTTP_TIMEOUT_MS` (default `10000`),
-  `PAYMENT_INTENT_TTL_MINUTES` (default `20`).
+  `PAYMENT_INTENT_TTL_MINUTES` (default `20`), `PUBLIC_API_URL` (default `http://localhost:8080` —
+  this server's public origin, minted into every intention's `notification_url`).
 
 ### Out (deferred)
 - **No poller, no refund recording, no admin surface** — [`paymob_card_reliability.md`](paymob_card_reliability.md).
@@ -263,27 +264,102 @@ two rapid calls → **one** intent and the same `checkout_url`; an expired inten
 
 ## Acceptance criteria
 
-- [ ] Anonymous `POST …/{token}/pay` on a `PENDING_PAYMENT` order of a Paymob-connected org → `200`
+- [x] Anonymous `POST …/{token}/pay` on a `PENDING_PAYMENT` order of a Paymob-connected org → `200`
       with a `checkout_url` containing the org's `public_key` and the returned `clientSecret`; one
       `payment_intent` row, `PENDING`.
-- [ ] A signed success callback → order `PAID`; exactly one `payment_transaction`
+- [x] A signed success callback → order `PAID`; exactly one `payment_transaction`
       (`provider = paymob_card`, `provider_ref = obj.id`, `VERIFIED`, `verified_by IS NULL`,
       `raw_payload` = the delivered body); one `payment` `RECEIVED`; intent `SETTLED`.
-- [ ] The same callback delivered **five** times → still one transaction, one payment, one `PAID`;
+- [x] The same callback delivered **five** times → still one transaction, one payment, one `PAID`;
       every response `200`.
-- [ ] Tampered `amount_cents` (HMAC recomputed over the tampered body with the wrong key) → `400`,
+- [x] Tampered `amount_cents` (HMAC recomputed over the tampered body with the wrong key) → `400`,
       nothing written.
-- [ ] A callback whose `amount_cents` disagrees with the intent → transaction recorded, outcome
+- [x] A callback whose `amount_cents` disagrees with the intent → transaction recorded, outcome
       `ORPHAN`, order still `PENDING_PAYMENT`, intent **not** `SETTLED`.
-- [ ] `pending: true` and `type: "TOKEN"` → `200`, zero rows written (asserted, not assumed — a
+- [x] `pending: true` and `type: "TOKEN"` → `200`, zero rows written (asserted, not assumed — a
       recorded pending row would poison the final callback's dedupe).
-- [ ] Callback for `{orgId}` with no config, or `DISABLED` → `400`, nothing written.
-- [ ] A card payment settling an order that has an `UNVERIFIED` InstaPay claim → that claim is
+- [x] Callback for `{orgId}` with no config, or `DISABLED` → `400`, nothing written.
+- [x] A card payment settling an order that has an `UNVERIFIED` InstaPay claim → that claim is
       `ABANDONED` in the same transaction.
-- [ ] A second successful callback for a different transaction on a now-`PAID` order → `ORPHAN`,
+- [x] A second successful callback for a different transaction on a now-`PAID` order → `ORPHAN`,
       order unchanged, both transactions visible in the ledger.
-- [ ] Admin `POST /payment-transactions` with a currency mismatch still returns **400** and rolls
+- [x] Admin `POST /payment-transactions` with a currency mismatch still returns **400** and rolls
       back — the webhook change did not alter the admin path.
-- [ ] Two `…/pay` calls inside the TTL → one intent row, identical `checkout_url`.
-- [ ] The order-expiry sweeper and a settling webhook, run concurrently against one order, never
+- [x] Two `…/pay` calls inside the TTL → one intent row, identical `checkout_url`.
+- [x] The order-expiry sweeper and a settling webhook, run concurrently against one order, never
       produce both `EXPIRED` and `PAID`.
+
+---
+
+## Built (2026-09-14, branch `191_feat/paymob-card-checkout`, V99)
+
+Every criterion above is IT-covered (`PaymobWebhookIT` 20 scenarios, `PaymobPayIT` 8, plus
+`PaymobSignatureTest`, `PaymobCallbackTest`, `PspWebhookServletTest`). Where the build departs from
+the text above, this is why:
+
+- **V99 carries three columns the sketch did not.** `paymob_order_id` — the Paymob-side order the
+  intention created, which is the ONE identifier of ours that appears in the callback's *signed*
+  field list (`obj.order.id`); the webhook binds a callback to its intent through it, because
+  `order.merchant_order_id` (Paymob's echo of `special_reference`) is unsigned. A signed mismatch is
+  a recorded ORPHAN. `client_secret` — without it the "two taps inside the TTL → identical
+  `checkout_url`" criterion cannot hold (the URL is `host + public_key + client_secret`); it is the
+  per-intention browser secret, not a merchant credential, and is stored in the clear on purpose.
+  `idx_payment_intent_order` — the reuse lookup reads by order and Postgres does not index FKs.
+- **`type != "TRANSACTION"` is answered before the HMAC check**, not after. A `TOKEN` callback signs a
+  *different* field list, so checking the transaction signature on it fails it — a 400 would only
+  make Paymob retry a delivery we will never use. It writes nothing, so there is nothing to protect.
+- **A declined attempt (`success: false`) is recorded as an `ABANDONED` row** (closed by the system,
+  never by a button) with `raw_payload`, `verified_by NULL` and — deliberately — `claimed_sales_order_id
+  NULL`: a closed card attempt must not become the order's "latest claim" and hide a live InstaPay
+  claim from the shopper's status page. The intent goes `FAILED`. A retry on Paymob's hosted page
+  (same intention, a new `obj.id`) settles it: `FAILED → SETTLED` is a legal transition, because
+  money moved and the order — not the intent's history — decides whether it settles.
+- **`PaymentTransaction.verifyByGateway(proof, now)`** is the domain method behind `verified_by IS
+  NULL` (the existing `verify` requires a user).
+- **A callback that matches no intent is still recorded** (VERIFIED, ORPHAN, `claimed_sales_order_id
+  NULL`) — money that arrived must always leave a row.
+- **Missing `PAYMOB_CREDENTIAL_KEY`**: the webhook throws (→ 500, so Paymob keeps retrying until
+  the operator sets it — a 400 would make it give up on a real payment); `…/pay` answers 409, the
+  same shape as connect's refusal.
+- **Rate buckets**: `/api/psp/*` is on its own wide `rl:psp-webhook` (`PSP_WEBHOOK_LIMIT`); `POST
+  …/{token}/pay` joins the strict `rl:payment-claim` bucket (an outbound Paymob call per request).
+- **The intention carries `expiration` = the intent TTL in seconds**, so Paymob's checkout page dies
+  with our intent, and **one `items` line for the outstanding amount** — the order's lines do not sum
+  to it (tax, shipping, discount, a prior partial), and the hosted page shows the total either way.
+- **Card is rejected at the counter**: `PAYMOB_CARD` on an in-store tender is a 400 at both guards
+  (`SalesOrderService.validateInStoreInputs`, `PaymentService.recordInStorePayment`) — slice 4 gets
+  its own value. The admin record path (`POST /payment-transactions`) accepts it as a manual escape
+  hatch; a later webhook for the same `obj.id` replays idempotently.
+- **`accept_online_payment.md`'s currency follow-up is closed**: `reconcileAndCreate` takes a
+  `CurrencyMismatch` enum (`THROW` for the admin path — bit-identical, pinned by
+  `OrderPaidNotificationIT` and `PaymobWebhookIT` — `ORPHAN` for the webhook).
+- Deploy: `deploy/docker-compose.prod.yml` passes `PAYMOB_CREDENTIAL_KEY` and sets `PUBLIC_API_URL`
+  to `https://api.${DOMAIN}`; `env.prod.example` documents the key.
+
+### Verified against the real Paymob sandbox (2026-09-14)
+
+Run locally against `accept.paymob.com` test mode through an ngrok tunnel (`PUBLIC_API_URL`),
+org `cairo-home-goods`, order SO-2026-00001 (50.00 EGP): five hosted-page attempts, five
+webhooks through the tunnel, every one HMAC-verified with the merchant's real secret. Four
+declines landed as closed `ABANDONED` rows with Paymob's verdict preserved in `raw_payload`
+(`TIMED_OUT` ×2, `AUTHENTICATION_NOT_SUPPORTED`, `Do not honour`), each intent `FAILED`, the
+order untouched; the fifth (`Approved`) reconciled `MATCHED` → order `PAID`, one `payment`
+`RECEIVED`, intent `SETTLED`, hold deadline cleared, `ORDER_PAID` dispatched, public view
+`payment_claim: CONFIRMED`. Two things the run taught, both fixed on the branch:
+
+- **Paymob's `obj.created_at` is the merchant's local time with no offset** (`14:27:50` beside the
+  MIGS block's `11:27Z`). Reading it as UTC put `occurred_at` three hours late.
+  `PaymobCallback.createdAt(ZoneId)` now takes the region's zone (`PaymobHosts.zoneForRegion`,
+  `EGYPT → Africa/Cairo`).
+- **A reconnect must retire the org's live intents.** With a live `PENDING` intent minted under
+  integration A, reconnecting with integration B left `…/pay` handing back A's checkout URL (its
+  client secret belongs to the old credentials). `OrgPaymobService.connect` and `disconnect` now
+  call `PaymentIntentRepository.expireLiveForOrg` in the same transaction; a settlement that still
+  arrives for a retired intent settles (money moved), the reuse path is what closes.
+
+Sandbox facts worth not rediscovering: the MIGS simulator's verdict is keyed on the **expiry
+date** you type — Paymob's documented test card is `5123456789012346`, **`01/39`**, CVV `123`,
+"Test Account" (other expiries produce `TIMED_OUT` / `Do not honour`); the Visa test card is not
+3DS-enrolled there (`AUTHENTICATION_NOT_SUPPORTED`); a test account allows **one** MIGS
+integration per currency; the dashboard's per-integration callback URLs are ignored when the
+intention carries its own (ours always does).

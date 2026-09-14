@@ -61,6 +61,8 @@ verifies it, order moves `PENDING_PAYMENT → PAID`, and the `payment` row sits 
 - **Currency mismatch returns 400 (rolls back the claim).** Intentional for admin-entered data (a
   typo is correctable); if a webhook/auto-feed ever drives this endpoint, reclassify the mismatch as
   a recorded ORPHAN so the event isn't lost. See the note in `PaymentService.reconcileAndCreate`.
+  **Done (2026-09-14, `paymob_card_checkout.md`):** `reconcileAndCreate` takes a `CurrencyMismatch`
+  parameter — `THROW` keeps this path bit-identical; the Paymob webhook passes `ORPHAN`.
 
 ---
 

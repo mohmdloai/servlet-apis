@@ -98,6 +98,14 @@ public class RateLimitFilter implements Filter {
   static final int DEFAULT_AUTH_REGISTER_LIMIT = 3;
   static final int DEFAULT_AUTH_FORGOT_LIMIT = 5;
 
+  /**
+   * PSP webhooks ({@code /api/psp/*}, stories/paymob_card_checkout.md). Wide on purpose: every
+   * merchant's callbacks arrive from Paymob's few egress IPs, so a strict per-IP bucket would
+   * throttle one merchant's promotion with another's. The HMAC, not the bucket, is the gate; the
+   * bucket only bounds a flood of forgeries.
+   */
+  static final int DEFAULT_PSP_WEBHOOK_LIMIT = 600;
+
   private JedisPool jedisPool;
   private ObjectMapper objectMapper;
   private int publicReadLimit = DEFAULT_PUBLIC_READ_LIMIT;
@@ -112,6 +120,7 @@ public class RateLimitFilter implements Filter {
   private int publicSitemapLimit = DEFAULT_PUBLIC_SITEMAP_LIMIT;
   private int authRegisterLimit = DEFAULT_AUTH_REGISTER_LIMIT;
   private int authForgotLimit = DEFAULT_AUTH_FORGOT_LIMIT;
+  private int pspWebhookLimit = DEFAULT_PSP_WEBHOOK_LIMIT;
   private boolean trustProxy;
 
   /** No-arg constructor for the servlet container; config is read in {@link #init}. */
@@ -153,6 +162,7 @@ public class RateLimitFilter implements Filter {
     this.publicSitemapLimit = envIntOrDefault("PUBLIC_SITEMAP_LIMIT", DEFAULT_PUBLIC_SITEMAP_LIMIT);
     this.authRegisterLimit = envIntOrDefault("AUTH_REGISTER_LIMIT", DEFAULT_AUTH_REGISTER_LIMIT);
     this.authForgotLimit = envIntOrDefault("AUTH_FORGOT_LIMIT", DEFAULT_AUTH_FORGOT_LIMIT);
+    this.pspWebhookLimit = envIntOrDefault("PSP_WEBHOOK_LIMIT", DEFAULT_PSP_WEBHOOK_LIMIT);
     this.trustProxy = Boolean.parseBoolean(System.getenv("TRUST_PROXY"));
     log.info(
         "RateLimitFilter: pub-read={}/min, pub-checkout={}/min, trustProxy={}",
@@ -197,11 +207,19 @@ public class RateLimitFilter implements Filter {
       // Comment mutations (slice R2) — same strict shape as reviews, its own bucket.
       keyPrefix = "rl:portal-comment:";
       limit = portalCommentLimit;
+    } else if (path.startsWith("/api/psp/")) {
+      // PSP callbacks (stories/paymob_card_checkout.md) — the filter is mapped on /api/psp/* for
+      // this branch alone; see DEFAULT_PSP_WEBHOOK_LIMIT for why it is wide.
+      keyPrefix = "rl:psp-webhook:";
+      limit = pspWebhookLimit;
     } else if ("POST".equals(req.getMethod())
-        && (path.endsWith("/payment-claim") || path.endsWith("/payment-proof/presign"))) {
-      // Payment-proof claim + presign (roadmap item 2) — a strict write on both the public
-      // (magic-link) and portal planes; matched ahead of the /api/portal/ and /api/public/
-      // catch-alls so it isn't absorbed by the generous read buckets.
+        && (path.endsWith("/payment-claim")
+            || path.endsWith("/payment-proof/presign")
+            || path.endsWith("/pay"))) {
+      // Payment-proof claim + presign (roadmap item 2) and the card intention (POST …/{token}/pay,
+      // stories/paymob_card_checkout.md — an outbound Paymob call per request) — a strict write on
+      // both the public (magic-link) and portal planes; matched ahead of the /api/portal/ and
+      // /api/public/ catch-alls so it isn't absorbed by the generous read buckets.
       keyPrefix = "rl:payment-claim:";
       limit = paymentClaimLimit;
     } else if ("POST".equals(req.getMethod()) && path.endsWith("/coupons/validate")) {

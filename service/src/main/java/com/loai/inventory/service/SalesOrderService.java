@@ -1203,6 +1203,9 @@ public class SalesOrderService {
       if (t.provider() == PaymentProvider.INSTAPAY_MANUAL) {
         throw new ValidationException(PaymentService.IN_STORE_PROVIDER_REJECT_MSG);
       }
+      if (t.provider() == PaymentProvider.PAYMOB_CARD) {
+        throw new ValidationException(PaymentService.ONLINE_CARD_PROVIDER_REJECT_MSG);
+      }
       if (split && t.amount() == null) {
         throw new ValidationException(at + ".amount is required on a split tender");
       }

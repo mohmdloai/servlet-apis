@@ -299,6 +299,27 @@ public class PaymentTransaction {
   }
 
   /**
+   * The gateway confirms the money moved ({@code stories/paymob_card_checkout.md}): a signed PSP
+   * callback <em>is</em> the verification ({@code state-machines.md:225} — "VERIFIED happens
+   * automatically on webhook receipt"), so {@code UNVERIFIED → VERIFIED} with {@code verifiedBy}
+   * left <b>null</b>. The column is {@code UUID REFERENCES app_user(id)} and no user verified this;
+   * a synthetic system user was considered and rejected — it would put a fake human in the audit
+   * trail of every card payment, and {@code verified_by IS NULL AND provider = 'paymob_card'}
+   * already reads unambiguously as "the gateway did it". {@code proof} names the mechanism.
+   */
+  public void verifyByGateway(String proof, OffsetDateTime now) {
+    Objects.requireNonNull(now, "now required");
+    requireOpenClaim("verify");
+    this.verificationStatus = PaymentVerificationStatus.VERIFIED;
+    this.verifiedBy = null;
+    this.verifiedAt = now;
+    this.verificationProof = proof;
+    this.notFoundReason = null;
+    this.notFoundNote = null;
+    this.updatedAt = now;
+  }
+
+  /**
    * "Can't find it": the manager searched the bank app for the reference and found nothing — {@code
    * UNVERIFIED → NOT_FOUND} with a reason ({@code NO_TRANSFER}, {@code DIFFERENT_ACCOUNT}, {@code
    * OTHER}) and an optional note for the shopper. Retryable by design: the shopper re-files ({@link

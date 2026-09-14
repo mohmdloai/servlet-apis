@@ -70,6 +70,15 @@ public final class PaymentService {
       "INSTAPAY_MANUAL is the online path; in-store accepts CASH or INSTAPAY_IN_STORE";
 
   /**
+   * The same rejection for the online card rail: a {@code paymob_card} transaction is written by
+   * the Paymob webhook and nothing else. Card at the counter is the epic's slice 4 (a terminal, its
+   * own provider value), not this constant with a cashier behind it.
+   */
+  public static final String ONLINE_CARD_PROVIDER_REJECT_MSG =
+      "PAYMOB_CARD is the online card path (recorded by the gateway webhook); in-store accepts"
+          + " CASH or INSTAPAY_IN_STORE";
+
+  /**
    * stories/cash_shift.md: which drawer-day a counter tender belongs to; NONE outside production.
    */
   private final CashShiftStamper cashShifts;
@@ -194,11 +203,38 @@ public final class PaymentService {
       PaymentReconciliationStatus status, Payment payment, SalesOrder order) {}
 
   /**
+   * What a currency mismatch between the transaction and its order means to the caller. The two
+   * callers want opposite things for the same reason: an admin can fix a typo, a webhook cannot be
+   * asked to try again ({@code accept_online_payment.md} §"Known follow-ups", {@code
+   * stories/paymob_card_checkout.md}).
+   */
+  public enum CurrencyMismatch {
+    /** Admin-entered data: 400, the whole call rolls back, nothing persists. The original. */
+    THROW,
+    /** A machine feed: record the event as ORPHAN so it is never lost. */
+    ORPHAN
+  }
+
+  /**
    * Reconcile {@code txn} against {@code ref} and, on MATCHED, create the {@link Payment} and flip
-   * the order to PAID. Runs in {@code txDsl} — does not open a transaction.
+   * the order to PAID. Runs in {@code txDsl} — does not open a transaction. The admin path: a
+   * currency mismatch {@link CurrencyMismatch#THROW throws}.
    */
   public Reconciliation reconcileAndCreate(
       DSLContext txDsl, UUID orgId, PaymentTransaction txn, OrderRef ref) {
+    return reconcileAndCreate(txDsl, orgId, txn, ref, CurrencyMismatch.THROW);
+  }
+
+  /**
+   * {@link #reconcileAndCreate(DSLContext, UUID, PaymentTransaction, OrderRef)} with the
+   * currency-mismatch outcome chosen by the caller.
+   */
+  public Reconciliation reconcileAndCreate(
+      DSLContext txDsl,
+      UUID orgId,
+      PaymentTransaction txn,
+      OrderRef ref,
+      CurrencyMismatch onCurrencyMismatch) {
 
     SalesOrderRepository orderRepo = salesOrderRepoFactory.create(txDsl);
 
@@ -224,11 +260,21 @@ public final class PaymentService {
     }
 
     if (!order.getCurrency().equalsIgnoreCase(txn.getCurrency())) {
-      // Deliberate: this is admin-entered single-call data, so a currency mismatch is treated as a
-      // correctable input error (400 → fix → resubmit), not a recorded ORPHAN. The whole txn rolls
-      // back, so nothing is persisted and the same provider_ref re-inserts cleanly on retry. If a
-      // webhook/auto-feed ever drives this path, revisit — it would want the claim recorded
-      // instead.
+      if (onCurrencyMismatch == CurrencyMismatch.ORPHAN) {
+        // A webhook drove this: the event must never be dropped, and nobody can retype it.
+        log.warn(
+            "Reconcile ORPHAN: transaction {} is {} but order {} is {} — currency mismatch on a"
+                + " machine feed",
+            txn.getProviderRef(),
+            txn.getCurrency(),
+            order.getOrderNumber(),
+            order.getCurrency());
+        return new Reconciliation(PaymentReconciliationStatus.ORPHAN, null, order);
+      }
+      // Deliberate: admin-entered single-call data, so a currency mismatch is a correctable input
+      // error (400 → fix → resubmit), not a recorded ORPHAN. The whole txn rolls back, so nothing
+      // is persisted and the same provider_ref re-inserts cleanly on retry. Bit-identical to the
+      // behaviour before the webhook mode above existed.
       throw new ValidationException(
           "currency mismatch: transaction "
               + txn.getCurrency()
@@ -471,6 +517,9 @@ public final class PaymentService {
     }
     if (provider == PaymentProvider.INSTAPAY_MANUAL) {
       throw new ValidationException(IN_STORE_PROVIDER_REJECT_MSG);
+    }
+    if (provider == PaymentProvider.PAYMOB_CARD) {
+      throw new ValidationException(ONLINE_CARD_PROVIDER_REJECT_MSG);
     }
     if (amount == null || amount.signum() <= 0) {
       throw new ValidationException("payment amount must be > 0");

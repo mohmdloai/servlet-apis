@@ -106,6 +106,34 @@ class RateLimitFilterTest {
   }
 
   @Test
+  void pspWebhook_selectsItsOwnWideBucket() throws Exception {
+    // stories/paymob_card_checkout.md: /api/psp/* is mapped for this branch alone. Wide, because
+    // every merchant's callbacks arrive from Paymob's few egress IPs.
+    Fixture f = new Fixture(120, 5, false);
+    f.req("POST", "/api/psp", "/paymob/00000000-0000-0000-0000-000000000000/webhook", "9.9.9.9");
+    when(f.jedis.incr("rl:psp-webhook:9.9.9.9")).thenReturn(1L);
+
+    f.filter.doFilter(f.request, f.response, f.chain);
+
+    verifyTtlThenCount(f, "rl:psp-webhook:9.9.9.9");
+    verify(f.chain).doFilter(f.request, f.response);
+  }
+
+  @Test
+  void postPay_selectsTheStrictPaymentClaimBucket_notPublicRead() throws Exception {
+    // POST …/orders/{token}/pay mints a Paymob intention (an outbound call per request) — it
+    // shares the strict shopper-payment bucket, not the generous read one.
+    Fixture f = new Fixture(120, 5, false);
+    f.req("POST", "/api/public", "/orders/tok123/pay", "8.8.8.8");
+    when(f.jedis.incr("rl:payment-claim:8.8.8.8")).thenReturn(1L);
+
+    f.filter.doFilter(f.request, f.response, f.chain);
+
+    verifyTtlThenCount(f, "rl:payment-claim:8.8.8.8");
+    verify(f.chain).doFilter(f.request, f.response);
+  }
+
+  @Test
   void couponValidate_selectsItsOwnStrictBucket_notThePublicReadOne() throws Exception {
     // Roadmap item 9: the preview lives under /api/public/, so without its own branch it would
     // inherit pub-read's generous budget — which is a code-scraping allowance on an endpoint whose

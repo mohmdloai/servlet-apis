@@ -11,6 +11,7 @@ import com.loai.inventory.api.servlet.MeServlet;
 import com.loai.inventory.api.servlet.OrgServlet;
 import com.loai.inventory.api.servlet.PlatformImpersonationServlet;
 import com.loai.inventory.api.servlet.PortalServlet;
+import com.loai.inventory.api.servlet.PspWebhookServlet;
 import com.loai.inventory.api.servlet.PublicOrderServlet;
 import com.loai.inventory.api.servlet.PublicStorefrontServlet;
 import com.loai.inventory.api.servlet.PublicUnsubscribeServlet;
@@ -55,7 +56,8 @@ public class EmbeddedTomcatLauncher {
           RateLimitFilter.class.getName(),
           "/api/auth/*",
           "/api/public/*",
-          "/api/portal/*");
+          "/api/portal/*",
+          "/api/psp/*");
       addFilter(ctx, "jwtAuthFilter", JwtAuthFilter.class.getName(), "/api/*");
       addFilter(ctx, "customerAuthFilter", CustomerAuthFilter.class.getName(), "/api/portal/*");
 
@@ -77,6 +79,9 @@ public class EmbeddedTomcatLauncher {
       // Anonymous one-click unsubscribe magic-link route.
       Tomcat.addServlet(ctx, "publicUnsubscribeServlet", new PublicUnsubscribeServlet());
       ctx.addServletMappingDecoded("/api/public/unsubscribe/*", "publicUnsubscribeServlet");
+      // PSP callbacks (Paymob webhook) — anonymous, HMAC-gated, JWT-bypassed, own rate bucket.
+      Tomcat.addServlet(ctx, "pspWebhookServlet", new PspWebhookServlet());
+      ctx.addServletMappingDecoded("/api/psp/*", "pspWebhookServlet");
       Tomcat.addServlet(ctx, "adminServlet", new AdminServlet());
       ctx.addServletMappingDecoded("/api/admin/*", "adminServlet");
       // More specific than /api/admin/* — Tomcat longest-path match routes impersonation here.
