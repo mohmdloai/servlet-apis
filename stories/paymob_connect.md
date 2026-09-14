@@ -184,20 +184,20 @@ MANAGER because the blast radius is embarrassing messages; this one is the bank 
 
 ## Acceptance criteria
 
-- [ ] OWNER POSTs four valid credentials → `200`, row exists, `status = ACTIVE`; the response body
+- [x] OWNER POSTs four valid credentials → `200`, row exists, `status = ACTIVE`; the response body
       contains `public_key` and **neither** `secret_key` **nor** `hmac_secret`.
-- [ ] The stored `secret_key_encrypted` and `hmac_secret_encrypted` are **not** the plaintext, and
+- [x] The stored `secret_key_encrypted` and `hmac_secret_encrypted` are **not** the plaintext, and
       `SecretBox.decrypt` returns the originals.
-- [ ] `GET` before any connect → `200 {"connected": false}`; after connect → the status body; after
+- [x] `GET` before any connect → `200 {"connected": false}`; after connect → the status body; after
       `DELETE` → `{"connected": false}` again.
-- [ ] Re-POST with new credentials replaces all four and bumps `updated_at`; exactly one row.
-- [ ] MANAGER (not OWNER) → `403`. VIEWER → `403`. Another org's OWNER → `403`.
-- [ ] With `PAYMOB_CREDENTIAL_KEY` unset, connect → `409` and **nothing is written** (assert the
+- [x] Re-POST with new credentials replaces all four and bumps `updated_at`; exactly one row.
+- [x] MANAGER (not OWNER) → `403`. VIEWER → `403`. Another org's OWNER → `403`.
+- [x] With `PAYMOB_CREDENTIAL_KEY` unset, connect → `409` and **nothing is written** (assert the
       table is empty — a fail-open here would store a card secret in the clear).
-- [ ] `card_integration_id: 0` / `-1` / `"abc"` → `400`. `region: "KSA"` → `400`.
-- [ ] `GET /api/public/{orgSlug}` lists `card` in `payment_methods` iff an ACTIVE config exists, and
+- [x] `card_integration_id: 0` / `-1` / `"abc"` → `400`. `region: "KSA"` → `400`.
+- [x] `GET /api/public/{orgSlug}` lists `card` in `payment_methods` iff an ACTIVE config exists, and
       lists `instapay` exactly as it does today in both cases.
-- [ ] `DELETE` on an org with existing `paymob_card` transactions → `204`, and the transaction rows
+- [x] `DELETE` on an org with existing `paymob_card` transactions → `204`, and the transaction rows
       are still there.
-- [ ] A `paymob_card` value exists on the `payment_provider` enum after V98 (guards the migration
+- [x] A `paymob_card` value exists on the `payment_provider` enum after V98 (guards the migration
       against a silent no-op from `IF NOT EXISTS`).

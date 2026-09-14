@@ -1,6 +1,7 @@
 package com.loai.inventory.api.catalog;
 
 import static com.loai.inventory.repository.generated.Tables.ORG;
+import static com.loai.inventory.repository.generated.Tables.ORG_PAYMOB_CONFIG;
 import static com.loai.inventory.repository.generated.Tables.ORG_WHATSAPP_CONFIG;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -88,6 +89,7 @@ class StorefrontProfileIT {
             new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgPaymobConfigRepositoryFactoryImpl(),
             new com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl(),
             storage,
             null,
@@ -124,6 +126,7 @@ class StorefrontProfileIT {
     assertEquals("ar", v.defaultLocale(), "default landing locale is ar");
     assertEquals(java.util.List.of("ar", "en"), v.supportedLocales());
     assertEquals("EGP", v.currency());
+    assertEquals(java.util.List.of("instapay"), v.paymentMethods(), "no Paymob connection yet");
 
     // No internal org field leaks in the serialized public DTO.
     String json = JSON.writeValueAsString(StorefrontProfileResponse.from(v));
@@ -167,6 +170,32 @@ class StorefrontProfileIT {
   }
 
   @Test
+  void paymentMethods_alwaysListsInstapay_addsCardOnlyWhileAnActivePaymobConfigExists() {
+    UUID id = insertOrg("acme", "Acme Store", true);
+
+    // A store that never connected Paymob: instapay only, exactly today's behaviour.
+    assertEquals(java.util.List.of("instapay"), storefront.profile("acme").paymentMethods());
+
+    dsl.insertInto(ORG_PAYMOB_CONFIG)
+        .set(ORG_PAYMOB_CONFIG.ORG_ID, id)
+        .set(ORG_PAYMOB_CONFIG.PUBLIC_KEY, "pk-1")
+        .set(ORG_PAYMOB_CONFIG.SECRET_KEY_ENCRYPTED, "sealed-secret")
+        .set(ORG_PAYMOB_CONFIG.HMAC_SECRET_ENCRYPTED, "sealed-hmac")
+        .set(ORG_PAYMOB_CONFIG.CARD_INTEGRATION_ID, 4938201)
+        .set(ORG_PAYMOB_CONFIG.STATUS, "ACTIVE")
+        .execute();
+    assertEquals(
+        java.util.List.of("instapay", "card"), storefront.profile("acme").paymentMethods());
+
+    // Paused is not connected, as far as checkout is concerned: card would fail every time.
+    dsl.update(ORG_PAYMOB_CONFIG)
+        .set(ORG_PAYMOB_CONFIG.STATUS, "DISABLED")
+        .where(ORG_PAYMOB_CONFIG.ORG_ID.eq(id))
+        .execute();
+    assertEquals(java.util.List.of("instapay"), storefront.profile("acme").paymentMethods());
+  }
+
+  @Test
   void theProfileNeverLeaksTheCredential() throws Exception {
     UUID id = insertOrg("acme", "Acme Store", true);
     dsl.insertInto(ORG_WHATSAPP_CONFIG)
@@ -177,9 +206,18 @@ class StorefrontProfileIT {
         .set(ORG_WHATSAPP_CONFIG.ACCESS_TOKEN_ENCRYPTED, "sealed-token")
         .set(ORG_WHATSAPP_CONFIG.STATUS, "ACTIVE")
         .execute();
+    dsl.insertInto(ORG_PAYMOB_CONFIG)
+        .set(ORG_PAYMOB_CONFIG.ORG_ID, id)
+        .set(ORG_PAYMOB_CONFIG.PUBLIC_KEY, "PUBLIC-KEY-NOT-SECRET")
+        .set(ORG_PAYMOB_CONFIG.SECRET_KEY_ENCRYPTED, "SEALED-CARD-SECRET")
+        .set(ORG_PAYMOB_CONFIG.HMAC_SECRET_ENCRYPTED, "SEALED-CARD-HMAC")
+        .set(ORG_PAYMOB_CONFIG.CARD_INTEGRATION_ID, 4938201)
+        .set(ORG_PAYMOB_CONFIG.STATUS, "ACTIVE")
+        .execute();
 
     // This is an ANONYMOUS, publicly cached read. It may say that a channel exists and nothing
-    // more — not the number, not the WABA id, and certainly not the sealed token.
+    // more — not the number, not the WABA id, and certainly not the sealed token. Same rule for
+    // Paymob: the profile only ever says "card" joined payment_methods, never a credential.
     String json =
         JSON.writeValueAsString(StorefrontProfileResponse.from(storefront.profile("acme")));
     assertTrue(json.contains("\"whatsapp_enabled\":true"), json);
@@ -187,6 +225,10 @@ class StorefrontProfileIT {
     assertFalse(json.contains("PHONE-SECRET"), json);
     assertFalse(json.contains("sealed-token"), json);
     assertFalse(json.contains("+201012345678"), json);
+    assertTrue(json.contains("\"card\""), json);
+    assertFalse(json.contains("SEALED-CARD-SECRET"), json);
+    assertFalse(json.contains("SEALED-CARD-HMAC"), json);
+    assertFalse(json.contains("PUBLIC-KEY-NOT-SECRET"), json);
   }
 
   @Test

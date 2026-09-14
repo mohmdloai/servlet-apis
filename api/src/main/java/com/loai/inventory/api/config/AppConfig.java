@@ -33,6 +33,7 @@ import com.loai.inventory.domain.repository.NotificationRepositoryFactory;
 import com.loai.inventory.domain.repository.NumberSequenceReconciliationRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgHealthRepository;
 import com.loai.inventory.domain.repository.OrgMilestoneRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgPaymobConfigRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgTimelineRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgWhatsAppConfigRepositoryFactory;
@@ -82,6 +83,7 @@ import com.loai.inventory.repository.NotificationRepositoryFactoryImpl;
 import com.loai.inventory.repository.NumberSequenceReconciliationRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgHealthRepositoryImpl;
 import com.loai.inventory.repository.OrgMilestoneRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgPaymobConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgTimelineRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl;
@@ -130,6 +132,7 @@ import com.loai.inventory.service.NumberSequenceReconciliationService;
 import com.loai.inventory.service.OrderCancellationService;
 import com.loai.inventory.service.OrderExpiryService;
 import com.loai.inventory.service.OrgHealthService;
+import com.loai.inventory.service.OrgPaymobService;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.OrgWhatsAppService;
 import com.loai.inventory.service.PaymentDisputeService;
@@ -329,6 +332,16 @@ public class AppConfig {
   public final OrgWhatsAppConfigRepositoryFactory orgWhatsAppConfigRepositoryFactory;
 
   public final OrgWhatsAppService orgWhatsAppService;
+
+  /**
+   * Platform key sealing per-merchant Paymob card credentials (epic slice 1); its own key, not
+   * {@code whatsAppSecretBox} — disabled when PAYMOB_CREDENTIAL_KEY is unset.
+   */
+  public final SecretBox paymobSecretBox;
+
+  public final OrgPaymobConfigRepositoryFactory orgPaymobConfigRepositoryFactory;
+
+  public final OrgPaymobService orgPaymobService;
 
   /**
    * Web Push (V96): the VAPID identity from {@code WEB_PUSH_VAPID_*}, disabled when unset; the
@@ -589,6 +602,14 @@ public class AppConfig {
     this.orgWhatsAppConfigRepositoryFactory = orgWhatsAppConfigRepositoryFactory;
     this.orgWhatsAppService =
         new OrgWhatsAppService(dsl, orgWhatsAppConfigRepositoryFactory, whatsAppSecretBox);
+    // Per-merchant Paymob card (epic slice 1, stories/paymob_connect.md). Own key: a WhatsApp
+    // token and a card secret key are different blast radii and must not share a rotation.
+    OrgPaymobConfigRepositoryFactory orgPaymobConfigRepositoryFactory =
+        new OrgPaymobConfigRepositoryFactoryImpl();
+    this.paymobSecretBox = SecretBox.fromBase64Key(System.getenv("PAYMOB_CREDENTIAL_KEY"));
+    this.orgPaymobConfigRepositoryFactory = orgPaymobConfigRepositoryFactory;
+    this.orgPaymobService =
+        new OrgPaymobService(dsl, orgPaymobConfigRepositoryFactory, paymobSecretBox);
     // Web Push (stories/web_push_channel.md). The SecretBox rule: both keys unset → disabled (the
     // logging sender, and GET /api/me/push/config says enabled:false); a key present but malformed
     // → startup failure. The push leg draws on the email attempt budget unless told otherwise.
@@ -826,6 +847,7 @@ public class AppConfig {
             listingReviewRepositoryFactory,
             collectionRepositoryFactory,
             orgWhatsAppConfigRepositoryFactory,
+            orgPaymobConfigRepositoryFactory,
             storefrontCrawlRepositoryFactory,
             objectStorage,
             salesOrderService,

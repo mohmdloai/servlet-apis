@@ -34,6 +34,12 @@ public class StorefrontProfileResponse {
    */
   private boolean whatsappEnabled;
 
+  /**
+   * The payment methods this store currently accepts ({@code stories/paymob_connect.md}). {@code
+   * instapay} always present; {@code card} joins it iff the org has an ACTIVE Paymob connection.
+   */
+  private List<String> paymentMethods;
+
   /** V83: false = the storefront must noindex every page of this store. Always on the wire. */
   private boolean discoverable;
 
@@ -56,6 +62,7 @@ public class StorefrontProfileResponse {
     r.taxRate = v.taxRate();
     r.shippingFee = v.shippingFee();
     r.whatsappEnabled = v.whatsappEnabled();
+    r.paymentMethods = v.paymentMethods();
     r.discoverable = v.discoverable();
     return r;
   }
@@ -106,6 +113,10 @@ public class StorefrontProfileResponse {
 
   public boolean isWhatsappEnabled() {
     return whatsappEnabled;
+  }
+
+  public List<String> getPaymentMethods() {
+    return paymentMethods;
   }
 
   public boolean isDiscoverable() {

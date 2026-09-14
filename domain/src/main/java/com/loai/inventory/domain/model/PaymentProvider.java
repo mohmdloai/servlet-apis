@@ -9,6 +9,9 @@ public enum PaymentProvider {
   INSTAPAY_MANUAL("instapay_manual"),
   INSTAPAY_IN_STORE("instapay_in_store"),
   CASH("cash");
+  // 'paymob_card' exists on the DB enum since V98 (paymob_connect.md) but gets no constant here
+  // until slice 2 (V99) actually writes a payment_transaction with it — see
+  // docs/paymob-card-epic.md.
 
   private final String dbLiteral;
 

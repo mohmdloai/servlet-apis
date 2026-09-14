@@ -11,6 +11,7 @@ import com.loai.inventory.domain.model.CategoryTranslation;
 import com.loai.inventory.domain.model.ListingSort;
 import com.loai.inventory.domain.model.ListingStatus;
 import com.loai.inventory.domain.model.Org;
+import com.loai.inventory.domain.model.OrgPaymobConfig;
 import com.loai.inventory.domain.model.OrgWhatsAppConfig;
 import com.loai.inventory.domain.model.ProductListing;
 import com.loai.inventory.domain.model.ProductListingImage;
@@ -25,6 +26,7 @@ import com.loai.inventory.domain.repository.CollectionRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
 import com.loai.inventory.domain.repository.ListingReviewRepository;
 import com.loai.inventory.domain.repository.ListingReviewRepositoryFactory;
+import com.loai.inventory.domain.repository.OrgPaymobConfigRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgWhatsAppConfigRepositoryFactory;
@@ -68,6 +70,7 @@ public class StorefrontService {
   private final ListingReviewRepositoryFactory reviewRepoFactory;
   private final CollectionRepositoryFactory collectionRepoFactory;
   private final OrgWhatsAppConfigRepositoryFactory whatsAppConfigRepoFactory;
+  private final OrgPaymobConfigRepositoryFactory paymobConfigRepoFactory;
   private final StorefrontCrawlRepositoryFactory crawlRepoFactory;
   private final ObjectStorage storage;
   private final SalesOrderService salesOrderService;
@@ -83,6 +86,7 @@ public class StorefrontService {
       ListingReviewRepositoryFactory reviewRepoFactory,
       CollectionRepositoryFactory collectionRepoFactory,
       OrgWhatsAppConfigRepositoryFactory whatsAppConfigRepoFactory,
+      OrgPaymobConfigRepositoryFactory paymobConfigRepoFactory,
       StorefrontCrawlRepositoryFactory crawlRepoFactory,
       ObjectStorage storage,
       SalesOrderService salesOrderService,
@@ -96,6 +100,7 @@ public class StorefrontService {
     this.reviewRepoFactory = reviewRepoFactory;
     this.collectionRepoFactory = collectionRepoFactory;
     this.whatsAppConfigRepoFactory = whatsAppConfigRepoFactory;
+    this.paymobConfigRepoFactory = paymobConfigRepoFactory;
     this.crawlRepoFactory = crawlRepoFactory;
     this.storage = storage;
     this.salesOrderService = salesOrderService;
@@ -248,6 +253,15 @@ public class StorefrontService {
        */
       boolean whatsappEnabled,
       /**
+       * The payment methods this store currently accepts, for the checkout screen to offer. {@code
+       * instapay} is always present — manual InstaPay is the cheaper rail and stays a first-class
+       * option indefinitely (epic §"The two owner decisions") — {@code card} joins it iff the org
+       * has an ACTIVE {@code org_paymob_config} (epic slice 1, {@code stories/paymob_connect.md}).
+       * An org that never connects Paymob is byte-identical to before this field existed, aside
+       * from the field itself.
+       */
+      List<String> paymentMethods,
+      /**
        * The V83 merchant opt-out from search discovery. {@code false} = the storefront app must
        * render every page of this store {@code noindex} — the third enforcement point, and the one
        * that stops an externally-linked hidden store from entering the index anyway (the store
@@ -309,7 +323,19 @@ public class StorefrontService {
             .findByOrgId(org.getId())
             .map(OrgWhatsAppConfig::isActive)
             .orElse(false),
+        paymentMethods(org.getId()),
         org.isDiscoverable());
+  }
+
+  /** {@code instapay} always; {@code card} iff an ACTIVE {@code org_paymob_config} exists. */
+  private List<String> paymentMethods(UUID orgId) {
+    boolean cardActive =
+        paymobConfigRepoFactory
+            .create(rootDsl)
+            .findByOrgId(orgId)
+            .map(OrgPaymobConfig::isActive)
+            .orElse(false);
+    return cardActive ? List.of("instapay", "card") : List.of("instapay");
   }
 
   /**
