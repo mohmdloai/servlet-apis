@@ -20,6 +20,14 @@ public record OrgPaymobConfig(
     String publicKey,
     String secretKeyEncrypted,
     String hmacSecretEncrypted,
+    /**
+     * The account's legacy API key (V100, {@code stories/paymob_card_reliability.md}), sealed like
+     * the other two. Paymob's transaction-inquiry endpoint authenticates only with the auth token
+     * minted from it — the secret key is refused there — so it is what the poller uses to settle a
+     * payment whose webhook never arrived. {@code null} on a row connected before V100: such an org
+     * offers card but cannot be inquired about, and its stuck intents can only expire.
+     */
+    String apiKeyEncrypted,
     int cardIntegrationId,
     String region,
     Status status,
@@ -38,5 +46,10 @@ public record OrgPaymobConfig(
 
   public boolean isActive() {
     return status == Status.ACTIVE;
+  }
+
+  /** Whether the poller can ask Paymob about this org's intents at all. */
+  public boolean canInquire() {
+    return apiKeyEncrypted != null && !apiKeyEncrypted.isBlank();
   }
 }

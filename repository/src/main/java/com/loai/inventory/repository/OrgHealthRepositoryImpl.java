@@ -1,6 +1,7 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.PAYMENT;
+import static com.loai.inventory.repository.generated.Tables.PAYMENT_INTENT;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static com.loai.inventory.repository.generated.Tables.USER_ORG_ROLE;
@@ -12,6 +13,8 @@ import com.loai.inventory.repository.generated.enums.PaymentDirection;
 import com.loai.inventory.repository.generated.enums.PaymentStatus;
 import com.loai.inventory.repository.generated.enums.PaymentVerificationStatus;
 import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,7 +66,17 @@ public final class OrgHealthRepositoryImpl implements OrgHealthRepository {
                 .and(
                     PAYMENT_TRANSACTION.VERIFICATION_STATUS.eq(
                         PaymentVerificationStatus.UNVERIFIED)));
-    return new OrgHealth(members, pending, disputes, unallocated, claims);
+    // Card intents the Paymob poller could not settle or fail before their own deadline
+    // (stories/paymob_card_reliability.md) — idx_payment_intent_pending.
+    long stuckIntents =
+        dsl.fetchCount(
+            PAYMENT_INTENT,
+            PAYMENT_INTENT
+                .ORG_ID
+                .eq(orgId)
+                .and(PAYMENT_INTENT.STATUS.eq("PENDING"))
+                .and(PAYMENT_INTENT.EXPIRES_AT.lt(OffsetDateTime.now(ZoneOffset.UTC))));
+    return new OrgHealth(members, pending, disputes, unallocated, claims, stuckIntents);
   }
 
   @Override

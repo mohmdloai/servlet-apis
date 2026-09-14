@@ -36,6 +36,7 @@ public final class OrgPaymobConfigRepositoryImpl implements OrgPaymobConfigRepos
       String publicKey,
       String secretKeyEncrypted,
       String hmacSecretEncrypted,
+      String apiKeyEncrypted,
       int cardIntegrationId,
       String region) {
     OrgPaymobConfigRecord record =
@@ -44,6 +45,7 @@ public final class OrgPaymobConfigRepositoryImpl implements OrgPaymobConfigRepos
             .set(ORG_PAYMOB_CONFIG.PUBLIC_KEY, publicKey)
             .set(ORG_PAYMOB_CONFIG.SECRET_KEY_ENCRYPTED, secretKeyEncrypted)
             .set(ORG_PAYMOB_CONFIG.HMAC_SECRET_ENCRYPTED, hmacSecretEncrypted)
+            .set(ORG_PAYMOB_CONFIG.API_KEY_ENCRYPTED, apiKeyEncrypted)
             .set(ORG_PAYMOB_CONFIG.CARD_INTEGRATION_ID, cardIntegrationId)
             .set(ORG_PAYMOB_CONFIG.REGION, region)
             .set(ORG_PAYMOB_CONFIG.STATUS, OrgPaymobConfig.Status.ACTIVE.name())
@@ -52,6 +54,7 @@ public final class OrgPaymobConfigRepositoryImpl implements OrgPaymobConfigRepos
             .set(ORG_PAYMOB_CONFIG.PUBLIC_KEY, publicKey)
             .set(ORG_PAYMOB_CONFIG.SECRET_KEY_ENCRYPTED, secretKeyEncrypted)
             .set(ORG_PAYMOB_CONFIG.HMAC_SECRET_ENCRYPTED, hmacSecretEncrypted)
+            .set(ORG_PAYMOB_CONFIG.API_KEY_ENCRYPTED, apiKeyEncrypted)
             .set(ORG_PAYMOB_CONFIG.CARD_INTEGRATION_ID, cardIntegrationId)
             .set(ORG_PAYMOB_CONFIG.REGION, region)
             .set(ORG_PAYMOB_CONFIG.STATUS, OrgPaymobConfig.Status.ACTIVE.name())
@@ -76,6 +79,7 @@ public final class OrgPaymobConfigRepositoryImpl implements OrgPaymobConfigRepos
         r.getPublicKey(),
         r.getSecretKeyEncrypted(),
         r.getHmacSecretEncrypted(),
+        r.getApiKeyEncrypted(),
         r.getCardIntegrationId(),
         r.getRegion(),
         OrgPaymobConfig.Status.valueOf(r.getStatus()),

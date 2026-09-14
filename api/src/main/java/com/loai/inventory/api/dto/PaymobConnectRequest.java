@@ -9,6 +9,7 @@ public class PaymobConnectRequest {
   private String publicKey;
   private String secretKey;
   private String hmacSecret;
+  private String apiKey;
   private Integer cardIntegrationId;
   private String region;
 
@@ -26,6 +27,10 @@ public class PaymobConnectRequest {
 
   public void setSecretKey(String secretKey) {
     this.secretKey = secretKey;
+  }
+
+  public String getApiKey() {
+    return apiKey;
   }
 
   public String getHmacSecret() {

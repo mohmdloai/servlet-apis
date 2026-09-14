@@ -51,7 +51,7 @@ class PaymobHandlerAuthTest {
   private static final UUID ORG = UUID.randomUUID();
   private static final String SECURITY_CONTEXT_ATTR = "securityContext";
   private static final String CONNECT_BODY =
-      "{\"public_key\":\"pk\",\"secret_key\":\"sk\",\"hmac_secret\":\"hs\","
+      "{\"public_key\":\"pk\",\"secret_key\":\"sk\",\"hmac_secret\":\"hs\",\"api_key\":\"ak\","
           + "\"card_integration_id\":123,\"region\":\"EGYPT\"}";
 
   private SecurityContext ctxWith(OrgRole role) {
@@ -66,6 +66,7 @@ class PaymobHandlerAuthTest {
         "pk",
         123,
         "EGYPT",
+        true,
         OffsetDateTime.now(),
         OffsetDateTime.now());
   }
@@ -117,20 +118,21 @@ class PaymobHandlerAuthTest {
         .handle("POST", reqWith(ctxWith(OrgRole.MANAGER), CONNECT_BODY), resp.mock, ORG, "");
 
     assertEquals(403, resp.status, "MANAGER must be forbidden from connect (requires OWNER)");
-    verify(service, never()).connect(any(), any(), any(), any(), anyInt(), any());
+    verify(service, never()).connect(any(), any(), any(), any(), any(), anyInt(), any());
   }
 
   @Test
   void connect_allowedForOwner_serviceCalled() throws IOException {
     OrgPaymobService service = Mockito.mock(OrgPaymobService.class);
-    when(service.connect(eq(ORG), any(), any(), any(), eq(123), eq("EGYPT"))).thenReturn(aStatus());
+    when(service.connect(eq(ORG), any(), any(), any(), any(), eq(123), eq("EGYPT")))
+        .thenReturn(aStatus());
     Resp resp = new Resp();
 
     handler(service)
         .handle("POST", reqWith(ctxWith(OrgRole.OWNER), CONNECT_BODY), resp.mock, ORG, "");
 
     assertEquals(200, resp.status, "OWNER connect must succeed");
-    verify(service).connect(eq(ORG), eq("pk"), eq("sk"), eq("hs"), eq(123), eq("EGYPT"));
+    verify(service).connect(eq(ORG), eq("pk"), eq("sk"), eq("hs"), eq("ak"), eq(123), eq("EGYPT"));
   }
 
   @Test
@@ -195,7 +197,7 @@ class PaymobHandlerAuthTest {
         .handle("PUT", reqWith(ctxWith(OrgRole.OWNER), CONNECT_BODY), resp.mock, ORG, "");
 
     assertEquals(405, resp.status, "PUT must be 405, not 400 or 404");
-    verify(service, never()).connect(any(), any(), any(), any(), anyInt(), any());
+    verify(service, never()).connect(any(), any(), any(), any(), any(), anyInt(), any());
   }
 
   @Test
@@ -208,7 +210,7 @@ class PaymobHandlerAuthTest {
         .handle("POST", reqWith(ctxWith(OrgRole.OWNER), CONNECT_BODY), resp.mock, ORG, "/enable");
 
     assertEquals(405, resp.status, "any /paymob/... sub-path must be 405");
-    verify(service, never()).connect(any(), any(), any(), any(), anyInt(), any());
+    verify(service, never()).connect(any(), any(), any(), any(), any(), anyInt(), any());
   }
 
   @Test
@@ -220,7 +222,7 @@ class PaymobHandlerAuthTest {
         .handle("POST", reqWith(ctxWith(OrgRole.OWNER), "{ not json"), resp.mock, ORG, "");
 
     assertEquals(400, resp.status, "malformed JSON must be 400 (not 500, not a swallowed null)");
-    verify(service, never()).connect(any(), any(), any(), any(), anyInt(), any());
+    verify(service, never()).connect(any(), any(), any(), any(), any(), anyInt(), any());
   }
 
   @Test
@@ -229,12 +231,12 @@ class PaymobHandlerAuthTest {
     Resp resp = new Resp();
 
     String body =
-        "{\"public_key\":\"pk\",\"secret_key\":\"sk\",\"hmac_secret\":\"hs\","
+        "{\"public_key\":\"pk\",\"secret_key\":\"sk\",\"hmac_secret\":\"hs\",\"api_key\":\"ak\","
             + "\"card_integration_id\":\"abc\",\"region\":\"EGYPT\"}";
     handler(service).handle("POST", reqWith(ctxWith(OrgRole.OWNER), body), resp.mock, ORG, "");
 
     assertEquals(400, resp.status, "a non-numeric card_integration_id must be 400, not 500");
-    verify(service, never()).connect(any(), any(), any(), any(), anyInt(), any());
+    verify(service, never()).connect(any(), any(), any(), any(), any(), anyInt(), any());
   }
 
   @Test
@@ -245,7 +247,7 @@ class PaymobHandlerAuthTest {
     handler(service).handle("POST", reqWith(ctxWith(OrgRole.OWNER), ""), resp.mock, ORG, "");
 
     assertEquals(400, resp.status, "empty body must be 400 — connect always requires a body");
-    verify(service, never()).connect(any(), any(), any(), any(), anyInt(), any());
+    verify(service, never()).connect(any(), any(), any(), any(), any(), anyInt(), any());
   }
 
   // harness (mirrors PaymentDisputeHandlerAuthTest)

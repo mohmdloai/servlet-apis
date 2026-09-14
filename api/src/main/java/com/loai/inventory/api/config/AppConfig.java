@@ -3,6 +3,7 @@ package com.loai.inventory.api.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loai.inventory.api.job.NotificationDeliverySweeperJob;
 import com.loai.inventory.api.job.OrderTtlSweeperJob;
+import com.loai.inventory.api.job.PaymobInquiryJob;
 import com.loai.inventory.api.job.SupportTicketAutoCloseJob;
 import com.loai.inventory.api.job.UnverifiedAccountPurgeJob;
 import com.loai.inventory.api.servlet.AuthzHelper;
@@ -141,6 +142,7 @@ import com.loai.inventory.service.PaymentDisputeService;
 import com.loai.inventory.service.PaymentIntentService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.PaymobInquiryService;
 import com.loai.inventory.service.PaymobWebhookService;
 import com.loai.inventory.service.PresignedOgImageSource;
 import com.loai.inventory.service.ProductListingService;
@@ -232,6 +234,7 @@ public class AppConfig {
   public static final String JOB_NOTIFICATION_DELIVERY_SWEEPER = "notification-delivery-sweeper";
   public static final String JOB_UNVERIFIED_ACCOUNT_PURGE = "unverified-account-purge";
   public static final String JOB_SUPPORT_TICKET_AUTO_CLOSE = "support-ticket-auto-close";
+  public static final String JOB_PAYMOB_INQUIRY = "paymob-inquiry";
 
   // Infrastructure
   public final HikariDataSource dataSource;
@@ -358,6 +361,7 @@ public class AppConfig {
   public final PaymobClient paymobClient;
   public final PaymentIntentService paymentIntentService;
   public final PaymobWebhookService paymobWebhookService;
+  public final PaymobInquiryService paymobInquiryService;
 
   /**
    * Web Push (V96): the VAPID identity from {@code WEB_PUSH_VAPID_*}, disabled when unset; the
@@ -405,6 +409,7 @@ public class AppConfig {
   public final NotificationDeliverySweeperJob notificationDeliverySweeperJob;
   public final UnverifiedAccountPurgeJob unverifiedAccountPurgeJob;
   public final SupportTicketAutoCloseJob supportTicketAutoCloseJob;
+  public final PaymobInquiryJob paymobInquiryJob;
   private final boolean jobRunrStarted;
 
   public AppConfig() {
@@ -842,8 +847,23 @@ public class AppConfig {
             paymobSecretBox,
             paymentIntentRepositoryFactory,
             paymentTransactionRepositoryFactory,
+            paymentRepositoryFactory,
             salesOrderRepositoryFactory,
             paymentService);
+    // Slice 3 (stories/paymob_card_reliability.md): the poller that settles a payment whose
+    // webhook never arrived. The grace window keeps it off intents the shopper is still typing
+    // into; the same settle door as the webhook keeps the two paths indistinguishable downstream.
+    long inquiryGraceMinutes = parseLong(System.getenv("PAYMOB_INQUIRY_GRACE_MINUTES"), 3L);
+    this.paymobInquiryService =
+        new PaymobInquiryService(
+            dsl,
+            objectMapper,
+            paymentIntentRepositoryFactory,
+            orgPaymobConfigRepositoryFactory,
+            paymobSecretBox,
+            paymobClient,
+            paymobWebhookService,
+            Duration.ofMinutes(inquiryGraceMinutes));
     this.invoiceService =
         new InvoiceService(
             salesInvoiceRepositoryFactory,
@@ -1006,6 +1026,9 @@ public class AppConfig {
     this.supportTicketAutoCloseJob =
         new SupportTicketAutoCloseJob(supportTicketService, autoCloseDays, autoCloseBatchLimit);
 
+    int inquiryBatchLimit = (int) parseLong(System.getenv("PAYMOB_INQUIRY_BATCH_LIMIT"), 100L);
+    this.paymobInquiryJob = new PaymobInquiryJob(paymobInquiryService, inquiryBatchLimit);
+
     // The background scheduler is gated so tests (and any deployment that wants to drive expiry
     // only through POST /api/admin/sweep) can keep expiry deterministic. Default: enabled.
     boolean enableSweeper =
@@ -1074,6 +1097,9 @@ public class AppConfig {
     crons.put(
         JOB_SUPPORT_TICKET_AUTO_CLOSE,
         getenvOrDefault("SUPPORT_AUTO_CLOSE_INTERVAL", "0 15 * * * *"));
+    // Every two minutes: a card intent's TTL is 20 minutes and the grace window 3, so a lost
+    // webhook is settled well inside the order hold (stories/paymob_card_reliability.md).
+    crons.put(JOB_PAYMOB_INQUIRY, getenvOrDefault("PAYMOB_INQUIRY_INTERVAL", "0 */2 * * * *"));
     return crons;
   }
 
@@ -1127,6 +1153,9 @@ public class AppConfig {
             if (type.isInstance(supportTicketAutoCloseJob)) {
               return type.cast(supportTicketAutoCloseJob);
             }
+            if (type.isInstance(paymobInquiryJob)) {
+              return type.cast(paymobInquiryJob);
+            }
             throw new IllegalArgumentException("No JobRunr bean for " + type.getName());
           }
         };
@@ -1158,6 +1187,11 @@ public class AppConfig {
     scheduler.<SupportTicketAutoCloseJob>scheduleRecurrently(
         JOB_SUPPORT_TICKET_AUTO_CLOSE, autoCloseCron, SupportTicketAutoCloseJob::run);
     log.info("Support-ticket auto-close scheduled (cron='{}')", autoCloseCron);
+
+    String inquiryCron = jobCrons.get(JOB_PAYMOB_INQUIRY);
+    scheduler.<PaymobInquiryJob>scheduleRecurrently(
+        JOB_PAYMOB_INQUIRY, inquiryCron, PaymobInquiryJob::run);
+    log.info("Paymob inquiry poller scheduled (cron='{}')", inquiryCron);
     return true;
   }
 

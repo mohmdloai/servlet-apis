@@ -205,6 +205,7 @@ class PaymobPayIT {
         PaymobFixture.PUBLIC_KEY,
         PaymobFixture.SECRET_KEY,
         PaymobFixture.HMAC_SECRET,
+        PaymobFixture.API_KEY,
         7777,
         "EGYPT");
 

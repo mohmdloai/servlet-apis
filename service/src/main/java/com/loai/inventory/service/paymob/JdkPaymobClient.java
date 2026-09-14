@@ -12,6 +12,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -91,6 +92,109 @@ public final class JdkPaymobClient implements PaymobClient {
       throw new UpstreamFailureException("payment provider rejected the payment request");
     }
     return parse(config, response.body());
+  }
+
+  @Override
+  public String authenticate(OrgPaymobConfig config, String apiKey) {
+    ObjectNode body = mapper.createObjectNode();
+    body.put("api_key", apiKey);
+    HttpResponse<String> response =
+        send(
+            config,
+            HttpRequest.newBuilder(
+                    URI.create(hostForRegion.apply(config.region()) + "/api/auth/tokens"))
+                .timeout(requestTimeout)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
+                .build(),
+            "auth token");
+    int status = response.statusCode();
+    if (status < 200 || status >= 300) {
+      log.warn(
+          "Paymob refused the auth-token exchange for org {} (HTTP {}): {}",
+          config.orgId(),
+          status,
+          truncate(response.body()));
+      throw new UpstreamFailureException("payment provider rejected the API key");
+    }
+    JsonNode root = readTree(response.body());
+    String token = root == null ? null : textOrNull(root.path("token"));
+    if (token == null) {
+      throw new UpstreamFailureException("payment provider answered without an auth token");
+    }
+    return token;
+  }
+
+  @Override
+  public Optional<String> inquireTransaction(
+      OrgPaymobConfig config, String authToken, String paymobOrderId, String merchantOrderId) {
+    ObjectNode body = mapper.createObjectNode();
+    if (paymobOrderId != null && !paymobOrderId.isBlank()) {
+      body.put("order_id", paymobOrderId);
+    } else {
+      body.put("merchant_order_id", merchantOrderId);
+    }
+    HttpResponse<String> response =
+        send(
+            config,
+            HttpRequest.newBuilder(
+                    URI.create(
+                        hostForRegion.apply(config.region())
+                            + "/api/ecommerce/orders/transaction_inquiry"))
+                .timeout(requestTimeout)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .header("Authorization", "Bearer " + authToken)
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
+                .build(),
+            "transaction inquiry");
+    int status = response.statusCode();
+    if (status == 404) {
+      return Optional.empty(); // no transaction for this order yet
+    }
+    if (status == 401 || status == 403) {
+      log.warn(
+          "Paymob rejected the inquiry token for org {} (HTTP {}): {}",
+          config.orgId(),
+          status,
+          truncate(response.body()));
+      throw new UpstreamFailureException("payment provider rejected the inquiry token");
+    }
+    if (status < 200 || status >= 300) {
+      log.warn(
+          "Paymob inquiry failed for org {} (HTTP {}): {}",
+          config.orgId(),
+          status,
+          truncate(response.body()));
+      throw new UpstreamFailureException("payment provider inquiry failed");
+    }
+    JsonNode root = readTree(response.body());
+    if (root == null || !root.isObject() || textOrNull(root.path("id")) == null) {
+      // {"detail": "…"} with a 200, or an empty object: nothing to settle from.
+      return Optional.empty();
+    }
+    return Optional.of(response.body());
+  }
+
+  private HttpResponse<String> send(OrgPaymobConfig config, HttpRequest request, String what) {
+    try {
+      return http.send(request, HttpResponse.BodyHandlers.ofString());
+    } catch (IOException e) {
+      log.warn("Paymob {} call failed for org {}: {}", what, config.orgId(), e.toString());
+      throw new UpstreamFailureException("payment provider did not answer", e);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new UpstreamFailureException("payment provider call interrupted", e);
+    }
+  }
+
+  private JsonNode readTree(String body) {
+    try {
+      return mapper.readTree(body == null ? "" : body);
+    } catch (IOException e) {
+      return null;
+    }
   }
 
   private String body(IntentionRequest req) {

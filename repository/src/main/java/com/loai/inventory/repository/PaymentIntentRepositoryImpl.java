@@ -8,6 +8,7 @@ import com.loai.inventory.domain.repository.PaymentIntentRepository;
 import com.loai.inventory.repository.generated.tables.records.PaymentIntentRecord;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -97,6 +98,31 @@ public final class PaymentIntentRepositoryImpl implements PaymentIntentRepositor
         .set(PAYMENT_INTENT.UPDATED_AT, intent.getUpdatedAt())
         .where(PAYMENT_INTENT.ID.eq(intent.getId()))
         .execute();
+  }
+
+  @Override
+  public List<PaymentIntent> findPendingCreatedBefore(OffsetDateTime cutoff, int limit) {
+    return dsl.selectFrom(PAYMENT_INTENT)
+        .where(
+            PAYMENT_INTENT
+                .STATUS
+                .eq(PaymentIntent.Status.PENDING.name())
+                .and(PAYMENT_INTENT.CREATED_AT.lt(cutoff)))
+        .orderBy(PAYMENT_INTENT.CREATED_AT.asc(), PAYMENT_INTENT.ID.asc())
+        .limit(limit)
+        .fetch()
+        .map(PaymentIntentRepositoryImpl::toModel);
+  }
+
+  @Override
+  public long countStuck(UUID orgId, OffsetDateTime now) {
+    return dsl.fetchCount(
+        PAYMENT_INTENT,
+        PAYMENT_INTENT
+            .ORG_ID
+            .eq(orgId)
+            .and(PAYMENT_INTENT.STATUS.eq(PaymentIntent.Status.PENDING.name()))
+            .and(PAYMENT_INTENT.EXPIRES_AT.lt(now)));
   }
 
   @Override

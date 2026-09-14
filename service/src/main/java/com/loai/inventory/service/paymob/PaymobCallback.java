@@ -29,6 +29,24 @@ public final class PaymobCallback {
   }
 
   /**
+   * Wrap a bare transaction object — what Paymob's transaction-inquiry API returns — in the
+   * callback envelope, so the poller and the webhook parse and settle the same shape. {@code
+   * source} is kept in the stored {@code raw_payload} so the ledger says which door the record came
+   * through.
+   */
+  public static String envelopeForInquiry(ObjectMapper mapper, JsonNode transaction) {
+    com.fasterxml.jackson.databind.node.ObjectNode root = mapper.createObjectNode();
+    root.put("type", TYPE_TRANSACTION);
+    root.put("source", "inquiry");
+    root.set("obj", transaction);
+    try {
+      return mapper.writeValueAsString(root);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new IllegalStateException("could not serialise the inquiry envelope", e);
+    }
+  }
+
+  /**
    * @throws IllegalArgumentException when the body is not a JSON object carrying an {@code obj}
    *     object — nothing about such a body can be verified
    */
@@ -141,6 +159,46 @@ public final class PaymobCallback {
 
   public boolean hasParentTransaction() {
     return obj.path("has_parent_transaction").asBoolean(false);
+  }
+
+  /** {@code obj.is_refund} — this transaction IS a refund (a child of the one it reverses). */
+  public boolean isRefund() {
+    return obj.path("is_refund").asBoolean(false);
+  }
+
+  /** {@code obj.is_void} — this transaction IS a void (a child of the one it reverses). */
+  public boolean isVoid() {
+    return obj.path("is_void").asBoolean(false);
+  }
+
+  /**
+   * Money leaving: a child transaction that refunds or voids its parent. Paymob flags the child
+   * with {@code is_refund}/{@code is_void}; the parent's own {@code is_refunded}/{@code is_voided}
+   * flip too and its callback may be re-sent, which lands on the parent's dedupe as a replay.
+   */
+  public boolean isReversal() {
+    return hasParentTransaction() && (isRefund() || isVoid() || isRefunded() || isVoided());
+  }
+
+  /** {@code obj.parent_transaction} — the reversed transaction's id, or null. */
+  public String parentTransactionId() {
+    JsonNode n = obj.path("parent_transaction");
+    if (n.isMissingNode() || n.isNull()) {
+      return null;
+    }
+    if (n.isObject()) {
+      return text(n.path("id"));
+    }
+    return text(n);
+  }
+
+  /**
+   * A signature carried INSIDE the object ({@code obj.hmac}), when a transaction is handed to us by
+   * an API response rather than a callback. Null when absent — the poller then trusts the response
+   * as an authenticated call it made itself.
+   */
+  public String embeddedHmac() {
+    return text(obj.path("hmac"));
   }
 
   /** {@code obj.order.id} — the Paymob-side order; in the signed field list. */

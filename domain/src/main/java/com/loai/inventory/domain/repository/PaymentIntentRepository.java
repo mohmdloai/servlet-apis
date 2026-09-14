@@ -3,6 +3,7 @@ package com.loai.inventory.domain.repository;
 import com.loai.inventory.domain.model.PaymentIntent;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -29,6 +30,26 @@ public interface PaymentIntentRepository {
 
   /** Persist the mutable columns: Paymob's handles, status, attribution, {@code updated_at}. */
   void update(PaymentIntent intent);
+
+  /**
+   * The inquiry poller's work list ({@code stories/paymob_card_reliability.md}): {@code PENDING}
+   * intents created before {@code cutoff} (the grace window — sweeping an intent seconds after
+   * creation races the shopper still typing and the webhook itself), oldest first, at most {@code
+   * limit}. Served by {@code idx_payment_intent_pending}.
+   *
+   * <p><b>Deliberately un-scoped by org</b>, like {@code
+   * SalesOrderRepository.findExpiredPendingIds}: the sweeper is a platform job that walks every
+   * tenant's backlog; every row still carries its {@code org_id} and every write downstream is
+   * org-scoped through it.
+   */
+  List<PaymentIntent> findPendingCreatedBefore(OffsetDateTime cutoff, int limit);
+
+  /**
+   * Intents stuck {@code PENDING} past their own {@code expires_at} — usually an abandoned
+   * checkout, occasionally a misconfigured integration, and after slice 3 always something the
+   * poller could not resolve. A count, not a queue ({@code OrgHealth.cardIntentsStuck}).
+   */
+  long countStuck(UUID orgId, OffsetDateTime now);
 
   /**
    * Retire every live ({@code PENDING}) intent of an org — on a Paymob reconnect or disconnect,

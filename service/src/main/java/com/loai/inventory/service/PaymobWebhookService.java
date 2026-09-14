@@ -5,6 +5,7 @@ import com.loai.inventory.common.crypto.PaymobSignature;
 import com.loai.inventory.common.crypto.SecretBox;
 import com.loai.inventory.domain.model.OrderStatus;
 import com.loai.inventory.domain.model.OrgPaymobConfig;
+import com.loai.inventory.domain.model.Payment;
 import com.loai.inventory.domain.model.PaymentIntent;
 import com.loai.inventory.domain.model.PaymentProvider;
 import com.loai.inventory.domain.model.PaymentReconciliationStatus;
@@ -13,6 +14,8 @@ import com.loai.inventory.domain.model.SalesOrder;
 import com.loai.inventory.domain.repository.OrgPaymobConfigRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentIntentRepository;
 import com.loai.inventory.domain.repository.PaymentIntentRepositoryFactory;
+import com.loai.inventory.domain.repository.PaymentRepository;
+import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepository;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
@@ -72,7 +75,9 @@ public final class PaymobWebhookService {
       /** A declined attempt: recorded as a closed row, the intent FAILED, the order untouched. */
       FAILED,
       /** Money arrived that matched no intent / the wrong amount / a closed order: ORPHAN row. */
-      ORPHAN
+      ORPHAN,
+      /** Money left: a refund/void child recorded as a DEBIT against the original's payment. */
+      REVERSED
     }
 
     public boolean rejected() {
@@ -90,6 +95,7 @@ public final class PaymobWebhookService {
   private final SecretBox secretBox;
   private final PaymentIntentRepositoryFactory intentRepoFactory;
   private final PaymentTransactionRepositoryFactory txnRepoFactory;
+  private final PaymentRepositoryFactory paymentRepoFactory;
   private final SalesOrderRepositoryFactory salesOrderRepoFactory;
   private final PaymentService paymentService;
 
@@ -100,6 +106,7 @@ public final class PaymobWebhookService {
       SecretBox secretBox,
       PaymentIntentRepositoryFactory intentRepoFactory,
       PaymentTransactionRepositoryFactory txnRepoFactory,
+      PaymentRepositoryFactory paymentRepoFactory,
       SalesOrderRepositoryFactory salesOrderRepoFactory,
       PaymentService paymentService) {
     this.rootDsl = rootDsl;
@@ -108,6 +115,7 @@ public final class PaymobWebhookService {
     this.secretBox = secretBox;
     this.intentRepoFactory = intentRepoFactory;
     this.txnRepoFactory = txnRepoFactory;
+    this.paymentRepoFactory = paymentRepoFactory;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
     this.paymentService = paymentService;
   }
@@ -164,6 +172,24 @@ public final class PaymobWebhookService {
       return Outcome.of(Outcome.Kind.REJECTED, "signature mismatch");
     }
 
+    return process(orgId, config.get(), cb, rawBody);
+  }
+
+  /**
+   * The inquiry poller's door ({@code stories/paymob_card_reliability.md}): the same classification
+   * and the same settlement as the webhook, for a transaction object Paymob returned to an
+   * authenticated call we made ourselves over TLS — there is no signature to check and no third
+   * party to impersonate anyone. A webhook and a poll that describe one transaction must be
+   * indistinguishable downstream, or the two paths drift and the rare one is the buggy one; the
+   * insert race on {@code (provider, provider_ref)} decides who got there first, and the loser
+   * takes the idempotent-replay branch.
+   */
+  public Outcome settleFromInquiry(
+      UUID orgId, OrgPaymobConfig config, PaymobCallback cb, String rawBody) {
+    return process(orgId, config, cb, rawBody);
+  }
+
+  private Outcome process(UUID orgId, OrgPaymobConfig config, PaymobCallback cb, String rawBody) {
     String txnId = cb.transactionId();
     if (txnId == null || txnId.isBlank()) {
       return Outcome.of(Outcome.Kind.REJECTED, "transaction has no id");
@@ -184,27 +210,114 @@ public final class PaymobWebhookService {
           orgId);
       return Outcome.of(Outcome.Kind.IGNORED, "auth-only transaction");
     }
-    if (cb.hasParentTransaction() || ((cb.isRefunded() || cb.isVoided()) && !cb.success())) {
-      log.warn(
-          "Paymob txn {} for org {} is a refund/void (parent={}, refunded={}, voided={}) —"
-              + " acknowledged; DEBIT recording is slice 3",
-          txnId,
-          orgId,
-          cb.hasParentTransaction(),
-          cb.isRefunded(),
-          cb.isVoided());
-      return Outcome.of(Outcome.Kind.IGNORED, "refund or void");
-    }
     long amountCents = cb.amountCents();
     if (amountCents <= 0) {
       log.warn(
           "Paymob txn {} for org {} carries amount_cents {} — rejected", txnId, orgId, amountCents);
       return Outcome.of(Outcome.Kind.REJECTED, "invalid amount");
     }
+    ZoneId paymobZone = PaymobHosts.zoneForRegion(config.region());
 
-    // 6–8. Everything that writes, in one transaction.
-    ZoneId paymobZone = PaymobHosts.zoneForRegion(config.get().region());
+    // 6–8. Everything that writes, in one transaction. A refund/void child is money LEAVING and
+    //      takes its own path (slice 3); a parent re-sent with is_refunded/is_voided flipped lands
+    //      on the parent's dedupe below as a replay.
+    if (cb.isReversal()) {
+      if (!cb.success()) {
+        log.warn(
+            "Paymob reversal {} for org {} did not succeed — acknowledged, nothing moved",
+            txnId,
+            orgId);
+        return Outcome.of(Outcome.Kind.IGNORED, "failed reversal");
+      }
+      return rootDsl.transactionResult(
+          cfg -> recordReversal(DSL.using(cfg), orgId, cb, rawBody, paymobZone));
+    }
     return rootDsl.transactionResult(cfg -> record(DSL.using(cfg), orgId, cb, rawBody, paymobZone));
+  }
+
+  /**
+   * Money leaving ({@code stories/paymob_card_reliability.md}): a refund or void Paymob executed on
+   * the merchant's side. Recorded as a gateway-verified DEBIT under the child's own id, linked to
+   * the original through {@code raw_payload.obj.parent_transaction}; then the original's {@link
+   * Payment} is reduced the way an executed refund reduces it — when that is legal. It is NOT legal
+   * for money already allocated to an invoice (or a DISPUTED payment): reversing a PAID order
+   * touches fulfilment, invoices and stock, and that is a decision a human makes with a
+   * CreditNote-backed refund. The DEBIT row is the record either way; the order is never un-paid
+   * here.
+   */
+  private Outcome recordReversal(
+      DSLContext txDsl, UUID orgId, PaymobCallback cb, String rawBody, ZoneId paymobZone) {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    PaymentTransactionRepository txnRepo = txnRepoFactory.create(txDsl);
+    PaymentRepository paymentRepo = paymentRepoFactory.create(txDsl);
+    String txnId = cb.transactionId();
+    BigDecimal amount = BigDecimal.valueOf(cb.amountCents(), 2);
+    String currency = cb.currency() == null ? "EGP" : cb.currency().strip().toUpperCase();
+    String parentRef = cb.parentTransactionId();
+
+    PaymentTransaction debit =
+        PaymentTransaction.createGatewayDebit(
+            UUID.randomUUID(),
+            orgId,
+            PaymentProvider.PAYMOB_CARD,
+            txnId,
+            amount,
+            currency,
+            PROOF,
+            cb.createdAt(paymobZone),
+            now);
+    debit.attachAudit(rawBody);
+    PaymentTransactionRepository.Recorded rec = txnRepo.insertIfAbsent(debit);
+    if (!rec.inserted()) {
+      log.info("Paymob reversal {} for org {} already recorded — replay", txnId, orgId);
+      return Outcome.of(Outcome.Kind.REPLAYED, "already recorded");
+    }
+
+    Optional<PaymentTransaction> parent =
+        parentRef == null
+            ? Optional.empty()
+            : txnRepo
+                .findByProviderRef(PaymentProvider.PAYMOB_CARD, parentRef)
+                .filter(t -> orgId.equals(t.getOrgId()));
+    Optional<Payment> payment =
+        parent.flatMap(t -> paymentRepo.findByTransactionId(orgId, t.getId()));
+    if (payment.isEmpty()) {
+      log.warn(
+          "Paymob reversal {} ({} {}) for org {} names parent {} with no card payment on file —"
+              + " recorded as a DEBIT only; a human matches it",
+          txnId,
+          amount,
+          currency,
+          orgId,
+          parentRef);
+      return Outcome.of(Outcome.Kind.REVERSED, "debit recorded; no payment to reduce");
+    }
+    Payment locked = paymentRepo.findByIdForUpdate(orgId, payment.get().getId()).orElseThrow();
+    try {
+      locked.recordRefund(amount, false, now);
+      paymentRepo.updateAllocationState(locked);
+      log.info(
+          "Paymob reversal {} for org {}: payment {} reduced by {} {} → {} (parent txn {})",
+          txnId,
+          orgId,
+          locked.getId(),
+          amount,
+          currency,
+          locked.getStatus(),
+          parentRef);
+      return Outcome.of(Outcome.Kind.REVERSED, "payment " + locked.getStatus());
+    } catch (IllegalStateException e) {
+      // Allocated to an invoice, disputed, or more than what is left unallocated: the money is
+      // gone on Paymob's side and the DEBIT says so; un-paying the order is the human's call.
+      log.error(
+          "Paymob reversal {} for org {} recorded as a DEBIT but payment {} cannot be reduced"
+              + " automatically ({}); a CreditNote-backed refund is needed",
+          txnId,
+          orgId,
+          locked.getId(),
+          e.getMessage());
+      return Outcome.of(Outcome.Kind.REVERSED, "debit recorded; payment needs a credit note");
+    }
   }
 
   private Outcome record(

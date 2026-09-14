@@ -175,6 +175,61 @@ public class PaymentTransaction {
         now);
   }
 
+  /**
+   * The DEBIT a gateway reports ({@code stories/paymob_card_reliability.md}): Paymob's callback for
+   * a refund or void child transaction — money that left, executed on Paymob's side, recorded here
+   * already VERIFIED with {@code verifiedBy} <b>null</b> for the same reason {@link
+   * #verifyByGateway} leaves it null. {@code providerRef} is the child's own id (distinct from the
+   * parent's, so the dedupe key is naturally unique); the parent rides in {@code raw_payload}.
+   */
+  public static PaymentTransaction createGatewayDebit(
+      UUID id,
+      UUID orgId,
+      PaymentProvider provider,
+      String providerRef,
+      BigDecimal amount,
+      String currency,
+      String verificationProof,
+      OffsetDateTime occurredAt,
+      OffsetDateTime now) {
+    Objects.requireNonNull(id, "id required");
+    Objects.requireNonNull(orgId, "orgId required");
+    Objects.requireNonNull(provider, "provider required");
+    Objects.requireNonNull(currency, "currency required");
+    Objects.requireNonNull(now, "now required");
+    if (providerRef == null || providerRef.isBlank()) {
+      throw new IllegalArgumentException("providerRef required");
+    }
+    Objects.requireNonNull(amount, "amount required");
+    if (amount.signum() <= 0) {
+      throw new IllegalArgumentException("amount must be > 0");
+    }
+    return new PaymentTransaction(
+        id,
+        orgId,
+        provider,
+        providerRef,
+        PaymentDirection.DEBIT,
+        amount.setScale(MONEY_SCALE, MONEY_ROUNDING),
+        currency,
+        occurredAt == null ? now : occurredAt,
+        now,
+        null,
+        null,
+        null,
+        null,
+        now,
+        PaymentVerificationStatus.VERIFIED,
+        null,
+        now,
+        verificationProof,
+        null,
+        null,
+        null,
+        null,
+        now);
+  }
+
   /** Reconstitute from persistent state — trusts DB invariants, skips creation-time validation. */
   public static PaymentTransaction rehydrate(
       UUID id,

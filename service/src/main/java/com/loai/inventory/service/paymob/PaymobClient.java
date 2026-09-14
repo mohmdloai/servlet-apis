@@ -49,6 +49,30 @@ public interface PaymobClient {
    */
   IntentionResult createIntention(OrgPaymobConfig config, String secretKey, IntentionRequest req);
 
+  /**
+   * Exchange the account's legacy API key for a short-lived auth token ({@code POST
+   * /api/auth/tokens}). The transaction-inquiry endpoint accepts only this token — the secret key
+   * is refused there (probed 2026-09-14). One exchange per org per sweep; the token is never
+   * stored.
+   *
+   * @throws com.loai.inventory.common.exception.UpstreamFailureException when Paymob does not
+   *     answer or rejects the key
+   */
+  String authenticate(OrgPaymobConfig config, String apiKey);
+
+  /**
+   * Ask Paymob for the transaction of one intention ({@code POST
+   * /api/ecommerce/orders/transaction_inquiry}), by the Paymob-side order id when we have it (the
+   * signed binding), else by our {@code special_reference} (Paymob's {@code merchant_order_id}).
+   *
+   * @return the bare transaction object as JSON, or empty when Paymob has no transaction for it yet
+   *     — the shopper never reached the card form, or is still on it
+   * @throws com.loai.inventory.common.exception.UpstreamFailureException on a transport failure or
+   *     a rejected token — the sweep ends and every intent stays as it was
+   */
+  java.util.Optional<String> inquireTransaction(
+      OrgPaymobConfig config, String authToken, String paymobOrderId, String merchantOrderId);
+
   /** The Unified Checkout URL for an intention: the hosted page the shopper is sent to. */
   static String checkoutUrl(OrgPaymobConfig config, String clientSecret) {
     return PaymobHosts.forRegion(config.region())
