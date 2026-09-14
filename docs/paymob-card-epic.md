@@ -9,7 +9,9 @@
 > Slices: [`paymob_connect.md`](../stories/paymob_connect.md) →
 > [`paymob_card_checkout.md`](../stories/paymob_card_checkout.md) →
 > [`paymob_card_reliability.md`](../stories/paymob_card_reliability.md).
-> Branches `190_feat` → `192_feat` off `master`; this doc is `189_docs/paymob-card`.
+> Branches `190_feat` → `192_feat` off `master`; this doc is `189_docs/paymob-card`. The thin
+> follow-up [`paymob_portal_pay.md`](../stories/paymob_portal_pay.md) (`194_feat`, story and code
+> on one branch) adds the signed-in door.
 
 ---
 
@@ -252,6 +254,7 @@ order hold for this — *"Minutes, not hours — the spec's own future (PSP webh
 | **1 — connect** | `190_feat/paymob-connect` | **V98** | `payment_provider` += `paymob_card`; `org_paymob_config` (credentials, `SecretBox`-encrypted); connect / status / disconnect endpoints; storefront advertises `card` as an available method. No payment can be taken yet. |
 | **2 — checkout + webhook** | `191_feat/paymob-card-checkout` | **V99** | `payment_intent`; `POST /api/public/orders/{token}/pay`; `POST /api/psp/paymob/{orgId}/webhook`; webhook-mode currency outcome on `reconcileAndCreate`. **This is where card payment starts working.** |
 | **3 — reliability** | `192_feat/paymob-card-reliability` | none | Inquiry poller (JobRunr), refund/void DEBIT recording, admin visibility for stuck intents and card ORPHANs. |
+| **3b — portal pay** | `194_feat/paymob-portal-pay` | none | The signed-in door: `POST /api/portal/orders/{n}/pay` (session = capability, ownership first) + `ReturnTarget` on `PaymentIntentService.pay` so Paymob returns a logged-in customer to their account order page, not the magic-link tracker. `stories/paymob_portal_pay.md`; the frontend pair (`frontst` story 161) moves the card choice onto the checkout form. |
 | **4 — in-store card** | *unwritten* | enum value | Card at the counter needs a **physical terminal**; it is `instapay_in_store`'s twin — the cashier runs the terminal and keys the approval code as `provider_ref`, VERIFIED on the spot. Drops into `split_tender.md` with no new machinery. Deliberately not slice 1: it shares a name with online card and nothing else. |
 
 Slices 1 and 2 are the minimum that takes a card payment. Slice 3 is the minimum that makes it

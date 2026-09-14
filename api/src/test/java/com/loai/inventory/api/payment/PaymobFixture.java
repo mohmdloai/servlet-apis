@@ -43,6 +43,7 @@ import com.loai.inventory.service.PaymobInquiryService;
 import com.loai.inventory.service.PaymobWebhookService;
 import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReservationService;
+import com.loai.inventory.service.ReturnTarget;
 import com.loai.inventory.service.paymob.PaymobCallback;
 import com.loai.inventory.service.paymob.PaymobClient;
 import com.loai.inventory.service.platform.OrgMilestoneService;
@@ -294,7 +295,21 @@ final class PaymobFixture {
 
   /** Mint an intent through the real service (with whichever client the fixture was built on). */
   PaymentIntent mintIntent(UUID org, Order order, UUID customerId) {
-    return intentService.pay(org, order.id(), customerId, "tok-" + order.number()).intent();
+    return intentService
+        .pay(org, order.id(), customerId, ReturnTarget.publicTracker("tok-" + order.number()))
+        .intent();
+  }
+
+  /** The same mint through the signed-in door: the return page is the account order page. */
+  PaymentIntent mintPortalIntent(UUID org, Order order, UUID customerId) {
+    return intentService
+        .pay(org, order.id(), customerId, ReturnTarget.portalOrder(order.number()))
+        .intent();
+  }
+
+  /** The org's public slug (createOrg suffixes it with the id). */
+  String orgSlug(UUID org) {
+    return dsl.select(ORG.SLUG).from(ORG).where(ORG.ID.eq(org)).fetchOne(ORG.SLUG);
   }
 
   // the callback

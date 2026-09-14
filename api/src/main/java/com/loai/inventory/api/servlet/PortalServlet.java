@@ -9,6 +9,7 @@ import com.loai.inventory.api.dto.NotificationPreferencesRequest;
 import com.loai.inventory.api.dto.PageResponse;
 import com.loai.inventory.api.dto.PaymentClaimRequest;
 import com.loai.inventory.api.dto.PaymentClaimResponse;
+import com.loai.inventory.api.dto.PaymentIntentResponse;
 import com.loai.inventory.api.dto.PaymentProofPresignRequest;
 import com.loai.inventory.api.dto.PaymentProofPresignResponse;
 import com.loai.inventory.api.dto.PortalAddressRequest;
@@ -44,7 +45,9 @@ import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.ListingCommentService;
 import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.NotificationService;
+import com.loai.inventory.service.PaymentIntentService;
 import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.ReturnTarget;
 import com.loai.inventory.service.StorefrontService;
 import com.loai.inventory.service.WishlistService;
 import com.loai.inventory.service.auth.CustomerAuthService;
@@ -81,6 +84,10 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code PATCH|DELETE /addresses/{id}} — edit / remove an owned address
  *   <li>{@code POST /addresses/{id}/default} — promote an owned address to the default
  *   <li>{@code POST /orders/{orderNumber}/reorder} — resolve a past order into a buyable cart
+ *   <li>{@code POST /orders/{orderNumber}/pay} — mint (or reuse) the Paymob card intention for an
+ *       owned {@code PENDING_PAYMENT} order → {@code {checkout_url, expires_at}} ({@code
+ *       stories/paymob_portal_pay.md}); Paymob returns the customer to the account order page. Same
+ *       409/502 as the public door, ownership first, opaque 404 otherwise
  *   <li>{@code POST /checkout} — place an order as the logged-in customer (slice P6): bound to the
  *       session, delivery from an owned {@code address_id} or a typed address; {@code
  *       Idempotency-Key} required; 409 slug-keyed shortages; {@code track_url} → the portal order
@@ -106,6 +113,7 @@ public class PortalServlet extends HttpServlet {
   private CustomerAuthService authService;
   private CustomerPortalService portalService;
   private PaymentTransactionService paymentTransactionService;
+  private PaymentIntentService paymentIntentService;
   private ObjectStorage objectStorage;
   private DocumentRenderService renderService;
   private NotificationService notificationService;
@@ -116,12 +124,46 @@ public class PortalServlet extends HttpServlet {
   private boolean secureCookies;
   private int refreshMaxAge;
 
+  /** Container-constructed; wired in {@link #init()}. */
+  public PortalServlet() {}
+
+  /** Visible for test: pre-wired, no servlet context (the {@code MeServlet} precedent). */
+  PortalServlet(
+      CustomerAuthService authService,
+      CustomerPortalService portalService,
+      PaymentTransactionService paymentTransactionService,
+      PaymentIntentService paymentIntentService,
+      ObjectStorage objectStorage,
+      DocumentRenderService renderService,
+      NotificationService notificationService,
+      ListingReviewService reviewService,
+      ListingCommentService commentService,
+      WishlistService wishlistService,
+      ObjectMapper mapper,
+      boolean secureCookies,
+      int refreshMaxAge) {
+    this.authService = authService;
+    this.portalService = portalService;
+    this.paymentTransactionService = paymentTransactionService;
+    this.paymentIntentService = paymentIntentService;
+    this.objectStorage = objectStorage;
+    this.renderService = renderService;
+    this.notificationService = notificationService;
+    this.reviewService = reviewService;
+    this.commentService = commentService;
+    this.wishlistService = wishlistService;
+    this.mapper = mapper;
+    this.secureCookies = secureCookies;
+    this.refreshMaxAge = refreshMaxAge;
+  }
+
   @Override
   public void init() {
     AppConfig config = (AppConfig) getServletContext().getAttribute(AppBootstrap.CONFIG_KEY);
     this.authService = config.customerAuthService;
     this.portalService = config.customerPortalService;
     this.paymentTransactionService = config.paymentTransactionService;
+    this.paymentIntentService = config.paymentIntentService;
     this.objectStorage = config.objectStorage;
     this.renderService = config.documentRenderService;
     this.notificationService = config.notificationService;
@@ -157,6 +199,9 @@ public class PortalServlet extends HttpServlet {
         } else if (rest.endsWith("/payment-proof/presign")) {
           String orderNumber = rest.substring(0, rest.length() - "/payment-proof/presign".length());
           requirePost(method, () -> handleProofPresign(req, resp, orderNumber));
+        } else if (rest.endsWith("/pay")) {
+          String orderNumber = rest.substring(0, rest.length() - "/pay".length());
+          requirePost(method, () -> handlePay(req, resp, orderNumber));
         } else {
           requireGet(method, () -> handleGetOrder(req, resp, rest));
         }
@@ -476,6 +521,33 @@ public class PortalServlet extends HttpServlet {
         resp,
         200,
         PaymentProofPresignResponse.of(uploadUrl, objectKey, objectStorage.presignTtlSeconds()));
+  }
+
+  // pay by card (stories/paymob_portal_pay.md) — the logged-in twin of POST /orders/{token}/pay
+
+  /**
+   * Mint (or reuse) the order's Paymob card intention and hand back the checkout URL. The session
+   * is the capability: {@code getOrder} resolves ownership first, so a foreign/unknown number is
+   * the opaque 404 before Paymob is ever called. Same 409s and 502 as the public door; the one
+   * difference is the return page — Paymob sends this customer back to their account order page,
+   * not to a magic-link tracker that would drop them out of their account.
+   */
+  private void handlePay(HttpServletRequest req, HttpServletResponse resp, String orderNumber)
+      throws IOException {
+    CustomerPrincipal principal = requirePrincipal(req);
+    CustomerPortalService.OrderView owned =
+        portalService.getOrder(principal.orgId(), principal.customerId(), orderNumber);
+    resp.setHeader("Cache-Control", "private, no-store");
+    // 200 on a fresh intention and on a reuse alike — as on the public door.
+    writeJson(
+        resp,
+        200,
+        PaymentIntentResponse.from(
+            paymentIntentService.pay(
+                principal.orgId(),
+                owned.order().getId(),
+                principal.customerId(),
+                ReturnTarget.portalOrder(owned.order().getOrderNumber()))));
   }
 
   // invoices (slice P3)

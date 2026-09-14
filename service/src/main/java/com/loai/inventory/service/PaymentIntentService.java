@@ -36,9 +36,12 @@ import org.slf4j.LoggerFactory;
 
 /**
  * The shopper's side of a card payment ({@code stories/paymob_card_checkout.md}, {@code POST
- * /api/public/orders/{token}/pay}): mint a Paymob intention for the order's outstanding amount,
- * remember it as a {@link PaymentIntent}, and hand back the Unified Checkout URL. No money moves
- * here — the webhook ({@link PaymobWebhookService}) is the only writer of money.
+ * /api/public/orders/{token}/pay}; the signed-in twin {@code POST /api/portal/orders/{n}/pay},
+ * {@code stories/paymob_portal_pay.md}): mint a Paymob intention for the order's outstanding
+ * amount, remember it as a {@link PaymentIntent}, and hand back the Unified Checkout URL. No money
+ * moves here — the webhook ({@link PaymobWebhookService}) is the only writer of money. The two
+ * doors differ only in the capability that resolved the order (a magic token, a session) and in the
+ * {@link ReturnTarget}; the intent and everything after it are one path.
  *
  * <p>The intent row is written <b>after</b> Paymob answers, in a transaction of its own: if Paymob
  * answers and the insert then fails, the shopper could pay against an intention we have no record
@@ -97,15 +100,17 @@ public final class PaymentIntentService {
   /**
    * Mint (or reuse) the intent for {@code orderId}'s outstanding amount.
    *
-   * @param customerId the order-view token's customer (may be null — a PHONE order's link)
-   * @param orderViewToken the raw magic token the shopper holds; the return page is the branded
-   *     status page at that token, which polls the order and never settles anything itself
+   * @param customerId the order's customer as the caller resolved it (may be null — a PHONE order's
+   *     magic link); used for the billing block and the return page's locale
+   * @param target where Paymob sends the shopper back ({@link ReturnTarget}): the branded tracker
+   *     at the guest's token, or the signed-in customer's account order page. Either page polls the
+   *     order and never settles anything itself. Not recorded on the intent — it is Paymob's
    * @throws NotFoundException the order is not in the org (the servlet answers the opaque 404)
    * @throws ConflictException the order is not awaiting payment, nothing is left to pay, or the org
    *     offers no card channel — all 409, all states the storefront already knows and should not
    *     have offered the button for; the check is the server not trusting that
    */
-  public PayResult pay(UUID orgId, UUID orderId, UUID customerId, String orderViewToken) {
+  public PayResult pay(UUID orgId, UUID orderId, UUID customerId, ReturnTarget target) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
     SalesOrder order =
@@ -193,7 +198,7 @@ public final class PaymentIntentService {
             config.cardIntegrationId(),
             intent.getSpecialReference(),
             publicApiUrl + "/api/psp/paymob/" + orgId + "/webhook",
-            returnPageUrl(org, customer, orderViewToken),
+            returnPageUrl(org, customer, target),
             intentTtl.toSeconds(),
             // One line for the whole outstanding amount: the order's lines do not sum to it (tax,
             // shipping, discount, a prior partial), and Paymob's page shows the total either way.
@@ -234,11 +239,15 @@ public final class PaymentIntentService {
     return egp.setScale(2, RoundingMode.UNNECESSARY).movePointRight(2).longValueExact();
   }
 
-  /** The branded status page at the shopper's own token — the same shape the emails link to. */
-  private String returnPageUrl(Org org, Customer customer, String orderViewToken) {
+  /**
+   * The page Paymob returns the shopper to, in the customer's locale (else the org's default): the
+   * branded tracker at the guest's token — the same shape the emails link to — or the signed-in
+   * customer's account order page. The origin is {@code PUBLIC_BASE_URL}; the path is the target's.
+   */
+  private String returnPageUrl(Org org, Customer customer, ReturnTarget target) {
     String locale =
         Locales.resolve(customer == null ? null : customer.getLocale(), org.getDefaultLocale());
-    return publicBaseUrl + "/" + locale + "/" + org.getSlug() + "/orders/" + orderViewToken;
+    return publicBaseUrl + target.path(locale, org.getSlug());
   }
 
   /**

@@ -18,6 +18,7 @@ import com.loai.inventory.service.MagicLinkService.ResolvedOrderView;
 import com.loai.inventory.service.PaymentIntentService;
 import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.PaymentTransactionService.ClaimResult;
+import com.loai.inventory.service.ReturnTarget;
 import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.SalesOrderService.Placed;
 import jakarta.servlet.http.HttpServlet;
@@ -162,12 +163,17 @@ public class PublicOrderServlet extends HttpServlet {
   private void handlePay(HttpServletResponse resp, String token) throws IOException {
     ResolvedOrderView view = resolveOrThrow(token);
     // 200 on a fresh intention and on the reuse of a live one alike: the shopper asked "where do
-    // I pay" and got the answer; whether it was minted now is not their concern.
+    // I pay" and got the answer; whether it was minted now is not their concern. Paymob sends the
+    // guest back to the branded tracker at this same token.
     writeJson(
         resp,
         200,
         PaymentIntentResponse.from(
-            paymentIntentService.pay(view.orgId(), view.orderId(), view.customerId(), token)));
+            paymentIntentService.pay(
+                view.orgId(),
+                view.orderId(),
+                view.customerId(),
+                ReturnTarget.publicTracker(token))));
   }
 
   private void handleProofPresign(HttpServletRequest req, HttpServletResponse resp, String token)
