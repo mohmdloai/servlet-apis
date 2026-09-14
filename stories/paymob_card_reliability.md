@@ -200,3 +200,14 @@ text above, this is why:
   inquiry returns *one* transaction per order; if a decline and a later success share one intention
   and the success's webhook is lost, the poll may see the decline first and FAIL the intent — a later
   webhook still settles (`FAILED → SETTLED` is legal). Not reproducible in the sandbox yet.
+
+### Verified against the real Paymob sandbox (2026-09-14)
+
+Order SO-2026-00002 (100.00 EGP) on `cairo-home-goods`, the ngrok tunnel stopped **before** paying so
+the callback had nowhere to land. Intent minted 16:06:58; the 16:08 tick scanned nothing (grace
+window); the 16:10 tick exchanged the org's API key for a token, inquired by Paymob `order_id`, and
+settled: `Reconcile MATCHED → PAID`, one `payment` RECEIVED 100.00, transaction 534816682 VERIFIED /
+MATCHED / `verified_by NULL` with `raw_payload.source = "inquiry"`, intent SETTLED. No webhook
+thread ever logged that transaction — the poll did it alone. The token exchange and the inquiry
+contract (`POST /api/auth/tokens` → `Bearer`; `POST /api/ecommerce/orders/transaction_inquiry`
+`{"order_id"}`) are therefore confirmed live, not only against the stub.
