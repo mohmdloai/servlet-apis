@@ -111,6 +111,7 @@ class CategoryTranslationIT {
             new ListingReviewRepositoryFactoryImpl(),
             new com.loai.inventory.repository.CollectionRepositoryFactoryImpl(),
             new com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl(),
+            new com.loai.inventory.repository.OrgPaymobConfigRepositoryFactoryImpl(),
             new com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl(),
             storage,
             null,

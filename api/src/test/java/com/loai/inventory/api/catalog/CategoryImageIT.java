@@ -14,6 +14,7 @@ import com.loai.inventory.domain.model.Category;
 import com.loai.inventory.repository.CategoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.CollectionRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
+import com.loai.inventory.repository.OrgPaymobConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.ProductListingRepositoryFactoryImpl;
@@ -93,6 +94,7 @@ class CategoryImageIT {
             new com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl(),
             new CollectionRepositoryFactoryImpl(),
             new OrgWhatsAppConfigRepositoryFactoryImpl(),
+            new OrgPaymobConfigRepositoryFactoryImpl(),
             new com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl(),
             storage,
             null,
