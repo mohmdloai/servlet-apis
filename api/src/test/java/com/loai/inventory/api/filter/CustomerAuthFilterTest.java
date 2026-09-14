@@ -102,6 +102,39 @@ class CustomerAuthFilterTest {
     verify(f.chain).doFilter(f.request, f.response);
   }
 
+  /**
+   * The card-payment door ({@code stories/paymob_portal_pay.md}, {@code POST /orders/{n}/pay}) is
+   * an ordinary portal write: the header gate (400) and the origin gate (403) both close before the
+   * servlet — or Paymob — is reached, and an allowlisted origin with a live session passes. Pinned
+   * by route because the story names these codes as acceptance criteria.
+   */
+  @Test
+  void payRoute_takesTheTwoCsrfGates_likeEveryPortalWrite() throws Exception {
+    Fixture noHeader = new Fixture().post("/api/portal/orders/SO-2026-00042/pay");
+    noHeader.filter.doFilter(noHeader.request, noHeader.response, noHeader.chain);
+    verify(noHeader.response).setStatus(400);
+    verify(noHeader.chain, never()).doFilter(any(), any());
+
+    Fixture foreign =
+        new Fixture()
+            .post("/api/portal/orders/SO-2026-00042/pay")
+            .withHeader()
+            .origin("https://evil.example")
+            .cookie(f -> f.customerToken());
+    foreign.filter.doFilter(foreign.request, foreign.response, foreign.chain);
+    verify(foreign.response).setStatus(403);
+    verify(foreign.chain, never()).doFilter(any(), any());
+
+    Fixture ok =
+        new Fixture()
+            .post("/api/portal/orders/SO-2026-00042/pay")
+            .withHeader()
+            .origin("https://shop.example")
+            .cookie(f -> f.customerToken());
+    ok.filter.doFilter(ok.request, ok.response, ok.chain);
+    verify(ok.chain).doFilter(ok.request, ok.response);
+  }
+
   // The bypass — refresh/logout authenticate off the refresh cookie alone
 
   @Test

@@ -156,6 +156,30 @@ class PaymobWebhookIT {
     assertEquals("987654321", intent.get(PAYMENT_INTENT.SETTLED_TXN_REF));
   }
 
+  /**
+   * {@code stories/paymob_portal_pay.md}: an intent minted from the signed-in door settles through
+   * exactly the same path — the door is not recorded on the intent and the webhook never reads it.
+   */
+  @Test
+  void anIntentMintedFromThePortalDoor_settlesExactlyAsAPublicOne() {
+    UUID org = fx.createOrg("acme");
+    fx.connect(org);
+    UUID customer = fx.createCustomer(org, "Nadia Hassan", "nadia@example.test", "+201001234567");
+    PaymobFixture.Order order = fx.seedPendingOrder(org, customer, "250.00");
+    PaymentIntent intent = fx.mintPortalIntent(org, order, customer);
+
+    Outcome out = fx.deliver(org, fx.callback(intent, 987654322L));
+
+    assertEquals(Kind.SETTLED, out.kind());
+    assertEquals("MATCHED", out.detail());
+    assertEquals("PAID", fx.orderStatus(order.id()));
+    assertEquals(1, fx.txnCount(org));
+    assertEquals(1, fx.paymentCount(order.id()));
+    assertEquals("SETTLED", fx.intentStatus(intent.getId()));
+    assertEquals(
+        customer, fx.txnByRef("987654322").get(PAYMENT_TRANSACTION.CLAIMED_BY_CUSTOMER_ID));
+  }
+
   @Test
   void sameCallbackFiveTimes_oneTxnOnePaymentOnePaid_every200() {
     Scene s = scene();

@@ -2,7 +2,8 @@
 
 > Follow-up to [`paymob_card_checkout.md`](paymob_card_checkout.md) (V99), which named this as
 > *"a thin follow-up, not a redesign"*. **Branch `194_feat/paymob-portal-pay` off `master`, no
-> migration.** Frontend pair: `frontst/stories/161_st_checkout_pay_by_card.md` — which also moves
+> migration** — this story and its code ride the same branch, numbered with the PR it gets
+> (no separate docs branch: that is how `192_feat` became PR #193). Frontend pair: `frontst/stories/161_st_checkout_pay_by_card.md` — which also moves
 > the card choice into the checkout form for guests; that half needs nothing from this slice.
 
 ---
@@ -87,13 +88,44 @@ back to their orders — it works, and it is the wrong page.
 
 ## Acceptance criteria
 
-- [ ] `POST /api/portal/orders/{n}/pay` with a valid customer session on an owned `PENDING_PAYMENT`
+- [x] `POST /api/portal/orders/{n}/pay` with a valid customer session on an owned `PENDING_PAYMENT`
       order → `200 {checkout_url, expires_at}`; one `payment_intent` row.
-- [ ] The intention Paymob receives carries `redirection_url = …/account/orders/{n}` for the
+- [x] The intention Paymob receives carries `redirection_url = …/account/orders/{n}` for the
       portal door and `…/orders/{token}` for the public door; nothing else in the request differs.
-- [ ] Another customer's order number, or an unknown one → `404`, and Paymob is never called.
-- [ ] No session → `401`; a portal write without `X-Portal-Request` → the plane's `403`.
-- [ ] A second tap inside the TTL, from either door, returns the same `checkout_url`.
-- [ ] A callback for an intent minted from the portal door settles exactly as one minted from the
+- [x] Another customer's order number, or an unknown one → `404`, and Paymob is never called.
+- [x] No session → `401`; a portal write without `X-Portal-Request` → the plane's `403`.
+- [x] A second tap inside the TTL, from either door, returns the same `checkout_url`.
+- [x] A callback for an intent minted from the portal door settles exactly as one minted from the
       public door (the webhook code path is untouched — pinned by re-running the existing
       `PaymobWebhookIT` happy path against a portal-minted intent).
+
+## Built (2026-09-15, branch `194_feat/paymob-portal-pay`, no migration)
+
+Every criterion above is covered — `PortalServletPayTest` (5), `CustomerAuthFilterTest` (+1, the
+route's two CSRF gates), `PaymobPayIT` (+3 → 12), `PaymobWebhookIT` (+1 → 24), `PaymobInquiryIT`
+(14, unchanged) — all green against Testcontainers. Where the build departs from the text:
+
+- **`ReturnTarget` is a sealed interface in the service package** (`ReturnTarget.publicTracker(token)`
+  / `ReturnTarget.portalOrder(orderNumber)`, each a record with `path(locale, slug)`), not a nested
+  type: both servlets and the ITs name it, and the intent service's only job with it is
+  `publicBaseUrl + target.path(...)`. The public door's URL is byte-identical — `PaymobPayIT` now
+  pins the exact string (`/ar/{slug}/orders/tok-abc`, the org default locale) where it used to
+  pin a suffix, and the portal test proves the two intentions differ in `redirection_url` alone
+  (amount, currency, integration, notification URL, expiration, billing, items all equal).
+- **The CSRF codes are the filter's, not "the plane's 403"**: a portal write without
+  `X-Portal-Request` is `CustomerAuthFilter`'s **400**; a foreign `Origin` is its **403**. Both are
+  pinned for `POST /orders/{n}/pay` in `CustomerAuthFilterTest.payRoute_takesTheTwoCsrfGates…`;
+  the servlet test cannot reach them because the filter refuses before the servlet exists.
+- **A wrong verb on the route is the portal's 400 "Method not allowed"** (`requirePost` throws
+  `ValidationException`, as on every portal route), not a 405 — the plane's convention, pinned.
+- `PortalServlet` gained the **package-private test constructor** `MeServlet` has (every
+  collaborator, no servlet context); `PortalServletPayTest` mocks all but the two it exercises.
+  `PaymentIntentService` is final, so the test sets ByteBuddy experimental as the other Paymob
+  tests do.
+- **Reuse across the doors is IT-pinned as documented** (`reuse_crossesTheTwoDoors…`): the second
+  mint from the portal door returns the tracker-minted URL, and no second intention reaches Paymob.
+  The customer's own locale wins over the org default on either door (`returnPage_followsTheCustomersLocale`).
+- **Owed**: the manual sandbox pass on a phone now runs through the frontend pair (`frontst`
+  story 161 — a signed-in one-tap checkout returning to the account order page); nothing on this
+  branch changes what the webhook or the poller do, so the slice-2/3 sandbox runs stand.
+

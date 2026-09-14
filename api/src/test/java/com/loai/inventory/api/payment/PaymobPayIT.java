@@ -13,6 +13,7 @@ import com.loai.inventory.common.exception.ConflictException;
 import com.loai.inventory.common.exception.UpstreamFailureException;
 import com.loai.inventory.repository.generated.enums.OrderStatus;
 import com.loai.inventory.service.PaymentIntentService.PayResult;
+import com.loai.inventory.service.ReturnTarget;
 import com.loai.inventory.service.paymob.JdkPaymobClient;
 import com.sun.net.httpserver.HttpServer;
 import com.zaxxer.hikari.HikariConfig;
@@ -42,7 +43,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * Epic slice 2, the pay side ({@code stories/paymob_card_checkout.md}, {@code POST
  * /api/public/orders/{token}/pay}): the 409s, intent reuse inside the TTL, a fresh intent once the
  * old one is spent — and, against a stub HTTP server, what {@link JdkPaymobClient} actually sends
- * Paymob and what it does with the answer.
+ * Paymob and what it does with the answer. Plus the signed-in door's one difference ({@code
+ * stories/paymob_portal_pay.md}): the {@link ReturnTarget} and nothing else.
  */
 @Testcontainers
 class PaymobPayIT {
@@ -96,7 +98,8 @@ class PaymobPayIT {
     UUID customer = fx.createCustomer(org, "Nadia Hassan", "nadia@example.test", "+201001234567");
     PaymobFixture.Order order = fx.seedPendingOrder(org, customer, "250.50");
 
-    PayResult r = fx.intentService.pay(org, order.id(), customer, "tok-abc");
+    PayResult r =
+        fx.intentService.pay(org, order.id(), customer, ReturnTarget.publicTracker("tok-abc"));
 
     assertFalse(r.reused());
     assertEquals(
@@ -126,8 +129,11 @@ class PaymobPayIT {
     assertEquals(
         PaymobFixture.PUBLIC_API_URL + "/api/psp/paymob/" + org + "/webhook",
         req.notificationUrl());
-    assertTrue(req.redirectionUrl().startsWith(PaymobFixture.PUBLIC_BASE_URL + "/"));
-    assertTrue(req.redirectionUrl().endsWith("/orders/tok-abc"), req.redirectionUrl());
+    // The guest's return page: the branded tracker at the token, in the customer's locale (none
+    // set → the org default, "ar" by V52) — byte for byte what the emails link to.
+    assertEquals(
+        PaymobFixture.PUBLIC_BASE_URL + "/ar/" + fx.orgSlug(org) + "/orders/tok-abc",
+        req.redirectionUrl());
     assertEquals(20 * 60, req.expirationSeconds());
     assertEquals("Nadia", req.billing().firstName());
     assertEquals("Hassan", req.billing().lastName());
@@ -142,8 +148,10 @@ class PaymobPayIT {
     fx.connect(org);
     PaymobFixture.Order order = fx.seedPendingOrder(org, null, "100.00");
 
-    PayResult first = fx.intentService.pay(org, order.id(), null, "tok");
-    PayResult second = fx.intentService.pay(org, order.id(), null, "tok");
+    PayResult first =
+        fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok"));
+    PayResult second =
+        fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok"));
 
     assertFalse(first.reused());
     assertTrue(second.reused());
@@ -157,14 +165,16 @@ class PaymobPayIT {
     UUID org = fx.createOrg("acme");
     fx.connect(org);
     PaymobFixture.Order order = fx.seedPendingOrder(org, null, "100.00");
-    PayResult first = fx.intentService.pay(org, order.id(), null, "tok");
+    PayResult first =
+        fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok"));
 
     // Expired.
     dsl.update(PAYMENT_INTENT)
         .set(PAYMENT_INTENT.EXPIRES_AT, OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1))
         .where(PAYMENT_INTENT.ID.eq(first.intent().getId()))
         .execute();
-    PayResult second = fx.intentService.pay(org, order.id(), null, "tok");
+    PayResult second =
+        fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok"));
     assertFalse(second.reused());
     assertNotEquals(first.intent().getId(), second.intent().getId());
     assertNotEquals(first.checkoutUrl(), second.checkoutUrl());
@@ -175,13 +185,15 @@ class PaymobPayIT {
         .set(PAYMENT_INTENT.STATUS, "FAILED")
         .where(PAYMENT_INTENT.ID.eq(second.intent().getId()))
         .execute();
-    PayResult third = fx.intentService.pay(org, order.id(), null, "tok");
+    PayResult third =
+        fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok"));
     assertFalse(third.reused());
     assertEquals(3, fx.intentCount(order.id()));
 
     // Repriced: a partial prepayment landed, the outstanding amount changed.
     dsl.execute("update sales_order set prepaid_amount = 40.00 where id = ?", order.id());
-    PayResult fourth = fx.intentService.pay(org, order.id(), null, "tok");
+    PayResult fourth =
+        fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok"));
     assertFalse(fourth.reused());
     assertEquals(0, new java.math.BigDecimal("60.00").compareTo(fourth.intent().getAmount()));
     assertEquals(4, fx.intentCount(order.id()));
@@ -198,7 +210,8 @@ class PaymobPayIT {
     UUID org = fx.createOrg("acme");
     fx.connect(org);
     PaymobFixture.Order order = fx.seedPendingOrder(org, null, "100.00");
-    PayResult underA = fx.intentService.pay(org, order.id(), null, "tok");
+    PayResult underA =
+        fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok"));
 
     fx.orgPaymobService.connect(
         org,
@@ -210,7 +223,8 @@ class PaymobPayIT {
         "EGYPT");
 
     assertEquals("EXPIRED", fx.intentStatus(underA.intent().getId()));
-    PayResult underB = fx.intentService.pay(org, order.id(), null, "tok");
+    PayResult underB =
+        fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok"));
     assertFalse(underB.reused());
     assertNotEquals(underA.intent().getId(), underB.intent().getId());
     assertEquals(7777, fx.fakePaymob.lastRequest.integrationId());
@@ -218,7 +232,9 @@ class PaymobPayIT {
     // Disconnect retires the live one too; …/pay is then a 409 (no card channel).
     fx.orgPaymobService.disconnect(org);
     assertEquals("EXPIRED", fx.intentStatus(underB.intent().getId()));
-    assertThrows(ConflictException.class, () -> fx.intentService.pay(org, order.id(), null, "tok"));
+    assertThrows(
+        ConflictException.class,
+        () -> fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok")));
   }
 
   @Test
@@ -229,7 +245,8 @@ class PaymobPayIT {
 
     ConflictException e =
         assertThrows(
-            ConflictException.class, () -> fx.intentService.pay(org, paid.id(), null, "tok"));
+            ConflictException.class,
+            () -> fx.intentService.pay(org, paid.id(), null, ReturnTarget.publicTracker("tok")));
     assertEquals(409, e.getStatusCode());
     assertEquals(0, fx.intentCount(paid.id()));
   }
@@ -241,7 +258,8 @@ class PaymobPayIT {
 
     ConflictException e =
         assertThrows(
-            ConflictException.class, () -> fx.intentService.pay(org, order.id(), null, "tok"));
+            ConflictException.class,
+            () -> fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok")));
     assertEquals(409, e.getStatusCode());
     assertTrue(e.getMessage().contains("does not accept card"));
     assertEquals(0, fx.intentCount(order.id()));
@@ -254,8 +272,105 @@ class PaymobPayIT {
     PaymobFixture.Order order =
         fx.seedOrder(org, null, "100.00", "100.00", OrderStatus.PENDING_PAYMENT);
 
-    assertThrows(ConflictException.class, () -> fx.intentService.pay(org, order.id(), null, "tok"));
+    assertThrows(
+        ConflictException.class,
+        () -> fx.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok")));
     assertEquals(0, fx.intentCount(order.id()));
+  }
+
+  /**
+   * The signed-in door ({@code stories/paymob_portal_pay.md}): the intention differs from the
+   * public door's in exactly one field — Paymob sends the customer back to their account order
+   * page, not to a magic-link tracker that would drop them out of their account.
+   */
+  @Test
+  void pay_fromThePortalDoor_returnsToTheAccountOrderPage_andNothingElseDiffers() {
+    UUID org = fx.createOrg("acme");
+    fx.connect(org);
+    UUID customer = fx.createCustomer(org, "Nadia Hassan", "nadia@example.test", "+201001234567");
+    PaymobFixture.Order order = fx.seedPendingOrder(org, customer, "250.50");
+
+    PayResult viaPortal =
+        fx.intentService.pay(org, order.id(), customer, ReturnTarget.portalOrder(order.number()));
+    var portalReq = fx.fakePaymob.lastRequest;
+    assertEquals(
+        PaymobFixture.PUBLIC_BASE_URL
+            + "/ar/"
+            + fx.orgSlug(org)
+            + "/account/orders/"
+            + order.number(),
+        portalReq.redirectionUrl());
+    assertFalse(viaPortal.reused());
+    assertEquals(1, fx.intentCount(order.id()));
+
+    // Retire it and mint again through the public door: every other field is identical.
+    dsl.update(PAYMENT_INTENT)
+        .set(PAYMENT_INTENT.STATUS, "FAILED")
+        .where(PAYMENT_INTENT.ID.eq(viaPortal.intent().getId()))
+        .execute();
+    PayResult viaPublic =
+        fx.intentService.pay(org, order.id(), customer, ReturnTarget.publicTracker("tok-abc"));
+    var publicReq = fx.fakePaymob.lastRequest;
+    assertEquals(
+        PaymobFixture.PUBLIC_BASE_URL + "/ar/" + fx.orgSlug(org) + "/orders/tok-abc",
+        publicReq.redirectionUrl());
+    assertEquals(portalReq.amountCents(), publicReq.amountCents());
+    assertEquals(portalReq.currency(), publicReq.currency());
+    assertEquals(portalReq.integrationId(), publicReq.integrationId());
+    assertEquals(portalReq.notificationUrl(), publicReq.notificationUrl());
+    assertEquals(portalReq.expirationSeconds(), publicReq.expirationSeconds());
+    assertEquals(portalReq.billing(), publicReq.billing());
+    assertEquals(portalReq.items(), publicReq.items());
+    assertFalse(viaPublic.reused());
+  }
+
+  /** The customer's own locale wins over the org default on either door. */
+  @Test
+  void returnPage_followsTheCustomersLocale() {
+    UUID org = fx.createOrg("acme");
+    fx.connect(org);
+    UUID customer = fx.createCustomer(org, "Omar", "omar@example.test", null);
+    dsl.execute("update customer set locale = 'en' where id = ?", customer);
+    PaymobFixture.Order order = fx.seedPendingOrder(org, customer, "10.00");
+
+    fx.intentService.pay(org, order.id(), customer, ReturnTarget.portalOrder(order.number()));
+
+    assertEquals(
+        PaymobFixture.PUBLIC_BASE_URL
+            + "/en/"
+            + fx.orgSlug(org)
+            + "/account/orders/"
+            + order.number(),
+        fx.fakePaymob.lastRequest.redirectionUrl());
+  }
+
+  /**
+   * Reuse crosses planes, and that is documented rather than "fixed": the reuse rule is the live
+   * PENDING intent for the same order and amount, so a customer who minted from the emailed tracker
+   * and then taps pay on their account page gets the SAME checkout URL — whose return page is the
+   * tracker. Minting a second intention only to change a return address would be a second
+   * intention, which the reuse rule exists to avoid; both pages carry the return watcher.
+   */
+  @Test
+  void reuse_crossesTheTwoDoors_sameUrl_returnPageOfTheFirstMint() {
+    UUID org = fx.createOrg("acme");
+    fx.connect(org);
+    UUID customer = fx.createCustomer(org, "Nadia", "nadia@example.test", null);
+    PaymobFixture.Order order = fx.seedPendingOrder(org, customer, "100.00");
+
+    PayResult first =
+        fx.intentService.pay(org, order.id(), customer, ReturnTarget.publicTracker("tok"));
+    String firstReturn = fx.fakePaymob.lastRequest.redirectionUrl();
+    PayResult second =
+        fx.intentService.pay(org, order.id(), customer, ReturnTarget.portalOrder(order.number()));
+
+    assertTrue(second.reused());
+    assertEquals(first.checkoutUrl(), second.checkoutUrl());
+    assertEquals(first.intent().getId(), second.intent().getId());
+    assertEquals(1, fx.intentCount(order.id()));
+    assertTrue(firstReturn.endsWith("/orders/tok"), firstReturn);
+    // No second intention went to Paymob — the last request is still the first mint's.
+    assertEquals(firstReturn, fx.fakePaymob.lastRequest.redirectionUrl());
   }
 
   /** The real client against a stub Paymob: header, body, and the answer's handling. */
@@ -295,7 +410,8 @@ class PaymobPayIT {
       UUID customer = real.createCustomer(org, "Omar", "omar@example.test", null);
       PaymobFixture.Order order = real.seedPendingOrder(org, customer, "99.99");
 
-      PayResult r = real.intentService.pay(org, order.id(), customer, "tok-real");
+      PayResult r =
+          real.intentService.pay(org, order.id(), customer, ReturnTarget.publicTracker("tok-real"));
 
       assertEquals("Token " + PaymobFixture.SECRET_KEY, seenAuth.get());
       assertEquals("/v1/intention/", seenPath.get());
@@ -334,7 +450,9 @@ class PaymobPayIT {
       UpstreamFailureException e =
           assertThrows(
               UpstreamFailureException.class,
-              () -> real.intentService.pay(org, other.id(), customer, "tok-2"));
+              () ->
+                  real.intentService.pay(
+                      org, other.id(), customer, ReturnTarget.publicTracker("tok-2")));
       assertEquals(502, e.getStatusCode());
       assertEquals(0, real.intentCount(other.id()));
     } finally {
@@ -354,7 +472,8 @@ class PaymobPayIT {
     PaymobFixture.Order order = real.seedPendingOrder(org, null, "10.00");
 
     assertThrows(
-        UpstreamFailureException.class, () -> real.intentService.pay(org, order.id(), null, "tok"));
+        UpstreamFailureException.class,
+        () -> real.intentService.pay(org, order.id(), null, ReturnTarget.publicTracker("tok")));
     assertEquals(0, real.intentCount(order.id()));
   }
 }
