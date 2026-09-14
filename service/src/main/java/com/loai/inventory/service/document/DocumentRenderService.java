@@ -578,11 +578,12 @@ public final class DocumentRenderService {
     return orgService.getById(orgId);
   }
 
-  /** The tender's name on the slip: {@code Cash} / {@code InstaPay}. */
+  /** The tender's name on the slip: {@code Cash} / {@code InstaPay} / {@code Card}. */
   private static String tenderLabel(PaymentProvider provider) {
     return switch (provider) {
       case CASH -> "Cash";
       case INSTAPAY_IN_STORE, INSTAPAY_MANUAL -> "InstaPay";
+      case PAYMOB_CARD -> "Card";
     };
   }
 

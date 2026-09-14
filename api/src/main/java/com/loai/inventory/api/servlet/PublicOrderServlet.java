@@ -6,6 +6,7 @@ import com.loai.inventory.api.config.AppConfig;
 import com.loai.inventory.api.dto.ApiError;
 import com.loai.inventory.api.dto.PaymentClaimRequest;
 import com.loai.inventory.api.dto.PaymentClaimResponse;
+import com.loai.inventory.api.dto.PaymentIntentResponse;
 import com.loai.inventory.api.dto.PaymentProofPresignRequest;
 import com.loai.inventory.api.dto.PaymentProofPresignResponse;
 import com.loai.inventory.api.dto.PublicOrderResponse;
@@ -14,6 +15,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.storage.ObjectStorage;
 import com.loai.inventory.service.MagicLinkService;
 import com.loai.inventory.service.MagicLinkService.ResolvedOrderView;
+import com.loai.inventory.service.PaymentIntentService;
 import com.loai.inventory.service.PaymentTransactionService;
 import com.loai.inventory.service.PaymentTransactionService.ClaimResult;
 import com.loai.inventory.service.SalesOrderService;
@@ -39,6 +41,10 @@ import java.util.Optional;
  *       the token authorizes it, and the minted key is prefix-bound to the token's org + order.
  *   <li>{@code POST /{token}/payment-claim} — record the shopper's InstaPay reference (+ optional
  *       proof key) as an UNVERIFIED transaction in the staff reconciliation queue.
+ *   <li>{@code POST /{token}/pay} — mint (or reuse) a Paymob card intention for the outstanding
+ *       amount and return the Unified Checkout URL ({@code stories/paymob_card_checkout.md}). The
+ *       token is the capability; no new auth concept. Settlement happens on the webhook, never
+ *       here.
  * </ul>
  *
  * <p>Every token failure (unknown/expired token, or an order that vanished) answers an opaque
@@ -49,6 +55,7 @@ public class PublicOrderServlet extends HttpServlet {
   private MagicLinkService magicLinkService;
   private SalesOrderService salesOrderService;
   private PaymentTransactionService paymentTransactionService;
+  private PaymentIntentService paymentIntentService;
   private ObjectStorage objectStorage;
   private ObjectMapper mapper;
 
@@ -58,6 +65,7 @@ public class PublicOrderServlet extends HttpServlet {
     this.magicLinkService = config.magicLinkService;
     this.salesOrderService = config.salesOrderService;
     this.paymentTransactionService = config.paymentTransactionService;
+    this.paymentIntentService = config.paymentIntentService;
     this.objectStorage = config.objectStorage;
     this.mapper = config.objectMapper;
   }
@@ -81,6 +89,11 @@ public class PublicOrderServlet extends HttpServlet {
       // POST /{token}/payment-claim — record a shopper payment claim.
       if (parts.length == 2 && "payment-claim".equals(parts[1]) && "POST".equals(method)) {
         handlePaymentClaim(req, resp, token);
+        return;
+      }
+      // POST /{token}/pay — a Paymob card intention for the outstanding amount.
+      if (parts.length == 2 && "pay".equals(parts[1]) && "POST".equals(method)) {
+        handlePay(resp, token);
         return;
       }
       // POST /{token}/payment-proof/presign — mint an upload URL for the screenshot.
@@ -144,6 +157,17 @@ public class PublicOrderServlet extends HttpServlet {
         resp,
         result.inserted() ? 201 : 200,
         PaymentClaimResponse.from(result.transaction(), result.inserted(), result.reopened()));
+  }
+
+  private void handlePay(HttpServletResponse resp, String token) throws IOException {
+    ResolvedOrderView view = resolveOrThrow(token);
+    // 200 on a fresh intention and on the reuse of a live one alike: the shopper asked "where do
+    // I pay" and got the answer; whether it was minted now is not their concern.
+    writeJson(
+        resp,
+        200,
+        PaymentIntentResponse.from(
+            paymentIntentService.pay(view.orgId(), view.orderId(), view.customerId(), token)));
   }
 
   private void handleProofPresign(HttpServletRequest req, HttpServletResponse resp, String token)

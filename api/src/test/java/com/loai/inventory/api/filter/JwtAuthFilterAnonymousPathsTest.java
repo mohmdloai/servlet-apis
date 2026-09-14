@@ -52,11 +52,13 @@ class JwtAuthFilterAnonymousPathsTest {
   }
 
   @Test
-  void publicAndPortalPrefixes_passThrough() throws Exception {
+  void publicPortalAndPspPrefixes_passThrough() throws Exception {
     for (String[] p :
         new String[][] {
           {"/api/public", "/acme/listings"},
           {"/api/portal", "/auth/refresh"},
+          // PSP callbacks (stories/paymob_card_checkout.md): the HMAC is the capability.
+          {"/api/psp", "/paymob/00000000-0000-0000-0000-000000000000/webhook"},
         }) {
       Fixture f = new Fixture();
       f.req(p[0], p[1]);

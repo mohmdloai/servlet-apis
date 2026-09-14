@@ -38,6 +38,7 @@ import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgTimelineRepositoryFactory;
 import com.loai.inventory.domain.repository.OrgWhatsAppConfigRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentAllocationRepositoryFactory;
+import com.loai.inventory.domain.repository.PaymentIntentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentTransactionRepositoryFactory;
 import com.loai.inventory.domain.repository.PlatformAuditRepositoryFactory;
@@ -88,6 +89,7 @@ import com.loai.inventory.repository.OrgRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgTimelineRepositoryFactoryImpl;
 import com.loai.inventory.repository.OrgWhatsAppConfigRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentAllocationRepositoryFactoryImpl;
+import com.loai.inventory.repository.PaymentIntentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentRepositoryFactoryImpl;
 import com.loai.inventory.repository.PaymentTransactionRepositoryFactoryImpl;
 import com.loai.inventory.repository.PlatformAuditRepositoryFactoryImpl;
@@ -136,8 +138,10 @@ import com.loai.inventory.service.OrgPaymobService;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.OrgWhatsAppService;
 import com.loai.inventory.service.PaymentDisputeService;
+import com.loai.inventory.service.PaymentIntentService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.PaymobWebhookService;
 import com.loai.inventory.service.PresignedOgImageSource;
 import com.loai.inventory.service.ProductListingService;
 import com.loai.inventory.service.ProductService;
@@ -167,6 +171,8 @@ import com.loai.inventory.service.email.DnsJavaMxResolver;
 import com.loai.inventory.service.email.EmailGate;
 import com.loai.inventory.service.email.EmailSender;
 import com.loai.inventory.service.email.EmailSenderFactory;
+import com.loai.inventory.service.paymob.JdkPaymobClient;
+import com.loai.inventory.service.paymob.PaymobClient;
 import com.loai.inventory.service.platform.OrgMilestoneService;
 import com.loai.inventory.service.platform.OrgStatusService;
 import com.loai.inventory.service.platform.PlatformAuditService;
@@ -342,6 +348,16 @@ public class AppConfig {
   public final OrgPaymobConfigRepositoryFactory orgPaymobConfigRepositoryFactory;
 
   public final OrgPaymobService orgPaymobService;
+
+  /**
+   * Epic slice 2 ({@code stories/paymob_card_checkout.md}): the intention client, the pay-side
+   * intent service and the webhook — the only writer of card money.
+   */
+  public final PaymentIntentRepositoryFactory paymentIntentRepositoryFactory;
+
+  public final PaymobClient paymobClient;
+  public final PaymentIntentService paymentIntentService;
+  public final PaymobWebhookService paymobWebhookService;
 
   /**
    * Web Push (V96): the VAPID identity from {@code WEB_PUSH_VAPID_*}, disabled when unset; the
@@ -792,6 +808,40 @@ public class AppConfig {
             objectStorage,
             customerRepositoryFactory,
             userRepositoryFactory);
+    // Paymob card checkout + webhook (epic slice 2, stories/paymob_card_checkout.md). The
+    // intention call is bounded (PAYMOB_HTTP_TIMEOUT_MS) and never retried; the intent's TTL is
+    // deliberately shorter than any sane order hold (per_org_order_ttl.md sized the hold for this).
+    // PUBLIC_API_URL is THIS server's public origin — it is minted into every intention's
+    // notification_url, so Paymob can find the webhook; PUBLIC_BASE_URL (the storefront) is the
+    // browser's return page.
+    long paymobTimeoutMs = parseLong(System.getenv("PAYMOB_HTTP_TIMEOUT_MS"), 10_000L);
+    long intentTtlMinutes = parseLong(System.getenv("PAYMENT_INTENT_TTL_MINUTES"), 20L);
+    String publicApiUrl = getenvOrDefault("PUBLIC_API_URL", "http://localhost:8080");
+    this.paymentIntentRepositoryFactory = new PaymentIntentRepositoryFactoryImpl();
+    this.paymobClient = new JdkPaymobClient(objectMapper, Duration.ofMillis(paymobTimeoutMs));
+    this.paymentIntentService =
+        new PaymentIntentService(
+            dsl,
+            paymentIntentRepositoryFactory,
+            salesOrderRepositoryFactory,
+            orgRepositoryFactory,
+            customerRepositoryFactory,
+            orgPaymobConfigRepositoryFactory,
+            paymobSecretBox,
+            paymobClient,
+            publicApiUrl,
+            publicBaseUrl,
+            Duration.ofMinutes(intentTtlMinutes));
+    this.paymobWebhookService =
+        new PaymobWebhookService(
+            dsl,
+            objectMapper,
+            orgPaymobConfigRepositoryFactory,
+            paymobSecretBox,
+            paymentIntentRepositoryFactory,
+            paymentTransactionRepositoryFactory,
+            salesOrderRepositoryFactory,
+            paymentService);
     this.invoiceService =
         new InvoiceService(
             salesInvoiceRepositoryFactory,

@@ -85,6 +85,9 @@ public class JwtAuthFilter implements Filter {
         || path.equals("/api/auth/verify-email")
         || path.equals("/api/auth/resend-verification")
         || path.startsWith("/api/public/")
+        // PSP callbacks (stories/paymob_card_checkout.md): the HMAC in the request is the
+        // capability; a gateway has no session. Rate-limited on its own bucket.
+        || path.startsWith("/api/psp/")
         // The customer plane is guarded by CustomerAuthFilter with a different signing key — the
         // staff key must never even parse a portal token (epic decision #3).
         || path.startsWith("/api/portal/")) {

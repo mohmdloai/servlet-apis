@@ -8,10 +8,16 @@ package com.loai.inventory.domain.model;
 public enum PaymentProvider {
   INSTAPAY_MANUAL("instapay_manual"),
   INSTAPAY_IN_STORE("instapay_in_store"),
-  CASH("cash");
-  // 'paymob_card' exists on the DB enum since V98 (paymob_connect.md) but gets no constant here
-  // until slice 2 (V99) actually writes a payment_transaction with it — see
-  // docs/paymob-card-epic.md.
+  CASH("cash"),
+  /**
+   * An online card payment through the merchant's own Paymob account ({@code
+   * docs/paymob-card-epic.md}). The DB value dates from V98; the constant arrived with slice 2
+   * (V99), the first thing to write a transaction with it — recorded by the webhook, VERIFIED with
+   * {@code verified_by IS NULL} (the gateway did it). Online only: the counter's card path is the
+   * epic's unwritten slice 4 and gets its own value, because a card at a terminal shares nothing
+   * with this but the word.
+   */
+  PAYMOB_CARD("paymob_card");
 
   private final String dbLiteral;
 

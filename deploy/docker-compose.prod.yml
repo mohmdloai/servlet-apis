@@ -110,6 +110,9 @@ services:
       CORS_ALLOWED_ORIGINS: https://admin.${DOMAIN},https://store.${DOMAIN}
       # Customer links (order view / unsubscribe) → the storefront.
       PUBLIC_BASE_URL: https://store.${DOMAIN}
+      # This server's own public origin — minted into every Paymob intention's notification_url so
+      # the card webhook (POST /api/psp/paymob/{orgId}/webhook) can find its way back (V99).
+      PUBLIC_API_URL: https://api.${DOMAIN}
       # Credential links (reset / activate / verify-email) → the ADMIN app, where those pages
       # live (story 89 — without this they 404 on the storefront).
       ADMIN_BASE_URL: https://admin.${DOMAIN}
@@ -122,6 +125,9 @@ services:
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
       WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:ops@${DOMAIN}}
+      # Paymob card (V98/V99). Unset → connect refuses (409) and no merchant can take card; nothing
+      # else changes. Never rotate casually: every stored merchant credential is sealed under it.
+      PAYMOB_CREDENTIAL_KEY: ${PAYMOB_CREDENTIAL_KEY:-}
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080' || exit 1"]
       interval: 15s
