@@ -11,10 +11,14 @@ package com.loai.inventory.domain.model;
  * @param unallocatedPayments payments still carrying an unallocated balance
  * @param claimsToVerify shopper payment claims awaiting a manager (CREDIT transactions in {@code
  *     UNVERIFIED}) — the "To verify" queue depth ({@code stories/payment_claim_verify.md})
+ * @param cardIntentsStuck card payment intents still {@code PENDING} past their own deadline —
+ *     checkouts the Paymob poller could not resolve either way ({@code
+ *     stories/paymob_card_reliability.md}); a count for a settings tile, not a queue
  */
 public record OrgHealth(
     long memberCount,
     long pendingPaymentOrders,
     long openDisputes,
     long unallocatedPayments,
-    long claimsToVerify) {}
+    long claimsToVerify,
+    long cardIntentsStuck) {}

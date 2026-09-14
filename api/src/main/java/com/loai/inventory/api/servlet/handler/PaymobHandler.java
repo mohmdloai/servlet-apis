@@ -76,6 +76,7 @@ public class PaymobHandler implements OrgResourceHandler {
                       body.getPublicKey(),
                       body.getSecretKey(),
                       body.getHmacSecret(),
+                      body.getApiKey(),
                       body.getCardIntegrationId(),
                       body.getRegion())));
         }

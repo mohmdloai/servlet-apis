@@ -104,7 +104,7 @@ class OrgPaymobServiceIT {
     UUID org = createOrg();
 
     ConnectionStatus status =
-        service.connect(org, "pk_test_1", "sk_test_1", "hmac_1", 123, "EGYPT");
+        service.connect(org, "pk_test_1", "sk_test_1", "hmac_1", "ak", 123, "EGYPT");
 
     assertTrue(status.connected());
     assertEquals(OrgPaymobConfig.Status.ACTIVE, status.status());
@@ -127,6 +127,40 @@ class OrgPaymobServiceIT {
     assertNotEquals("hmac_1", hmacEncrypted, "must not be stored in the clear");
     assertEquals("sk_test_1", secretBox.decrypt(secretEncrypted));
     assertEquals("hmac_1", secretBox.decrypt(hmacEncrypted));
+
+    // Slice 3 (V100): the legacy API key rides with them, sealed the same way, and the status says
+    // the poller can inquire.
+    String apiKeyEncrypted =
+        dsl.select(ORG_PAYMOB_CONFIG.API_KEY_ENCRYPTED)
+            .from(ORG_PAYMOB_CONFIG)
+            .where(ORG_PAYMOB_CONFIG.ORG_ID.eq(org))
+            .fetchOne(ORG_PAYMOB_CONFIG.API_KEY_ENCRYPTED);
+    assertNotEquals("ak", apiKeyEncrypted, "must not be stored in the clear");
+    assertEquals("ak", secretBox.decrypt(apiKeyEncrypted));
+    assertEquals(Boolean.TRUE, status.inquiryEnabled());
+  }
+
+  @Test
+  void connect_blankApiKey_is400_sinceSliceThree() {
+    UUID org = createOrg();
+    assertThrows(
+        ValidationException.class, () -> service.connect(org, "pk", "sk", "hmac", " ", 1, "EGYPT"));
+    assertThrows(
+        ValidationException.class,
+        () -> service.connect(org, "pk", "sk", "hmac", null, 1, "EGYPT"));
+  }
+
+  @Test
+  void rowConnectedBeforeV100_reportsInquiryDisabled() {
+    UUID org = createOrg();
+    service.connect(org, "pk", "sk", "hmac", "ak", 1, "EGYPT");
+    dsl.update(ORG_PAYMOB_CONFIG)
+        .setNull(ORG_PAYMOB_CONFIG.API_KEY_ENCRYPTED)
+        .where(ORG_PAYMOB_CONFIG.ORG_ID.eq(org))
+        .execute();
+
+    assertEquals(Boolean.FALSE, service.status(org).inquiryEnabled());
+    assertTrue(service.status(org).connected(), "still offers card; only the poller is blind");
   }
 
   @Test
@@ -135,7 +169,7 @@ class OrgPaymobServiceIT {
 
     assertFalse(service.status(org).connected());
 
-    service.connect(org, "pk", "sk", "hmac", 1, "EGYPT");
+    service.connect(org, "pk", "sk", "hmac", "ak", 1, "EGYPT");
     assertTrue(service.status(org).connected());
 
     service.disconnect(org);
@@ -146,13 +180,13 @@ class OrgPaymobServiceIT {
   void reconnect_replacesAllFourCredentials_bumpsUpdatedAt_exactlyOneRow() throws Exception {
     UUID org = createOrg();
 
-    ConnectionStatus first = service.connect(org, "pk-1", "sk-1", "hmac-1", 111, "EGYPT");
+    ConnectionStatus first = service.connect(org, "pk-1", "sk-1", "hmac-1", "ak", 111, "EGYPT");
     // The first row's updated_at is the DB's own DEFAULT now() (insert branch); the re-connect
     // explicitly stamps the JVM clock's now() (the ON CONFLICT DO UPDATE branch, same asymmetry
     // as OrgWhatsAppConfigRepositoryImpl). A generous sleep keeps the comparison robust to any
     // skew between the app host's clock and the Testcontainers Postgres container's clock.
     Thread.sleep(1000);
-    ConnectionStatus second = service.connect(org, "pk-2", "sk-2", "hmac-2", 222, "EGYPT");
+    ConnectionStatus second = service.connect(org, "pk-2", "sk-2", "hmac-2", "ak", 222, "EGYPT");
 
     assertEquals("pk-2", second.publicKey());
     assertEquals(222, second.cardIntegrationId());
@@ -176,7 +210,7 @@ class OrgPaymobServiceIT {
     UUID org = createOrg();
     service.disconnect(org); // never connected — still a no-op success
 
-    service.connect(org, "pk", "sk", "hmac", 1, "EGYPT");
+    service.connect(org, "pk", "sk", "hmac", "ak", 1, "EGYPT");
     service.disconnect(org);
     service.disconnect(org); // already gone — still a no-op success
 
@@ -190,7 +224,7 @@ class OrgPaymobServiceIT {
     ConflictException e =
         assertThrows(
             ConflictException.class,
-            () -> serviceNoKey.connect(org, "pk", "sk", "hmac", 1, "EGYPT"));
+            () -> serviceNoKey.connect(org, "pk", "sk", "hmac", "ak", 1, "EGYPT"));
     assertEquals(409, e.getStatusCode());
 
     long rowCount = dsl.fetchCount(dsl.selectFrom(ORG_PAYMOB_CONFIG));
@@ -201,28 +235,31 @@ class OrgPaymobServiceIT {
   void connect_blankCredentials_is400() {
     UUID org = createOrg();
     assertThrows(
-        ValidationException.class, () -> service.connect(org, "", "sk", "hmac", 1, "EGYPT"));
+        ValidationException.class, () -> service.connect(org, "", "sk", "hmac", "ak", 1, "EGYPT"));
     assertThrows(
-        ValidationException.class, () -> service.connect(org, "pk", " ", "hmac", 1, "EGYPT"));
+        ValidationException.class, () -> service.connect(org, "pk", " ", "hmac", "ak", 1, "EGYPT"));
     assertThrows(
-        ValidationException.class, () -> service.connect(org, "pk", "sk", null, 1, "EGYPT"));
+        ValidationException.class, () -> service.connect(org, "pk", "sk", null, "ak", 1, "EGYPT"));
   }
 
   @Test
   void connect_nonPositiveOrMissingCardIntegrationId_is400() {
     UUID org = createOrg();
     assertThrows(
-        ValidationException.class, () -> service.connect(org, "pk", "sk", "hmac", 0, "EGYPT"));
+        ValidationException.class,
+        () -> service.connect(org, "pk", "sk", "hmac", "ak", 0, "EGYPT"));
     assertThrows(
-        ValidationException.class, () -> service.connect(org, "pk", "sk", "hmac", -1, "EGYPT"));
+        ValidationException.class,
+        () -> service.connect(org, "pk", "sk", "hmac", "ak", -1, "EGYPT"));
     assertThrows(
-        ValidationException.class, () -> service.connect(org, "pk", "sk", "hmac", null, "EGYPT"));
+        ValidationException.class,
+        () -> service.connect(org, "pk", "sk", "hmac", "ak", null, "EGYPT"));
   }
 
   @Test
   void disconnect_withExistingPaymobCardTransactions_leavesTheLedgerUntouched() {
     UUID org = createOrg();
-    service.connect(org, "pk", "sk", "hmac", 1, "EGYPT");
+    service.connect(org, "pk", "sk", "hmac", "ak", 1, "EGYPT");
 
     // payment_transaction carries no relationship to org_paymob_config at all (no FK, no
     // cascade) — this pins that on purpose: disconnecting a gateway must never touch money that
@@ -260,7 +297,7 @@ class OrgPaymobServiceIT {
   void connect_unsupportedRegion_is400() {
     UUID org = createOrg();
     assertThrows(
-        ValidationException.class, () -> service.connect(org, "pk", "sk", "hmac", 1, "KSA"));
+        ValidationException.class, () -> service.connect(org, "pk", "sk", "hmac", "ak", 1, "KSA"));
   }
 
   private UUID createOrg() {

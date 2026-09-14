@@ -62,6 +62,11 @@ public class OrgPaymobService {
       String publicKey,
       Integer cardIntegrationId,
       String region,
+      /**
+       * Whether an API key is on file, i.e. whether the poller can settle a payment whose webhook
+       * never arrived. False only on a row connected before V100; reconnecting fixes it.
+       */
+      Boolean inquiryEnabled,
       java.time.OffsetDateTime connectedAt,
       java.time.OffsetDateTime updatedAt) {
 
@@ -72,12 +77,13 @@ public class OrgPaymobService {
           c.publicKey(),
           c.cardIntegrationId(),
           c.region(),
+          c.canInquire(),
           c.connectedAt(),
           c.updatedAt());
     }
 
     static ConnectionStatus disconnected() {
-      return new ConnectionStatus(false, null, null, null, null, null, null);
+      return new ConnectionStatus(false, null, null, null, null, null, null, null);
     }
   }
 
@@ -104,11 +110,15 @@ public class OrgPaymobService {
       String publicKey,
       String secretKey,
       String hmacSecret,
+      String apiKey,
       Integer cardIntegrationId,
       String region) {
     requireText(publicKey, "public_key");
     requireText(secretKey, "secret_key");
     requireText(hmacSecret, "hmac_secret");
+    // Required since slice 3 (V100): without it a dropped webhook is a charged card and an unpaid
+    // order nobody can settle — the exact failure the poller exists to prevent.
+    requireText(apiKey, "api_key");
     if (cardIntegrationId == null || cardIntegrationId <= 0) {
       throw new ValidationException("card_integration_id must be a positive integer");
     }
@@ -123,6 +133,7 @@ public class OrgPaymobService {
 
     String sealedSecret = secretBox.encrypt(secretKey.strip());
     String sealedHmac = secretBox.encrypt(hmacSecret.strip());
+    String sealedApiKey = secretBox.encrypt(apiKey.strip());
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     record Saved(OrgPaymobConfig config, int retiredIntents) {}
     Saved saved =
@@ -137,6 +148,7 @@ public class OrgPaymobService {
                           publicKey.strip(),
                           sealedSecret,
                           sealedHmac,
+                          sealedApiKey,
                           cardIntegrationId,
                           normalizedRegion);
               // A live intent was minted against the credentials and integration this call just

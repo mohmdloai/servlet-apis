@@ -16,6 +16,7 @@ public interface OrgPaymobConfigRepository {
       String publicKey,
       String secretKeyEncrypted,
       String hmacSecretEncrypted,
+      String apiKeyEncrypted,
       int cardIntegrationId,
       String region);
 

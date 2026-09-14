@@ -16,6 +16,7 @@ public class PaymobStatusResponse {
   private String publicKey;
   private Integer cardIntegrationId;
   private String region;
+  private Boolean inquiryEnabled;
   private java.time.OffsetDateTime connectedAt;
   private java.time.OffsetDateTime updatedAt;
 
@@ -26,6 +27,7 @@ public class PaymobStatusResponse {
     r.publicKey = s.publicKey();
     r.cardIntegrationId = s.cardIntegrationId();
     r.region = s.region();
+    r.inquiryEnabled = s.inquiryEnabled();
     r.connectedAt = s.connectedAt();
     r.updatedAt = s.updatedAt();
     return r;
@@ -57,5 +59,13 @@ public class PaymobStatusResponse {
 
   public java.time.OffsetDateTime getUpdatedAt() {
     return updatedAt;
+  }
+
+  /**
+   * Whether the poller can settle a payment whose webhook never arrived — an API key is on file.
+   * False only on a row connected before V100; reconnecting fixes it. Absent when disconnected.
+   */
+  public Boolean getInquiryEnabled() {
+    return inquiryEnabled;
   }
 }

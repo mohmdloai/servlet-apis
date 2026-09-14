@@ -14,7 +14,8 @@ public record OrgHealthResponse(
     long pendingPaymentOrders,
     long openDisputes,
     long unallocatedPayments,
-    long claimsToVerify) {
+    long claimsToVerify,
+    long cardIntentsStuck) {
 
   public static OrgHealthResponse from(OrgHealth h) {
     return new OrgHealthResponse(
@@ -22,6 +23,7 @@ public record OrgHealthResponse(
         h.pendingPaymentOrders(),
         h.openDisputes(),
         h.unallocatedPayments(),
-        h.claimsToVerify());
+        h.claimsToVerify(),
+        h.cardIntentsStuck());
   }
 }

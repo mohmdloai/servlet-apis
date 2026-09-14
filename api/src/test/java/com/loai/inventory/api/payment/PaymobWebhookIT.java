@@ -284,18 +284,101 @@ class PaymobWebhookIT {
   }
 
   @Test
-  void authOnly_andRefundCallbacks_are200_andWriteNothing() {
+  void authOnly_is200_andWritesNothing() {
     Scene s = scene();
-
     ObjectNode authOnly = fx.callback(s.intent(), 666L);
     ((ObjectNode) authOnly.get("obj")).put("is_auth", true).put("is_capture", false);
     assertEquals(Kind.IGNORED, fx.deliver(s.org(), authOnly).kind());
-
-    ObjectNode refund = fx.callback(s.intent(), 667L);
-    ((ObjectNode) refund.get("obj")).put("has_parent_transaction", true).put("is_refunded", true);
-    assertEquals(Kind.IGNORED, fx.deliver(s.org(), refund).kind());
-
     assertNothingWritten(s);
+  }
+
+  /**
+   * Slice 3 ({@code stories/paymob_card_reliability.md}): a refund child callback is money leaving
+   * — a gateway-verified DEBIT under the child's own id, the original's payment reduced the way an
+   * executed refund reduces it, and the order NOT un-paid.
+   */
+  @Test
+  void refundChildCallback_recordsADebit_reducesThePayment_orderStaysPaid() {
+    Scene s = scene();
+    assertEquals(Kind.SETTLED, fx.deliver(s.org(), fx.callback(s.intent(), 801L)).kind());
+
+    ObjectNode refund = fx.callback(s.intent(), 8011L);
+    ((ObjectNode) refund.get("obj"))
+        .put("has_parent_transaction", true)
+        .put("is_refund", true)
+        .put("parent_transaction", 801L);
+    Outcome out = fx.deliver(s.org(), refund);
+
+    assertEquals(Kind.REVERSED, out.kind());
+    org.jooq.Record debit = fx.txnByRef("8011");
+    assertNotNull(debit);
+    assertEquals("DEBIT", debit.get(PAYMENT_TRANSACTION.DIRECTION).getLiteral());
+    assertEquals("VERIFIED", debit.get(PAYMENT_TRANSACTION.VERIFICATION_STATUS).getLiteral());
+    assertNull(debit.get(PAYMENT_TRANSACTION.VERIFIED_BY));
+    assertNull(debit.get(PAYMENT_TRANSACTION.RECONCILIATION_STATUS));
+    assertEquals(0, new BigDecimal("250.00").compareTo(debit.get(PAYMENT_TRANSACTION.AMOUNT)));
+    assertTrue(
+        debit.get(PAYMENT_TRANSACTION.RAW_PAYLOAD).data().contains("\"parent_transaction\": 801"),
+        "linked to the original through raw_payload");
+
+    org.jooq.Record payment =
+        dsl.selectFrom(PAYMENT).where(PAYMENT.SALES_ORDER_ID.eq(s.order().id())).fetchOne();
+    assertEquals("REFUNDED", payment.get(PAYMENT.STATUS).getLiteral());
+    assertEquals(0, new BigDecimal("250.00").compareTo(payment.get(PAYMENT.REFUNDED_AMOUNT)));
+    assertEquals(0, BigDecimal.ZERO.compareTo(payment.get(PAYMENT.UNALLOCATED_AMOUNT)));
+    assertEquals("PAID", fx.orderStatus(s.order().id()), "never un-paid by a callback");
+
+    assertEquals(Kind.REPLAYED, fx.deliver(s.org(), refund).kind(), "same child id → replay");
+    assertEquals(2, fx.txnCount(s.org()));
+  }
+
+  @Test
+  void voidThePaymentCannotAbsorb_recordsTheDebit_andLeavesThePaymentToAHuman() {
+    Scene s = scene();
+    assertEquals(Kind.SETTLED, fx.deliver(s.org(), fx.callback(s.intent(), 802L)).kind());
+    // Most of the payment is already allocated to an invoice: only 10.00 is left unallocated.
+    dsl.update(PAYMENT)
+        .set(PAYMENT.UNALLOCATED_AMOUNT, new BigDecimal("10.00"))
+        .where(PAYMENT.SALES_ORDER_ID.eq(s.order().id()))
+        .execute();
+
+    ObjectNode voided = fx.callback(s.intent(), 8021L);
+    ((ObjectNode) voided.get("obj"))
+        .put("has_parent_transaction", true)
+        .put("is_void", true)
+        .put("parent_transaction", 802L);
+    Outcome out = fx.deliver(s.org(), voided);
+
+    assertEquals(Kind.REVERSED, out.kind());
+    assertTrue(out.detail().contains("credit note"), out.detail());
+    assertNotNull(fx.txnByRef("8021"), "the money left; the DEBIT says so");
+    org.jooq.Record payment =
+        dsl.selectFrom(PAYMENT).where(PAYMENT.SALES_ORDER_ID.eq(s.order().id())).fetchOne();
+    assertEquals(
+        "RECEIVED", payment.get(PAYMENT.STATUS).getLiteral(), "untouched — a human decides");
+    assertEquals(0, BigDecimal.ZERO.compareTo(payment.get(PAYMENT.REFUNDED_AMOUNT)));
+    assertEquals("PAID", fx.orderStatus(s.order().id()));
+  }
+
+  @Test
+  void reversalOfAnUnknownParent_recordsTheDebitOnly_andAFailedReversalWritesNothing() {
+    Scene s = scene();
+    ObjectNode orphanRefund = fx.callback(s.intent(), 8031L);
+    ((ObjectNode) orphanRefund.get("obj"))
+        .put("has_parent_transaction", true)
+        .put("is_refund", true)
+        .put("parent_transaction", 999999L);
+    assertEquals(Kind.REVERSED, fx.deliver(s.org(), orphanRefund).kind());
+    assertEquals("DEBIT", fx.txnByRef("8031").get(PAYMENT_TRANSACTION.DIRECTION).getLiteral());
+
+    ObjectNode failedRefund = fx.callback(s.intent(), 8032L);
+    ((ObjectNode) failedRefund.get("obj"))
+        .put("has_parent_transaction", true)
+        .put("is_refund", true)
+        .put("success", false)
+        .put("parent_transaction", 999999L);
+    assertEquals(Kind.IGNORED, fx.deliver(s.org(), failedRefund).kind());
+    assertNull(fx.txnByRef("8032"));
   }
 
   @Test

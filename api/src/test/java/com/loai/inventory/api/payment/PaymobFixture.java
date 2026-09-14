@@ -13,6 +13,7 @@ import com.loai.inventory.api.config.ObjectMapperProvider;
 import com.loai.inventory.api.support.TestWiring;
 import com.loai.inventory.common.crypto.PaymobSignature;
 import com.loai.inventory.common.crypto.SecretBox;
+import com.loai.inventory.common.exception.UpstreamFailureException;
 import com.loai.inventory.domain.model.OrgPaymobConfig;
 import com.loai.inventory.domain.model.PaymentIntent;
 import com.loai.inventory.repository.CreditNoteRepositoryFactoryImpl;
@@ -38,6 +39,7 @@ import com.loai.inventory.service.OrgPaymobService;
 import com.loai.inventory.service.PaymentIntentService;
 import com.loai.inventory.service.PaymentService;
 import com.loai.inventory.service.PaymentTransactionService;
+import com.loai.inventory.service.PaymobInquiryService;
 import com.loai.inventory.service.PaymobWebhookService;
 import com.loai.inventory.service.RefundService;
 import com.loai.inventory.service.ReservationService;
@@ -63,6 +65,7 @@ final class PaymobFixture {
   static final String HMAC_SECRET = "test-hmac-secret-0123456789ABCDEF";
   static final String PUBLIC_KEY = "egy_pk_test_fixture";
   static final String SECRET_KEY = "egy_sk_test_fixture";
+  static final String API_KEY = "legacy_api_key_fixture";
   static final int INTEGRATION_ID = 4938201;
   static final String PUBLIC_API_URL = "https://api.test.local";
   static final String PUBLIC_BASE_URL = "https://store.test.local";
@@ -78,7 +81,11 @@ final class PaymobFixture {
   final PaymobWebhookService webhookService;
   final OrderExpiryService orderExpiryService;
   final PaymentIntentService intentService;
+  final PaymobInquiryService inquiryService;
   final FakePaymobClient fakePaymob = new FakePaymobClient();
+  final PaymobClient client;
+  private final OrgPaymobConfigRepositoryFactoryImpl configRepo =
+      new OrgPaymobConfigRepositoryFactoryImpl();
 
   private final AtomicInteger orderSeq = new AtomicInteger(1);
 
@@ -89,7 +96,7 @@ final class PaymobFixture {
   /** {@code client} null → the canned {@link FakePaymobClient}. */
   PaymobFixture(DSLContext dsl, PaymobClient client) {
     this.dsl = dsl;
-    OrgPaymobConfigRepositoryFactoryImpl configRepo = new OrgPaymobConfigRepositoryFactoryImpl();
+    this.client = client == null ? fakePaymob : client;
     this.orgPaymobService =
         new OrgPaymobService(dsl, configRepo, new PaymentIntentRepositoryFactoryImpl(), secretBox);
     this.paymentService =
@@ -132,8 +139,10 @@ final class PaymobFixture {
             secretBox,
             new PaymentIntentRepositoryFactoryImpl(),
             new PaymentTransactionRepositoryFactoryImpl(),
+            new PaymentRepositoryFactoryImpl(),
             new SalesOrderRepositoryFactoryImpl(),
             paymentService);
+    this.inquiryService = inquiryServiceWithGrace(Duration.ZERO);
     this.orderExpiryService =
         new OrderExpiryService(
             dsl,
@@ -152,17 +161,38 @@ final class PaymobFixture {
             new CustomerRepositoryFactoryImpl(),
             configRepo,
             secretBox,
-            client == null ? fakePaymob : client,
+            this.client,
             PUBLIC_API_URL,
             PUBLIC_BASE_URL,
             INTENT_TTL);
   }
 
-  /** Answers every intention with fresh, distinct Paymob handles and remembers the last request. */
+  /** A poller with its own grace window (the shared one uses zero so tests need no waiting). */
+  PaymobInquiryService inquiryServiceWithGrace(Duration grace) {
+    return new PaymobInquiryService(
+        dsl,
+        mapper,
+        new PaymentIntentRepositoryFactoryImpl(),
+        configRepo,
+        secretBox,
+        client,
+        webhookService,
+        grace);
+  }
+
+  /**
+   * Answers every intention with fresh, distinct Paymob handles and remembers the last request;
+   * answers inquiries from a map the test seeds (bare transaction JSON by Paymob order id).
+   */
   static final class FakePaymobClient implements PaymobClient {
     private final AtomicInteger seq = new AtomicInteger(1);
     volatile IntentionRequest lastRequest;
     volatile String lastSecretKey;
+    volatile String lastApiKey;
+    volatile boolean unreachable;
+    final java.util.Map<String, String> inquiryByPaymobOrder =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    final java.util.List<String> inquiries = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     @Override
     public IntentionResult createIntention(
@@ -171,6 +201,25 @@ final class PaymobFixture {
       lastSecretKey = secretKey;
       int n = seq.getAndIncrement();
       return new IntentionResult("int_" + n, String.valueOf(555000100 + n), "cs_" + n);
+    }
+
+    @Override
+    public String authenticate(OrgPaymobConfig config, String apiKey) {
+      if (unreachable) {
+        throw new UpstreamFailureException("payment provider did not answer");
+      }
+      lastApiKey = apiKey;
+      return "tok_" + seq.getAndIncrement();
+    }
+
+    @Override
+    public java.util.Optional<String> inquireTransaction(
+        OrgPaymobConfig config, String authToken, String paymobOrderId, String merchantOrderId) {
+      if (unreachable) {
+        throw new UpstreamFailureException("payment provider did not answer");
+      }
+      inquiries.add(paymobOrderId);
+      return java.util.Optional.ofNullable(inquiryByPaymobOrder.get(paymobOrderId));
     }
   }
 
@@ -205,7 +254,16 @@ final class PaymobFixture {
   }
 
   void connect(UUID org) {
-    orgPaymobService.connect(org, PUBLIC_KEY, SECRET_KEY, HMAC_SECRET, INTEGRATION_ID, "EGYPT");
+    orgPaymobService.connect(
+        org, PUBLIC_KEY, SECRET_KEY, HMAC_SECRET, API_KEY, INTEGRATION_ID, "EGYPT");
+  }
+
+  /**
+   * The bare transaction object Paymob's inquiry API returns — {@link #callback} minus the
+   * envelope.
+   */
+  String bareTransaction(ObjectNode callback) {
+    return callback.get("obj").toString();
   }
 
   record Order(UUID id, String number) {}
