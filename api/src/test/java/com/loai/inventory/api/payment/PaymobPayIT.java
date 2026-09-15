@@ -381,6 +381,10 @@ class PaymobPayIT {
     AtomicReference<String> seenPath = new AtomicReference<>();
     AtomicReference<String> seenBody = new AtomicReference<>();
     AtomicInteger status = new AtomicInteger(201);
+    AtomicReference<String> answer =
+        new AtomicReference<>(
+            "{\"id\":\"int_stub_1\",\"intention_order_id\":424242,\"client_secret\":"
+                + "\"egy_csk_test_stub\",\"status\":\"intended\"}");
     HttpServer stub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     stub.createContext(
         "/",
@@ -388,10 +392,7 @@ class PaymobPayIT {
           seenAuth.set(ex.getRequestHeaders().getFirst("Authorization"));
           seenPath.set(ex.getRequestURI().getPath());
           seenBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-          byte[] out =
-              ("{\"id\":\"int_stub_1\",\"intention_order_id\":424242,\"client_secret\":"
-                      + "\"egy_csk_test_stub\",\"status\":\"intended\"}")
-                  .getBytes(StandardCharsets.UTF_8);
+          byte[] out = answer.get().getBytes(StandardCharsets.UTF_8);
           int code = status.get();
           ex.getResponseHeaders().add("Content-Type", "application/json");
           ex.sendResponseHeaders(code, out.length);
@@ -455,6 +456,23 @@ class PaymobPayIT {
                       org, other.id(), customer, ReturnTarget.publicTracker("tok-2")));
       assertEquals(502, e.getStatusCode());
       assertEquals(0, real.intentCount(other.id()));
+
+      // Paymob accepts but answers without intention_order_id — the one handle the webhook binds
+      // a settlement on. Refused at mint time, not tolerated: 502, no row, no checkout the
+      // callback could only be matched to by amount.
+      status.set(201);
+      answer.set(
+          "{\"id\":\"int_stub_2\",\"client_secret\":\"egy_csk_test_stub_2\","
+              + "\"status\":\"intended\"}");
+      PaymobFixture.Order third = real.seedPendingOrder(org, customer, "10.00");
+      UpstreamFailureException noOrder =
+          assertThrows(
+              UpstreamFailureException.class,
+              () ->
+                  real.intentService.pay(
+                      org, third.id(), customer, ReturnTarget.publicTracker("tok-3")));
+      assertEquals(502, noOrder.getStatusCode());
+      assertEquals(0, real.intentCount(third.id()));
     } finally {
       stub.stop(0);
     }

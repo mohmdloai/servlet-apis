@@ -6,6 +6,7 @@ import static com.loai.inventory.repository.generated.Tables.PAYMENT_INTENT;
 import static com.loai.inventory.repository.generated.Tables.PAYMENT_TRANSACTION;
 import static com.loai.inventory.repository.generated.Tables.SALES_ORDER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -438,6 +439,68 @@ class PaymobWebhookIT {
     assertEquals(Kind.ORPHAN, out.kind());
     assertEquals(
         "ORPHAN", fx.txnByRef("778").get(PAYMENT_TRANSACTION.RECONCILIATION_STATUS).getLiteral());
+    assertEquals("PENDING_PAYMENT", fx.orderStatus(s.order().id()));
+    assertEquals("PENDING", fx.intentStatus(s.intent().getId()));
+  }
+
+  @Test
+  void callbackWithoutASignedPaymobOrder_recordedOrphan_neverBoundByAmountAlone() {
+    // An absent order.id contributes "" to the signature, so the body still verifies. The binding
+    // is mandatory: without the signed handle the check would shrink to amount + currency, and two
+    // 250.00 intents in one shop are not rare.
+    Scene s = scene();
+    ObjectNode cb = fx.callback(s.intent(), 780L);
+    ((ObjectNode) cb.get("obj").get("order")).remove("id");
+
+    Outcome out = fx.deliver(s.org(), cb);
+
+    assertEquals(Kind.ORPHAN, out.kind());
+    assertEquals(
+        "ORPHAN", fx.txnByRef("780").get(PAYMENT_TRANSACTION.RECONCILIATION_STATUS).getLiteral());
+    assertEquals("PENDING_PAYMENT", fx.orderStatus(s.order().id()));
+    assertEquals("PENDING", fx.intentStatus(s.intent().getId()));
+  }
+
+  @Test
+  void intentWithoutAPaymobOrderId_recordedOrphan_neverBoundByAmountAlone() {
+    // A row minted before the handle became mandatory (JdkPaymobClient now refuses such an
+    // intention). The callback names it by every unsigned field and matches its amount exactly —
+    // and still gets a human, not a settlement.
+    Scene s = scene();
+    dsl.update(PAYMENT_INTENT)
+        .setNull(PAYMENT_INTENT.PAYMOB_ORDER_ID)
+        .where(PAYMENT_INTENT.ID.eq(s.intent().getId()))
+        .execute();
+
+    Outcome out = fx.deliver(s.org(), fx.callback(s.intent(), 781L));
+
+    assertEquals(Kind.ORPHAN, out.kind());
+    assertEquals(
+        "ORPHAN", fx.txnByRef("781").get(PAYMENT_TRANSACTION.RECONCILIATION_STATUS).getLiteral());
+    assertEquals("PENDING_PAYMENT", fx.orderStatus(s.order().id()));
+    assertEquals("PENDING", fx.intentStatus(s.intent().getId()));
+    assertEquals(0, fx.paymentCount(s.order().id()));
+  }
+
+  @Test
+  void verifiedBodyNothingCanBeRecordedFrom_is200_nothingWritten() {
+    // obj.id and amount_cents are signed (an absent one contributes ""), so both bodies are
+    // authentic — and unrecordable. REJECTED would be a 400, which asks Paymob to resend the same
+    // body until it gives up; IGNORED is the 200 that ends it.
+    Scene s = scene();
+    ObjectNode noId = fx.callback(s.intent(), 782L);
+    ((ObjectNode) noId.get("obj")).remove("id");
+    Outcome noIdOut = fx.deliver(s.org(), noId);
+    assertEquals(Kind.IGNORED, noIdOut.kind());
+    assertFalse(noIdOut.rejected(), "a verified body is never a 400");
+
+    ObjectNode zero = fx.callback(s.intent(), 783L);
+    ((ObjectNode) zero.get("obj")).put("amount_cents", 0);
+    Outcome zeroOut = fx.deliver(s.org(), zero);
+    assertEquals(Kind.IGNORED, zeroOut.kind());
+    assertFalse(zeroOut.rejected(), "a verified body is never a 400");
+
+    assertEquals(0, fx.txnCount(s.org()));
     assertEquals("PENDING_PAYMENT", fx.orderStatus(s.order().id()));
     assertEquals("PENDING", fx.intentStatus(s.intent().getId()));
   }

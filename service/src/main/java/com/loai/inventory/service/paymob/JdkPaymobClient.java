@@ -254,8 +254,19 @@ public final class JdkPaymobClient implements PaymobClient {
           truncate(body));
       throw new UpstreamFailureException("payment provider answered without a checkout secret");
     }
-    return new IntentionResult(
-        textOrNull(root.path("id")), textOrNull(root.path("intention_order_id")), clientSecret);
+    String paymobOrderId = textOrNull(root.path("intention_order_id"));
+    if (paymobOrderId == null) {
+      // The one handle of ours that appears SIGNED in every callback (obj.order.id). Without it
+      // the webhook could bind a settlement to this intent by amount + currency alone, so the
+      // intention is refused here — nothing is written, the shopper gets a 502 and a second tap
+      // mints afresh — rather than opening a checkout we could not bind.
+      log.warn(
+          "Paymob answered the intention for org {} without an intention_order_id: {}",
+          config.orgId(),
+          truncate(body));
+      throw new UpstreamFailureException("payment provider answered without an order id");
+    }
+    return new IntentionResult(textOrNull(root.path("id")), paymobOrderId, clientSecret);
   }
 
   private static String textOrNull(JsonNode n) {

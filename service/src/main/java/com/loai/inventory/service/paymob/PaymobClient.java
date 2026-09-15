@@ -35,8 +35,9 @@ public interface PaymobClient {
 
   /**
    * Paymob's handles for the intention: its id (slice 3 inquires by it), the Paymob-side order id
-   * (appears SIGNED in every callback as {@code obj.order.id}), and the per-intention client secret
-   * the browser needs to open Unified Checkout.
+   * (appears SIGNED in every callback as {@code obj.order.id} — never null: an answer without it is
+   * an upstream failure, because the webhook binds a settlement to its intent through it), and the
+   * per-intention client secret the browser needs to open Unified Checkout.
    */
   record IntentionResult(String intentionId, String paymobOrderId, String clientSecret) {}
 

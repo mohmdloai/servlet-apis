@@ -214,7 +214,9 @@ public final class PaymobInquiryService {
             case REPLAYED -> replayed++;
             case ORPHAN -> orphaned++;
             case REVERSED -> reversed++;
-            case IGNORED -> leftPending++; // a 3DS challenge still in flight, or auth-only
+            // A 3DS challenge still in flight, auth-only, or an object nothing can be recorded
+            // from (no id, non-positive amount): the intent waits for its own deadline.
+            case IGNORED -> leftPending++;
             case REJECTED -> {
               log.warn(
                   "Paymob inquiry for intent {} (org {}) rejected: {}",

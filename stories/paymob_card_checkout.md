@@ -180,8 +180,11 @@ check against (epic §Webhook routing).
  5. obj.pending == true                                        → 200, no write  ← see epic
     obj.is_auth && !obj.is_capture                             → 200, WARN
     obj.has_parent_transaction (refund/void)                   → 200, WARN (slice 3 records these)
+    obj.id absent, or amount_cents <= 0                        → 200, WARN, no write (unrecordable)
  6. Resolve intent by special_reference     absent             → record as ORPHAN, 200
- 7. amount_cents != intent.amount×100
+ 7. obj.order.id (SIGNED) != intent.paymob_order_id,
+    or either side absent                                      → record as ORPHAN, 200
+    amount_cents != intent.amount×100
     or currency != intent.currency                             → record as ORPHAN, 200
  8. settled → one transaction, reconcile, respond              → 200
 ```
@@ -301,7 +304,8 @@ the text above, this is why:
   intention created, which is the ONE identifier of ours that appears in the callback's *signed*
   field list (`obj.order.id`); the webhook binds a callback to its intent through it, because
   `order.merchant_order_id` (Paymob's echo of `special_reference`) is unsigned. A signed mismatch is
-  a recorded ORPHAN. `client_secret` — without it the "two taps inside the TTL → identical
+  a recorded ORPHAN — and so is an absent handle on either side, since
+  `stories/paymob_webhook_binding.md` made the binding mandatory. `client_secret` — without it the "two taps inside the TTL → identical
   `checkout_url`" criterion cannot hold (the URL is `host + public_key + client_secret`); it is the
   per-intention browser secret, not a merchant credential, and is stored in the clear on purpose.
   `idx_payment_intent_order` — the reuse lookup reads by order and Postgres does not index FKs.
