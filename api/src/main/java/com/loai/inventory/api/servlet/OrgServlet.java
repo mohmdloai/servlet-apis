@@ -18,6 +18,7 @@ import com.loai.inventory.api.servlet.handler.HealthHandler;
 import com.loai.inventory.api.servlet.handler.ImpersonationHandler;
 import com.loai.inventory.api.servlet.handler.InventoryHandler;
 import com.loai.inventory.api.servlet.handler.InvoiceHandler;
+import com.loai.inventory.api.servlet.handler.LedgerHandler;
 import com.loai.inventory.api.servlet.handler.LogoHandler;
 import com.loai.inventory.api.servlet.handler.MemberHandler;
 import com.loai.inventory.api.servlet.handler.NotificationHandler;
@@ -90,6 +91,7 @@ public class OrgServlet extends HttpServlet {
             Map.entry("whatsapp", new WhatsAppHandler(config.orgWhatsAppService, mapper)),
             Map.entry("paymob", new PaymobHandler(config.orgPaymobService, mapper)),
             Map.entry("reports", new ReportsHandler(config.reportService, mapper)),
+            Map.entry("ledger", new LedgerHandler(config.ledgerService, mapper)),
             Map.entry(
                 "shifts",
                 new CashShiftHandler(

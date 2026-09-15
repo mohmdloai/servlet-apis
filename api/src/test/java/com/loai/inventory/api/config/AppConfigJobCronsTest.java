@@ -27,4 +27,16 @@ class AppConfigJobCronsTest {
       assertEquals(System.getenv("SUPPORT_AUTO_CLOSE_INTERVAL"), cron);
     }
   }
+
+  @Test
+  void theLedgerPosterIsRegisteredWithItsDefaultCron() {
+    Map<String, String> crons = AppConfig.resolveJobCrons();
+    assertEquals("ledger-poster", AppConfig.JOB_LEDGER_POSTER);
+    String cron = crons.get(AppConfig.JOB_LEDGER_POSTER);
+    if (System.getenv("LEDGER_POSTER_INTERVAL") == null) {
+      assertEquals("30 */5 * * * *", cron, "every five minutes, off the other sweepers' second");
+    } else {
+      assertEquals(System.getenv("LEDGER_POSTER_INTERVAL"), cron);
+    }
+  }
 }

@@ -60,9 +60,15 @@ docker exec inventory_db sh -c \
 # OWNER of three stores + platform ADMIN (the run.sh output names the granted slugs).
 ```
 
-### perfdb schema state: hand-migrated to V96 (2026-09-05)
+### perfdb schema state: hand-migrated to V101 (2026-09-15)
 
-**perfdb's schema and Flyway history are both at V96** (V95 cash shift + V96 Web Push applied
+**perfdb's schema and Flyway history are both at V101** (V97 support tickets, V98–V100 Paymob,
+V101 general ledger — applied 2026-09-15 by the standing procedure below, one version at a time,
+history rows copied from dev; V101's ledger tables are *derived* data, rebuilt by
+`PerfdbLedgerBench` / `POST /ledger/rebuild`, and its `payment_allocation (org_id)` index is the
+measured one in `results/general_ledger_196.txt`). Before that, at V96:
+
+**perfdb's schema and Flyway history were both at V96** (V95 cash shift + V96 Web Push applied
 2026-09-05 by the standing procedure below; V87–V94 on 2026-09-04; history 96 rows, row-for-row
 with dev; V95 adds `cash_shift`/`cash_movement` + `payment_transaction.cash_shift_id` +
 `org.shift_required`, V96 `push_subscription` + `notification_delivery_push` + the widened channel
