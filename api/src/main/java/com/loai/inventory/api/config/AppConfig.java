@@ -1,6 +1,7 @@
 package com.loai.inventory.api.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.loai.inventory.api.job.LedgerPosterJob;
 import com.loai.inventory.api.job.NotificationDeliverySweeperJob;
 import com.loai.inventory.api.job.OrderTtlSweeperJob;
 import com.loai.inventory.api.job.PaymobInquiryJob;
@@ -78,6 +79,7 @@ import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryReservationRepositoryFactoryImpl;
+import com.loai.inventory.repository.LedgerRepositoryFactoryImpl;
 import com.loai.inventory.repository.ListingCommentRepositoryFactoryImpl;
 import com.loai.inventory.repository.ListingReviewRepositoryFactoryImpl;
 import com.loai.inventory.repository.NotificationPreferenceRepositoryFactoryImpl;
@@ -125,6 +127,7 @@ import com.loai.inventory.service.FulfillmentService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceService;
+import com.loai.inventory.service.LedgerService;
 import com.loai.inventory.service.ListingCommentService;
 import com.loai.inventory.service.ListingReviewService;
 import com.loai.inventory.service.LowStockNotifier;
@@ -235,6 +238,7 @@ public class AppConfig {
   public static final String JOB_UNVERIFIED_ACCOUNT_PURGE = "unverified-account-purge";
   public static final String JOB_SUPPORT_TICKET_AUTO_CLOSE = "support-ticket-auto-close";
   public static final String JOB_PAYMOB_INQUIRY = "paymob-inquiry";
+  public static final String JOB_LEDGER_POSTER = "ledger-poster";
 
   // Infrastructure
   public final HikariDataSource dataSource;
@@ -315,6 +319,7 @@ public class AppConfig {
   public final OrgService orgService;
   public final OrgHealthService orgHealthService;
   public final ReportService reportService;
+  public final LedgerService ledgerService;
   public final MemberService memberService;
   public final PlatformAuditService platformAuditService;
   public final OrgStatusService orgStatusService;
@@ -410,6 +415,7 @@ public class AppConfig {
   public final UnverifiedAccountPurgeJob unverifiedAccountPurgeJob;
   public final SupportTicketAutoCloseJob supportTicketAutoCloseJob;
   public final PaymobInquiryJob paymobInquiryJob;
+  public final LedgerPosterJob ledgerPosterJob;
   private final boolean jobRunrStarted;
 
   public AppConfig() {
@@ -569,6 +575,9 @@ public class AppConfig {
         new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory, objectStorage);
     this.orgHealthService = new OrgHealthService(orgHealthRepository);
     this.reportService = new ReportService(reportRepository);
+    // stories/general_ledger.md: derived-then-posted; catches up on read, rebuilt on demand.
+    this.ledgerService =
+        new LedgerService(dsl, new LedgerRepositoryFactoryImpl(), orgRepositoryFactory);
     this.memberService = new MemberService(dsl, userRepositoryFactory, authService);
     this.platformAuditService = new PlatformAuditService(dsl, platformAuditRepositoryFactory);
     this.platformOrgService =
@@ -1029,6 +1038,9 @@ public class AppConfig {
     int inquiryBatchLimit = (int) parseLong(System.getenv("PAYMOB_INQUIRY_BATCH_LIMIT"), 100L);
     this.paymobInquiryJob = new PaymobInquiryJob(paymobInquiryService, inquiryBatchLimit);
 
+    int ledgerOrgPageSize = (int) parseLong(System.getenv("LEDGER_POSTER_ORG_PAGE_SIZE"), 100L);
+    this.ledgerPosterJob = new LedgerPosterJob(ledgerService, ledgerOrgPageSize);
+
     // The background scheduler is gated so tests (and any deployment that wants to drive expiry
     // only through POST /api/admin/sweep) can keep expiry deterministic. Default: enabled.
     boolean enableSweeper =
@@ -1100,6 +1112,10 @@ public class AppConfig {
     // Every two minutes: a card intent's TTL is 20 minutes and the grace window 3, so a lost
     // webhook is settled well inside the order hold (stories/paymob_card_reliability.md).
     crons.put(JOB_PAYMOB_INQUIRY, getenvOrDefault("PAYMOB_INQUIRY_INTERVAL", "0 */2 * * * *"));
+    // Every five minutes: reads catch the ledger up themselves, so the job only bounds how stale
+    // an unread org's journal can be (stories/general_ledger.md). Minute offset keeps it off the
+    // others' ticks.
+    crons.put(JOB_LEDGER_POSTER, getenvOrDefault("LEDGER_POSTER_INTERVAL", "30 */5 * * * *"));
     return crons;
   }
 
@@ -1156,6 +1172,9 @@ public class AppConfig {
             if (type.isInstance(paymobInquiryJob)) {
               return type.cast(paymobInquiryJob);
             }
+            if (type.isInstance(ledgerPosterJob)) {
+              return type.cast(ledgerPosterJob);
+            }
             throw new IllegalArgumentException("No JobRunr bean for " + type.getName());
           }
         };
@@ -1192,6 +1211,11 @@ public class AppConfig {
     scheduler.<PaymobInquiryJob>scheduleRecurrently(
         JOB_PAYMOB_INQUIRY, inquiryCron, PaymobInquiryJob::run);
     log.info("Paymob inquiry poller scheduled (cron='{}')", inquiryCron);
+
+    String ledgerCron = jobCrons.get(JOB_LEDGER_POSTER);
+    scheduler.<LedgerPosterJob>scheduleRecurrently(
+        JOB_LEDGER_POSTER, ledgerCron, LedgerPosterJob::run);
+    log.info("Ledger poster scheduled (cron='{}')", ledgerCron);
     return true;
   }
 

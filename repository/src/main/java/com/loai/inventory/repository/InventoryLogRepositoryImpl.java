@@ -1,6 +1,7 @@
 package com.loai.inventory.repository;
 
 import static com.loai.inventory.repository.generated.Tables.INVENTORY_LOG;
+import static com.loai.inventory.repository.generated.Tables.PRODUCT;
 
 import com.loai.inventory.domain.model.ActorContext;
 import com.loai.inventory.domain.model.ActorType;
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
+import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -137,7 +139,13 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
                     actor.actorType().name())
                 : null)
         .set(INVENTORY_LOG.IMPERSONATOR_ID, actor != null ? actor.impersonatorId() : null)
-        .set(INVENTORY_LOG.IDEMPOTENCY_KEY, idempotencyKey);
+        .set(INVENTORY_LOG.IDEMPOTENCY_KEY, idempotencyKey)
+        // V101 (stories/general_ledger.md): what a unit cost the moment it moved, read from the
+        // product inside the same statement so no caller changes. NULL when uncosted — the ledger
+        // poster skips the row and counts it, never prices it at zero.
+        .set(
+            INVENTORY_LOG.UNIT_COST,
+            DSL.select(PRODUCT.COST_PRICE).from(PRODUCT).where(PRODUCT.ID.eq(productId)).asField());
   }
 
   @Override

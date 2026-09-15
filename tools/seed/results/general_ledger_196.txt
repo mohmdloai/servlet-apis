@@ -1,0 +1,88 @@
+General ledger (stories/general_ledger.md, V101) — perfdb measurements, 2026-09-15
+==================================================================================
+
+Setup: perfdb hand-migrated V97–V101 (tools/seed/README.md standing procedure), compose Postgres 17
+on 5433, shared_buffers 128 MB against ~183 MB tables. Driver: api/src/test/.../PerfdbLedgerBench
+(PERFDB_BENCH=1 mvn -o test -pl api -Dtest=PerfdbLedgerBench), which runs the production
+LedgerService against perfdb, plus EXPLAIN (ANALYZE, BUFFERS) in psql (warm, twice, second kept).
+
+Largest org by invoices: 7cd0129d-2e8d-4e87-9334-20e6d9d80b8d
+  sales_invoice 3 562 · payment_transaction 4 266 · payment_allocation 3 562 · credit_note 52 ·
+  refund 133 · inventory_log 24 184 (24 064 value-moving, ALL uncosted — perfdb costs nothing)
+  → 11 570 journal entries after a rebuild.
+
+What the first bench found (design as first written)
+----------------------------------------------------
+- No-op catch-up (nothing to post) on this org: 2 757 / 2 967 ms. Per kind (logged later, same
+  shape): INVOICE/ISSUED 896, RECEIPT/RECEIVED 784, ALLOCATION/APPLIED 994, STOCK/MOVED 463.
+- INVOICE/ISSUED anti-join, guard inside the same predicate:
+    Nested Loop Anti Join … Join Filter: (je.source_id = (s.id)::text)
+    Rows Removed by Join Filter: 6 342 141 … rows=17 (estimated) vs 3 562 (actual)
+    Execution Time: 1 008 ms
+  The identity guard (grand_total = subtotal + tax + shipping − discount) made the planner estimate
+  17 rows, so it materialised the journal side and filtered 3 562 × 1 782 pairs.
+- STOCK/MOVED with the per-row LATERAL cost lookup in the predicate: cost estimate 671 163 → JIT:
+    Timing: … Optimization 84 ms, Emission 80 ms, Total 175 ms; Execution Time: 190 ms
+  (39 ms of actual work.)
+- ALLOCATION/APPLIED: payment_allocation has no per-org index (V24 indexes invoice and payment):
+    Gather → Parallel Seq Scan on payment_allocation (696 569 rows) … Execution Time: 124 ms cold,
+    61 ms warm — for ANY org, however small.
+- Trial balance 366d, joining every journal_line to its journal_entry for posted_at:
+    Buffers: shared hit=107 605 read=33 451 … 838 ms cold (36 ms warm).
+
+The three changes, each measured
+--------------------------------
+1. Delta first: the anti-join over the BASE predicate only (MATERIALIZED), guards and joins after.
+     INVOICE/ISSUED unposted:   Hash Anti Join … Execution Time: 2.3–2.6 ms   (was 1 008)
+     RECEIPT/RECEIVED unposted: Hash Anti Join … Execution Time: 4.0 ms
+     STOCK/MOVED unposted:      Nested Loop Anti Join over 24 064 rows … 10–11 ms (no JIT: no subplan)
+2. payment_allocation (org_id) index (V101):
+     before: Parallel Seq Scan … 61 ms warm / 124 ms cold
+     after:  Bitmap Heap Scan on payment_allocation (3 562 rows) → Hash Anti Join … 3.8–11.7 ms
+3. ledger_skip: rows the guard refuses leave the delta. Before it, every catch-up re-costed the
+   24 064 uncosted stock rows (STOCK/MOVED = 342 ms of a 538 ms no-op catch-up, warm).
+   journal_line.posted_at + index (org_id, account_id, posted_at): the trial balance is one range
+   per account, no join to journal_entry.
+
+Steady state after the three changes (warm; VACUUM ANALYZE after the rebuild, 8th catch-up kept —
+the JDBC driver switches to server-side prepared statements after five executions)
+-----------------------------------------------------------------------------------------------
+  rebuild reset=true, full backfill of the org (11 570 entries):   3 341 ms
+  catch-up, nothing to post:                                          100 ms   (was 2 967)
+  trial balance 30d  (includes its catch-up):                         193 ms
+  trial balance 366d (includes its catch-up):                        ~258 ms   (516 for two calls)
+  journal page 50, 366d (includes its catch-up):                     ~115 ms
+  statement 1100 page 50, 366d (includes its catch-up):              ~118 ms
+  health (includes its catch-up + 8 drift counts + 2 cross-checks):  ~212 ms
+
+  Every read pays the catch-up; on this org that is ~100 ms of the figure above. A typical shop
+  (hundreds of rows) is milliseconds. LedgerRepositoryImpl logs a WARN with the per-kind split
+  whenever a catch-up exceeds 500 ms, so a plan regression is a log line, not a slow page.
+
+Indexes: one added (payment_allocation (org_id)), justified above. journal_* indexes are the
+ledger's own. Nothing else was needed: every other source table already had a per-org index.
+
+The whole perfdb backfill (the ledger-poster job's first tick on a deployment: 201 orgs,
+696 569 invoices, 846 196 transactions, 696 569 allocations, 5 000 014 inventory_log rows)
+-----------------------------------------------------------------------------------------
+  sweepAll(100), first tick:                       574 608 ms (9.6 min) → 1 658 705 entries posted
+  sweepAll(100), second tick (nothing to post):     46 829 ms over 201 orgs (~233 ms/org, cold)
+  journal afterwards: 2,272,403 entries · 5,251,767 lines · 4,973,865 skips (ledger_skip) · 3340 MB
+
+  Notes: the first tick ran once after an earlier attempt was killed part-way (the machine ran out
+  of memory with a Next.js build alongside), so ~40 orgs were already partly posted when it
+  started — the 9.6 min is a lower bound for a truly fresh deployment of this size, and the job
+  runs it org by org in its own transactions, so a restart resumes rather than repeats. Every
+  perfdb stock row is uncosted, hence the 4,973,865 skips: 5 M inventory_log rows judged once, then
+  out of every future delta. The largest-org rebuild in this run was 6.4 s because it deleted the
+  11 570 existing entries first (3.3 s onto an empty journal in the previous run).
+
+  Storage, for the record: journal_entry 1135 MB · journal_line 1323 MB · ledger_skip 882 MB (with their
+  indexes), beside the sources they derive from (inventory_log 697 MB, sales_invoice 401 MB). At
+  perfdb's scale (1 M orders, 5 M stock rows, none costed) the derived ledger is larger than its
+  sources — the skip table alone is one row per uncosted stock move. A shop of ordinary size is
+  a hundredth of this; a merchant who costs the catalogue turns skips into entries, not fewer rows.
+
+  Second run of the largest-org reads (same session, noisier machine): trial balance 30d 194 ms,
+  366d ~265 ms, journal page ~228 ms, statement page ~144 ms, health ~374 ms — each including its
+  ~100 ms catch-up.
