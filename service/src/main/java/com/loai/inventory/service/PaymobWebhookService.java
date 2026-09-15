@@ -66,7 +66,11 @@ public final class PaymobWebhookService {
     public enum Kind {
       /** Unverifiable: no active config, malformed body, bad signature. 400, nothing written. */
       REJECTED,
-      /** Verified and deliberately not acted on: pending, TOKEN, auth-only, refund/void. */
+      /**
+       * Verified and not acted on: pending, TOKEN, auth-only, a failed reversal — or a verified
+       * body nothing can be recorded from (no {@code obj.id}, a non-positive amount). 200: a retry
+       * would deliver the same body and reach the same decision.
+       */
       IGNORED,
       /** Recorded, VERIFIED, reconciled against the intent's order; the order may now be PAID. */
       SETTLED,
@@ -129,9 +133,16 @@ public final class PaymobWebhookService {
    * @param presentedHmac the {@code ?hmac=} query parameter, or null
    */
   public Outcome handle(UUID orgId, String rawBody, String presentedHmac) {
+    // One transaction per delivery: the config that verifies the body and the rows the body writes
+    // are one unit of work. Nothing in here calls out — the connection is held for a parse, an
+    // HMAC and the writes, and a rejected or ignored delivery commits nothing.
+    return rootDsl.transactionResult(cfg -> handle(DSL.using(cfg), orgId, rawBody, presentedHmac));
+  }
+
+  private Outcome handle(DSLContext txDsl, UUID orgId, String rawBody, String presentedHmac) {
     // 1. Which key. No config, or a disabled one, is unverifiable input: 400, not 200.
     Optional<OrgPaymobConfig> config =
-        configRepoFactory.create(rootDsl).findByOrgId(orgId).filter(OrgPaymobConfig::isActive);
+        configRepoFactory.create(txDsl).findByOrgId(orgId).filter(OrgPaymobConfig::isActive);
     if (config.isEmpty()) {
       log.warn("Paymob webhook for org {} with no active Paymob config — rejected", orgId);
       return Outcome.of(Outcome.Kind.REJECTED, "no active Paymob configuration for this org");
@@ -172,7 +183,7 @@ public final class PaymobWebhookService {
       return Outcome.of(Outcome.Kind.REJECTED, "signature mismatch");
     }
 
-    return process(orgId, config.get(), cb, rawBody);
+    return process(txDsl, orgId, config.get(), cb, rawBody);
   }
 
   /**
@@ -186,13 +197,18 @@ public final class PaymobWebhookService {
    */
   public Outcome settleFromInquiry(
       UUID orgId, OrgPaymobConfig config, PaymobCallback cb, String rawBody) {
-    return process(orgId, config, cb, rawBody);
+    return rootDsl.transactionResult(cfg -> process(DSL.using(cfg), orgId, config, cb, rawBody));
   }
 
-  private Outcome process(UUID orgId, OrgPaymobConfig config, PaymobCallback cb, String rawBody) {
+  /** Classification and settlement of one verified transaction, inside the caller's transaction. */
+  private Outcome process(
+      DSLContext txDsl, UUID orgId, OrgPaymobConfig config, PaymobCallback cb, String rawBody) {
     String txnId = cb.transactionId();
     if (txnId == null || txnId.isBlank()) {
-      return Outcome.of(Outcome.Kind.REJECTED, "transaction has no id");
+      // Verified, so authentic — and unrecordable: obj.id is the provider_ref. Not REJECTED: a 400
+      // would only make Paymob resend the same body. 200 ends the retries; the WARN keeps the fact.
+      log.warn("Paymob webhook for org {} verified but carries no transaction id — ignored", orgId);
+      return Outcome.of(Outcome.Kind.IGNORED, "transaction has no id");
     }
 
     // 5. Verified but deliberately not acted on.
@@ -212,15 +228,19 @@ public final class PaymobWebhookService {
     }
     long amountCents = cb.amountCents();
     if (amountCents <= 0) {
+      // Same shape as a missing id: authentic, nothing to record, a retry changes nothing.
       log.warn(
-          "Paymob txn {} for org {} carries amount_cents {} — rejected", txnId, orgId, amountCents);
-      return Outcome.of(Outcome.Kind.REJECTED, "invalid amount");
+          "Paymob txn {} for org {} carries amount_cents {} — ignored, nothing to record",
+          txnId,
+          orgId,
+          amountCents);
+      return Outcome.of(Outcome.Kind.IGNORED, "invalid amount");
     }
     ZoneId paymobZone = PaymobHosts.zoneForRegion(config.region());
 
-    // 6–8. Everything that writes, in one transaction. A refund/void child is money LEAVING and
-    //      takes its own path (slice 3); a parent re-sent with is_refunded/is_voided flipped lands
-    //      on the parent's dedupe below as a replay.
+    // 6–8. Everything that writes. A refund/void child is money LEAVING and takes its own path
+    //      (slice 3); a parent re-sent with is_refunded/is_voided flipped lands on the parent's
+    //      dedupe below as a replay.
     if (cb.isReversal()) {
       if (!cb.success()) {
         log.warn(
@@ -229,10 +249,9 @@ public final class PaymobWebhookService {
             orgId);
         return Outcome.of(Outcome.Kind.IGNORED, "failed reversal");
       }
-      return rootDsl.transactionResult(
-          cfg -> recordReversal(DSL.using(cfg), orgId, cb, rawBody, paymobZone));
+      return recordReversal(txDsl, orgId, cb, rawBody, paymobZone);
     }
-    return rootDsl.transactionResult(cfg -> record(DSL.using(cfg), orgId, cb, rawBody, paymobZone));
+    return record(txDsl, orgId, cb, rawBody, paymobZone);
   }
 
   /**
@@ -413,13 +432,19 @@ public final class PaymobWebhookService {
 
     // 7. The cross-check against what we ASKED for — the intent, not only the order. An intent
     //    minted for an older, cheaper total must never settle a repriced order; a callback whose
-    //    signed Paymob order is not this intent's must never settle it either.
+    //    signed Paymob order is not this intent's must never settle it either. The signed binding
+    //    is MANDATORY: with either side absent the check would shrink, silently, to amount +
+    //    currency — and identical amounts are not rare in a shop. The intention refuses to mint
+    //    without Paymob's order id (JdkPaymobClient), so an intent lacking one is a row from
+    //    before that rule; it gets a human, not a settlement.
     String orphanReason = null;
     if (intent == null) {
       orphanReason = "no payment intent matches this callback";
-    } else if (intent.getPaymobOrderId() != null
-        && cb.paymobOrderId() != null
-        && !intent.getPaymobOrderId().equals(cb.paymobOrderId())) {
+    } else if (intent.getPaymobOrderId() == null) {
+      orphanReason = "intent " + intent.getId() + " carries no Paymob order id to bind against";
+    } else if (cb.paymobOrderId() == null) {
+      orphanReason = "callback carries no signed Paymob order id";
+    } else if (!intent.getPaymobOrderId().equals(cb.paymobOrderId())) {
       orphanReason =
           "signed Paymob order "
               + cb.paymobOrderId()

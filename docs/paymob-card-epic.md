@@ -196,6 +196,12 @@ the order.** Checking the order alone is insufficient: an intent minted for an o
 would settle a repriced order. A mismatch is recorded as **ORPHAN** — never silently accepted, never
 dropped. Money that arrived must always leave a row.
 
+**The signed binding is mandatory** (`stories/paymob_webhook_binding.md`). The intent is *found* by
+unsigned fields (`order.merchant_order_id`, `extras.intent_id`) and *bound* by the signed `order.id`
+against the `paymob_order_id` remembered at intention time. Either side absent is an ORPHAN, never
+a fall-through to amount + currency — identical amounts are not rare in a shop — and an intention
+Paymob answers without an `intention_order_id` is refused at mint time (502, no row).
+
 `accept_online_payment.md` §"Known follow-ups" anticipated the other half of this exactly:
 
 > **Currency mismatch returns 400 (rolls back the claim).** Intentional for admin-entered data (a
@@ -236,6 +242,7 @@ Paymob retries on non-2xx. The response code is therefore a control signal, not 
 |---|---|---|
 | Settled, or idempotent replay of a settled event | `200` | done; stop retrying |
 | Verified but deliberately ignored (pending, `TOKEN`, auth-only, refund) | `200` | a retry would not change the decision |
+| Verified but unrecordable (no `obj.id`, non-positive `amount_cents`) | `200` | authentic and nonsensical; a retry delivers the same body |
 | Bad/absent HMAC, unknown or disabled org, malformed body | `400` | unverifiable; retrying a forgery helps no one |
 | Transient failure (DB down, lock timeout) | `500` | **let it retry** — this is the one case retries exist for |
 
