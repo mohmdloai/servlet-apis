@@ -155,11 +155,19 @@ public final class InventoryMapper {
   }
 
   public static List<InventoryLogRow> toLogRows(LogPage page) {
-    return page.logs().stream().map(l -> InventoryLogRow.from(l, orderNumber(page, l))).toList();
+    return page.logs().stream()
+        .map(l -> InventoryLogRow.from(l, orderNumber(page, l), receiptNumber(page, l)))
+        .toList();
   }
 
   private static String orderNumber(LogPage page, InventoryLog log) {
     return log.getOrderId() == null ? null : page.orderNumbers().get(log.getOrderId());
+  }
+
+  private static String receiptNumber(LogPage page, InventoryLog log) {
+    return log.getGoodsReceiptId() == null
+        ? null
+        : page.receiptNumbers().get(log.getGoodsReceiptId());
   }
 
   public static OrderReservationsResponse toOrderReservationsResponse(OrderReservations r) {

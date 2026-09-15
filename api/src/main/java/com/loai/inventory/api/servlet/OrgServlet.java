@@ -14,6 +14,7 @@ import com.loai.inventory.api.servlet.handler.CouponHandler;
 import com.loai.inventory.api.servlet.handler.CreditNoteHandler;
 import com.loai.inventory.api.servlet.handler.CustomerHandler;
 import com.loai.inventory.api.servlet.handler.FulfillmentHandler;
+import com.loai.inventory.api.servlet.handler.GoodsReceiptHandler;
 import com.loai.inventory.api.servlet.handler.HealthHandler;
 import com.loai.inventory.api.servlet.handler.ImpersonationHandler;
 import com.loai.inventory.api.servlet.handler.InventoryHandler;
@@ -37,6 +38,7 @@ import com.loai.inventory.api.servlet.handler.ReviewHandler;
 import com.loai.inventory.api.servlet.handler.SalesOrderHandler;
 import com.loai.inventory.api.servlet.handler.StorefrontHandler;
 import com.loai.inventory.api.servlet.handler.StorefrontPageHandler;
+import com.loai.inventory.api.servlet.handler.SupplierHandler;
 import com.loai.inventory.api.servlet.handler.WhatsAppHandler;
 import com.loai.inventory.common.exception.AppException;
 import com.loai.inventory.common.exception.ValidationException;
@@ -109,6 +111,9 @@ public class OrgServlet extends HttpServlet {
                 new ProductListingHandler(
                     config.productListingService, config.productVariantService, mapper)),
             Map.entry("customers", new CustomerHandler(config.customerService, mapper)),
+            Map.entry("suppliers", new SupplierHandler(config.supplierService, mapper)),
+            Map.entry(
+                "goods-receipts", new GoodsReceiptHandler(config.goodsReceiptService, mapper)),
             Map.entry(
                 "inventory",
                 new InventoryHandler(

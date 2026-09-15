@@ -60,9 +60,14 @@ docker exec inventory_db sh -c \
 # OWNER of three stores + platform ADMIN (the run.sh output names the granted slugs).
 ```
 
-### perfdb schema state: hand-migrated to V101 (2026-09-15)
+### perfdb schema state: hand-migrated to V102 (2026-09-15)
 
-**perfdb's schema and Flyway history are both at V101** (V97 support tickets, V98–V100 Paymob,
+**perfdb's schema and Flyway history are both at V102** — V102 (supplier + goods receipt, inbound
+slice 1) applied 2026-09-15 by the standing procedure below. It is pure DDL over four new tables
+plus `inventory_log.goods_receipt_id` (nullable, **not** backfilled), so no seeded row changed and
+nothing needs re-benching. Before that, at V101:
+
+**perfdb's schema and Flyway history were both at V101** (V97 support tickets, V98–V100 Paymob,
 V101 general ledger — applied 2026-09-15 by the standing procedure below, one version at a time,
 history rows copied from dev; V101's ledger tables are *derived* data, rebuilt by
 `PerfdbLedgerBench` / `POST /ledger/rebuild`, and its `payment_allocation (org_id)` index is the

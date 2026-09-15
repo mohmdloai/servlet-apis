@@ -198,6 +198,16 @@ public class ProductRepositoryImpl implements ProductRepository {
   }
 
   @Override
+  public boolean updateCostPrice(UUID orgId, UUID productId, java.math.BigDecimal costPrice) {
+    return dsl.update(PRODUCT)
+            .set(PRODUCT.COST_PRICE, costPrice)
+            .set(PRODUCT.UPDATED_AT, java.time.OffsetDateTime.now())
+            .where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.ID.eq(productId)))
+            .execute()
+        > 0;
+  }
+
+  @Override
   public void deleteById(UUID orgId, UUID id) {
     int deleted =
         dsl.deleteFrom(PRODUCT).where(PRODUCT.ORG_ID.eq(orgId).and(PRODUCT.ID.eq(id))).execute();

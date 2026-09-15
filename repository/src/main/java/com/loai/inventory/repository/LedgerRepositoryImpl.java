@@ -276,6 +276,15 @@ public final class LedgerRepositoryImpl implements LedgerRepository {
           // Stock value moved: a sale expenses it, a return / failed-fulfillment restock brings it
           // back, a restock adds it against the unbilled supplier, a count or adjustment writes
           // shrinkage (down) or a found gain (up). Uncosted rows are skipped and counted.
+          //
+          // The template takes abs(delta), so each arm that can go both ways picks its accounts by
+          // sign. V102 made RESTOCK one of them — a goods-receipt void writes a negative RESTOCK
+          // row, unreachable before it (validateQty refuses qty <= 0), which the fixed arm would
+          // have posted as an increase:
+          //     RESTOCK, delta > 0 → DR 1200 Inventory / CR 2000 Purchases (unbilled)
+          //     RESTOCK, delta < 0 → DR 2000 Purchases / CR 1200 Inventory
+          // No posted entry changes (no existing row has a negative RESTOCK delta), so a
+          // ?reset=true rebuild over existing data is byte-identical — asserted, not assumed.
           new Template(
               "STOCK",
               "MOVED",
@@ -287,10 +296,12 @@ public final class LedgerRepositoryImpl implements LedgerRepository {
               "s.created_at AS posted_at, p.sku || ' ' || s.reason::text || ' ' || s.stock_delta"
                   + " AS memo, abs(s.stock_delta) * cost.unit_cost AS amount, CASE s.reason::text"
                   + " WHEN 'SOLD' THEN '5000' WHEN 'RETURNED' THEN '1200' WHEN"
-                  + " 'RESTOCKED_FAILED_FULFILLMENT' THEN '1200' WHEN 'RESTOCK' THEN '1200' ELSE"
+                  + " 'RESTOCKED_FAILED_FULFILLMENT' THEN '1200' WHEN 'RESTOCK' THEN CASE WHEN"
+                  + " s.stock_delta < 0 THEN '2000' ELSE '1200' END ELSE"
                   + " CASE WHEN s.stock_delta < 0 THEN '5100' ELSE '1200' END END AS dr_code,"
                   + " CASE s.reason::text WHEN 'SOLD' THEN '1200' WHEN 'RETURNED' THEN '5000' WHEN"
-                  + " 'RESTOCKED_FAILED_FULFILLMENT' THEN '5000' WHEN 'RESTOCK' THEN '2000' ELSE"
+                  + " 'RESTOCKED_FAILED_FULFILLMENT' THEN '5000' WHEN 'RESTOCK' THEN CASE WHEN"
+                  + " s.stock_delta < 0 THEN '1200' ELSE '2000' END ELSE"
                   + " CASE WHEN s.stock_delta < 0 THEN '1200' ELSE '5100' END END AS cr_code",
               "(1, 'DR', n.dr_code, n.amount), (2, 'CR', n.cr_code, n.amount)"),
           // Cash in or out of the drawer outside a sale. The reason is free text, so a pay-out is

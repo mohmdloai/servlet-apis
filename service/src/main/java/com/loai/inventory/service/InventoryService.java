@@ -49,6 +49,10 @@ public class InventoryService {
   private final ProductRepository productRepository;
   private final SalesOrderRepositoryFactory salesOrderRepoFactory;
 
+  /** Null in the pre-V102 constructor the ITs use — the movement ledger then names no receipt. */
+  private final com.loai.inventory.domain.repository.GoodsReceiptRepositoryFactory
+      goodsReceiptRepoFactory;
+
   public InventoryService(
       DSLContext rootDsl,
       InventoryRepositoryFactory repoFactory,
@@ -56,12 +60,31 @@ public class InventoryService {
       InventoryReservationRepositoryFactory reservationRepoFactory,
       ProductRepository productRepository,
       SalesOrderRepositoryFactory salesOrderRepoFactory) {
+    this(
+        rootDsl,
+        repoFactory,
+        logRepoFactory,
+        reservationRepoFactory,
+        productRepository,
+        salesOrderRepoFactory,
+        null);
+  }
+
+  public InventoryService(
+      DSLContext rootDsl,
+      InventoryRepositoryFactory repoFactory,
+      InventoryLogRepositoryFactory logRepoFactory,
+      InventoryReservationRepositoryFactory reservationRepoFactory,
+      ProductRepository productRepository,
+      SalesOrderRepositoryFactory salesOrderRepoFactory,
+      com.loai.inventory.domain.repository.GoodsReceiptRepositoryFactory goodsReceiptRepoFactory) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.logRepoFactory = logRepoFactory;
     this.reservationRepoFactory = reservationRepoFactory;
     this.productRepository = productRepository;
     this.salesOrderRepoFactory = salesOrderRepoFactory;
+    this.goodsReceiptRepoFactory = goodsReceiptRepoFactory;
   }
 
   public Inventory getByProductId(UUID orgId, UUID productId) {
@@ -124,8 +147,16 @@ public class InventoryService {
     return repoFactory.create(rootDsl).stockCounts(orgId, lowLte == null ? 5 : lowLte);
   }
 
-  /** One page of a product's movement ledger + batch-loaded order numbers + the total. */
-  public record LogPage(List<InventoryLog> logs, Map<UUID, String> orderNumbers, long total) {}
+  /**
+   * One page of a product's movement ledger + the two batch-loaded document numbers + the total.
+   * {@code receiptNumbers} is {@code goods_receipt_number} for rows a V102 receipt caused — {@code
+   * orderNumbers}' exact mirror.
+   */
+  public record LogPage(
+      List<InventoryLog> logs,
+      Map<UUID, String> orderNumbers,
+      Map<UUID, String> receiptNumbers,
+      long total) {}
 
   /**
    * The movement ledger for one product ({@code GET /inventory/{productId}/log}): the append-only
@@ -150,7 +181,19 @@ public class InventoryService {
                     .filter(Objects::nonNull)
                     .distinct()
                     .toList());
-    return new LogPage(logs, orderNumbers, total);
+    Map<UUID, String> receiptNumbers =
+        goodsReceiptRepoFactory == null
+            ? Map.of()
+            : goodsReceiptRepoFactory
+                .create(rootDsl)
+                .findReceiptNumbersByIds(
+                    orgId,
+                    logs.stream()
+                        .map(InventoryLog::getGoodsReceiptId)
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .toList());
+    return new LogPage(logs, orderNumbers, receiptNumbers, total);
   }
 
   /** An order's stock holds: the order header + every reservation + batch-loaded product names. */

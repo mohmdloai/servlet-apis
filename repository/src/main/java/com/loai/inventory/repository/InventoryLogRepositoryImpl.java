@@ -36,6 +36,33 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
       StockReason reason,
       UUID orderId,
       ActorContext actor) {
+    return insert(
+        orgId,
+        productId,
+        stockDelta,
+        reservedDelta,
+        stockAfter,
+        reservedAfter,
+        reason,
+        orderId,
+        actor,
+        null,
+        null);
+  }
+
+  @Override
+  public InventoryLog insert(
+      UUID orgId,
+      UUID productId,
+      int stockDelta,
+      int reservedDelta,
+      int stockAfter,
+      int reservedAfter,
+      StockReason reason,
+      UUID orderId,
+      ActorContext actor,
+      java.math.BigDecimal unitCost,
+      UUID goodsReceiptId) {
 
     InventoryLogRecord record =
         baseInsert(
@@ -48,7 +75,9 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
                 reason,
                 orderId,
                 actor,
-                null)
+                null,
+                unitCost,
+                goodsReceiptId)
             .returning()
             .fetchOne();
 
@@ -93,7 +122,9 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
                 reason,
                 orderId,
                 actor,
-                idempotencyKey)
+                idempotencyKey,
+                null,
+                null)
             .onConflictDoNothing()
             .returning()
             .fetchOne();
@@ -108,7 +139,17 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
         .map(this::toInventoryLog);
   }
 
-  /** Shared column binding for both the plain and idempotent inserts. */
+  /**
+   * Shared column binding for every insert.
+   *
+   * <pre>
+   *   unit_cost ← unitCost ≠ null ? unitCost : (SELECT cost_price FROM product WHERE id = ?)
+   * </pre>
+   *
+   * <p>V101 stamped the subselect so no caller had to change; V102 opens it up for the one caller
+   * that knows better — a goods receipt, whose cost is on the delivery note. Null keeps today's
+   * behaviour, so every pre-V102 caller is untouched.
+   */
   private org.jooq.InsertSetMoreStep<InventoryLogRecord> baseInsert(
       UUID orgId,
       UUID productId,
@@ -119,7 +160,9 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
       StockReason reason,
       UUID orderId,
       ActorContext actor,
-      String idempotencyKey) {
+      String idempotencyKey,
+      java.math.BigDecimal unitCost,
+      UUID goodsReceiptId) {
     return dsl.insertInto(INVENTORY_LOG)
         .set(INVENTORY_LOG.ORG_ID, orgId)
         .set(INVENTORY_LOG.PRODUCT_ID, productId)
@@ -140,12 +183,15 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
                 : null)
         .set(INVENTORY_LOG.IMPERSONATOR_ID, actor != null ? actor.impersonatorId() : null)
         .set(INVENTORY_LOG.IDEMPOTENCY_KEY, idempotencyKey)
-        // V101 (stories/general_ledger.md): what a unit cost the moment it moved, read from the
-        // product inside the same statement so no caller changes. NULL when uncosted — the ledger
-        // poster skips the row and counts it, never prices it at zero.
+        .set(INVENTORY_LOG.GOODS_RECEIPT_ID, goodsReceiptId)
         .set(
             INVENTORY_LOG.UNIT_COST,
-            DSL.select(PRODUCT.COST_PRICE).from(PRODUCT).where(PRODUCT.ID.eq(productId)).asField());
+            unitCost != null
+                ? DSL.val(unitCost)
+                : DSL.select(PRODUCT.COST_PRICE)
+                    .from(PRODUCT)
+                    .where(PRODUCT.ID.eq(productId))
+                    .asField());
   }
 
   @Override
@@ -153,6 +199,15 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
     return dsl.selectFrom(INVENTORY_LOG)
         .where(INVENTORY_LOG.ORG_ID.eq(orgId).and(INVENTORY_LOG.PRODUCT_ID.eq(productId)))
         .orderBy(INVENTORY_LOG.CREATED_AT.desc())
+        .fetch(this::toInventoryLog);
+  }
+
+  @Override
+  public List<InventoryLog> findByGoodsReceiptId(UUID orgId, UUID goodsReceiptId) {
+    return dsl.selectFrom(INVENTORY_LOG)
+        .where(
+            INVENTORY_LOG.ORG_ID.eq(orgId).and(INVENTORY_LOG.GOODS_RECEIPT_ID.eq(goodsReceiptId)))
+        .orderBy(INVENTORY_LOG.ID.asc())
         .fetch(this::toInventoryLog);
   }
 
@@ -186,6 +241,7 @@ public final class InventoryLogRepositoryImpl implements InventoryLogRepository 
     l.setReservedAfter(r.getReservedAfter());
     l.setReason(StockReason.valueOf(r.getReason().getLiteral()));
     l.setOrderId(r.getOrderId());
+    l.setGoodsReceiptId(r.getGoodsReceiptId());
     l.setActorId(r.getActorId());
     if (r.getActorType() != null) {
       l.setActorType(ActorType.valueOf(r.getActorType().getLiteral()));

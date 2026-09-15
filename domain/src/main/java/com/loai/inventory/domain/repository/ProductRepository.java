@@ -46,6 +46,13 @@ public interface ProductRepository {
 
   Product update(Product product);
 
+  /**
+   * Set {@code cost_price} alone — the narrow verb a goods receipt writes through (last cost,
+   * V102). Deliberately not a field on {@link #update}: a receipt must touch nothing else on the
+   * catalog row. Returns false when the product is not in {@code orgId}.
+   */
+  boolean updateCostPrice(UUID orgId, UUID productId, java.math.BigDecimal costPrice);
+
   void deleteById(UUID orgId, UUID id);
 
   boolean existsBySku(UUID orgId, String sku);
