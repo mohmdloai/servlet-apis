@@ -45,12 +45,6 @@ import org.slf4j.LoggerFactory;
 /**
  * Goods receipts ({@code stories/supplier_goods_receipt.md}) — inbound slice 1.
  *
- * <p><b>The receipt posts nothing of its own.</b> Each line writes one {@code +stock inventory_log}
- * row and V101's {@code STOCK/MOVED} template already posts those as DR 1200 / CR 2000; a {@code
- * GOODS_RECEIPT/RECEIVED} template would be the same event counted twice. All this slice changes
- * about the ledger is the amount — a cost somebody actually paid instead of the product's standing
- * figure, or nothing at all.
- *
  * <pre>
  * post(receipt):  number ← claim(org, year)          -- FOR UPDATE, rolls back with the txn
  *                 header + lines ← insert
@@ -62,9 +56,11 @@ import org.slf4j.LoggerFactory;
  *                 status ← VOIDED                    -- cost_price is NOT restored
  * </pre>
  *
- * <p>Last cost rather than a moving average is structural, not a preference: COGS is frozen per
- * sale line at placement, so a weighted average would mean revaluing stock on hand and re-costing
- * open lines — a different machine, with its own reconciliation.
+ * <p>Two decisions worth not re-deriving. <b>The receipt posts no journal entry:</b> V101's {@code
+ * STOCK/MOVED} already posts each line's {@code inventory_log} row (DR 1200 / CR 2000), so a {@code
+ * GOODS_RECEIPT} template would count one event twice. <b>Last cost, not a moving average:</b> COGS
+ * freezes per sale line at placement, so an average would mean revaluing stock on hand and
+ * re-costing open lines — a different machine.
  */
 public class GoodsReceiptService {
   private static final Logger log = LoggerFactory.getLogger(GoodsReceiptService.class);
