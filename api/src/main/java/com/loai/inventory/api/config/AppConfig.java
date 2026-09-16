@@ -24,6 +24,7 @@ import com.loai.inventory.domain.repository.CustomerMagicTokenRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerRepositoryFactory;
 import com.loai.inventory.domain.repository.CustomerWishlistRepositoryFactory;
 import com.loai.inventory.domain.repository.FulfillmentRepositoryFactory;
+import com.loai.inventory.domain.repository.GoodsReceiptRepositoryFactory;
 import com.loai.inventory.domain.repository.ImpersonationEventRepository;
 import com.loai.inventory.domain.repository.InventoryLogRepositoryFactory;
 import com.loai.inventory.domain.repository.InventoryRepositoryFactory;
@@ -61,6 +62,7 @@ import com.loai.inventory.domain.repository.SalesOrderRepositoryFactory;
 import com.loai.inventory.domain.repository.StorefrontBannerRepositoryFactory;
 import com.loai.inventory.domain.repository.StorefrontCrawlRepositoryFactory;
 import com.loai.inventory.domain.repository.StorefrontPageRepositoryFactory;
+import com.loai.inventory.domain.repository.SupplierRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.repository.AppUserMagicTokenRepositoryFactoryImpl;
@@ -75,6 +77,7 @@ import com.loai.inventory.repository.CustomerMagicTokenRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerRepositoryFactoryImpl;
 import com.loai.inventory.repository.CustomerWishlistRepositoryFactoryImpl;
 import com.loai.inventory.repository.FulfillmentRepositoryFactoryImpl;
+import com.loai.inventory.repository.GoodsReceiptRepositoryFactoryImpl;
 import com.loai.inventory.repository.ImpersonationEventRepositoryImpl;
 import com.loai.inventory.repository.InventoryLogRepositoryFactoryImpl;
 import com.loai.inventory.repository.InventoryRepositoryFactoryImpl;
@@ -113,6 +116,7 @@ import com.loai.inventory.repository.SalesOrderRepositoryFactoryImpl;
 import com.loai.inventory.repository.StorefrontBannerRepositoryFactoryImpl;
 import com.loai.inventory.repository.StorefrontCrawlRepositoryFactoryImpl;
 import com.loai.inventory.repository.StorefrontPageRepositoryFactoryImpl;
+import com.loai.inventory.repository.SupplierRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryFactoryImpl;
 import com.loai.inventory.repository.UserRepositoryImpl;
 import com.loai.inventory.service.CashShiftService;
@@ -124,6 +128,7 @@ import com.loai.inventory.service.CreditNoteService;
 import com.loai.inventory.service.CustomerPortalService;
 import com.loai.inventory.service.CustomerService;
 import com.loai.inventory.service.FulfillmentService;
+import com.loai.inventory.service.GoodsReceiptService;
 import com.loai.inventory.service.InventoryService;
 import com.loai.inventory.service.InvoiceAdminService;
 import com.loai.inventory.service.InvoiceService;
@@ -159,6 +164,7 @@ import com.loai.inventory.service.SalesOrderService;
 import com.loai.inventory.service.StorefrontBannerService;
 import com.loai.inventory.service.StorefrontPageService;
 import com.loai.inventory.service.StorefrontService;
+import com.loai.inventory.service.SupplierService;
 import com.loai.inventory.service.WishlistService;
 import com.loai.inventory.service.auth.AccountService;
 import com.loai.inventory.service.auth.AuthMailer;
@@ -280,6 +286,8 @@ public class AppConfig {
   public final StorefrontBannerRepositoryFactory storefrontBannerRepositoryFactory;
   public final StorefrontPageRepositoryFactory storefrontPageRepositoryFactory;
   public final CustomerRepositoryFactory customerRepositoryFactory;
+  public final SupplierRepositoryFactory supplierRepositoryFactory;
+  public final GoodsReceiptRepositoryFactory goodsReceiptRepositoryFactory;
   public final CustomerAddressRepositoryFactory customerAddressRepositoryFactory;
   public final ListingReviewRepositoryFactory listingReviewRepositoryFactory;
   public final CustomerWishlistRepositoryFactory customerWishlistRepositoryFactory;
@@ -389,6 +397,8 @@ public class AppConfig {
   public final StorefrontPageService storefrontPageService;
   public final StorefrontService storefrontService;
   public final CustomerService customerService;
+  public final SupplierService supplierService;
+  public final GoodsReceiptService goodsReceiptService;
   public final InventoryService inventoryService;
   public final ReservationService reservationService;
   public final SalesOrderService salesOrderService;
@@ -474,6 +484,8 @@ public class AppConfig {
     this.storefrontBannerRepositoryFactory = new StorefrontBannerRepositoryFactoryImpl();
     this.storefrontPageRepositoryFactory = new StorefrontPageRepositoryFactoryImpl();
     this.customerRepositoryFactory = new CustomerRepositoryFactoryImpl();
+    this.supplierRepositoryFactory = new SupplierRepositoryFactoryImpl();
+    this.goodsReceiptRepositoryFactory = new GoodsReceiptRepositoryFactoryImpl();
     this.customerAddressRepositoryFactory = new CustomerAddressRepositoryFactoryImpl();
     this.listingReviewRepositoryFactory = new ListingReviewRepositoryFactoryImpl();
     this.customerWishlistRepositoryFactory = new CustomerWishlistRepositoryFactoryImpl();
@@ -737,6 +749,19 @@ public class AppConfig {
     // (public_checkout.md) delegates to SalesOrderService.placeStorefrontOrder.
     this.customerService =
         new CustomerService(dsl, customerRepositoryFactory, salesOrderRepositoryFactory);
+    // stories/supplier_goods_receipt.md: the directory carries no money (the /customers gates);
+    // the receipt is a cost document (MANAGER throughout) and posts no ledger entry of its own.
+    this.supplierService =
+        new SupplierService(dsl, supplierRepositoryFactory, goodsReceiptRepositoryFactory);
+    this.goodsReceiptService =
+        new GoodsReceiptService(
+            dsl,
+            goodsReceiptRepositoryFactory,
+            supplierRepositoryFactory,
+            inventoryRepositoryFactory,
+            inventoryLogRepositoryFactory,
+            productRepositoryFactory,
+            userRepositoryFactory);
     this.inventoryService =
         new InventoryService(
             dsl,
@@ -744,7 +769,8 @@ public class AppConfig {
             inventoryLogRepositoryFactory,
             inventoryReservationRepositoryFactory,
             productRepository,
-            salesOrderRepositoryFactory);
+            salesOrderRepositoryFactory,
+            goodsReceiptRepositoryFactory);
     this.reservationService =
         new ReservationService(
             inventoryRepositoryFactory,

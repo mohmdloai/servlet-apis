@@ -306,7 +306,7 @@ class InventoryReadsHandlerAuthTest {
   void log_allowedForViewer_serviceCalled() throws IOException {
     InventoryService service = Mockito.mock(InventoryService.class);
     when(service.listLog(eq(ORG), eq(PRODUCT), anyInt(), anyInt()))
-        .thenReturn(new LogPage(List.of(), Map.of(), 0));
+        .thenReturn(new LogPage(List.of(), Map.of(), Map.of(), 0));
     Resp resp = new Resp();
 
     inventoryHandler(service)

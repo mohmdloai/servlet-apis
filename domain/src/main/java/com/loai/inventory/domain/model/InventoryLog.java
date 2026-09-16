@@ -13,6 +13,7 @@ public class InventoryLog {
   private int reservedAfter;
   private StockReason reason;
   private UUID orderId;
+  private UUID goodsReceiptId;
   private String actorId;
   private ActorType actorType;
   private UUID impersonatorId;
@@ -90,6 +91,17 @@ public class InventoryLog {
 
   public void setOrderId(UUID orderId) {
     this.orderId = orderId;
+  }
+
+  /**
+   * The delivery this RESTOCK came from (V102), or null for a hand-keyed one — order_id's mirror.
+   */
+  public UUID getGoodsReceiptId() {
+    return goodsReceiptId;
+  }
+
+  public void setGoodsReceiptId(UUID goodsReceiptId) {
+    this.goodsReceiptId = goodsReceiptId;
   }
 
   public String getActorId() {

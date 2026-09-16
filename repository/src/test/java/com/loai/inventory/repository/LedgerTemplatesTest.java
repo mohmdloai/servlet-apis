@@ -63,6 +63,38 @@ class LedgerTemplatesTest {
     }
   }
 
+  /**
+   * V102's sign-aware RESTOCK arm ({@code stories/supplier_goods_receipt.md}). The template takes
+   * {@code abs(stock_delta)}, so a negative RESTOCK row — which a goods-receipt void writes, and
+   * nothing could write before it — must swap the two accounts rather than book an increase:
+   *
+   * <pre>
+   *   delta &gt; 0 → DR 1200 / CR 2000        delta &lt; 0 → DR 2000 / CR 1200
+   * </pre>
+   */
+  @Test
+  void restockArmIsSignAware_andBothDirectionsNameTheSameTwoAccounts() {
+    Template stock =
+        LedgerRepositoryImpl.TEMPLATES.stream()
+            .filter(t -> t.key().equals("STOCK/MOVED"))
+            .findFirst()
+            .orElseThrow();
+    assertTrue(
+        stock
+            .select()
+            .contains(
+                "WHEN 'RESTOCK' THEN CASE WHEN s.stock_delta < 0 THEN '2000'" + " ELSE '1200' END"),
+        "the debit arm is not sign-aware");
+    assertTrue(
+        stock
+            .select()
+            .contains(
+                "WHEN 'RESTOCK' THEN CASE WHEN s.stock_delta < 0 THEN '1200'" + " ELSE '2000' END"),
+        "the credit arm is not sign-aware");
+    assertNotNull(LedgerChart.byCode("1200"));
+    assertNotNull(LedgerChart.byCode("2000"));
+  }
+
   @Test
   void sqlRailMappingAgreesWithTheJavaChart_forEveryProvider() {
     String sql = LedgerRepositoryImpl.CASH_ACCOUNT_BY_PROVIDER;
