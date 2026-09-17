@@ -25,6 +25,7 @@ import com.loai.inventory.domain.repository.UserRepositoryFactory;
 import com.loai.inventory.service.OrgService;
 import com.loai.inventory.service.auth.AuthMailer;
 import com.loai.inventory.service.auth.CredentialTokenService;
+import com.loai.inventory.service.storefront.StorefrontCacheNotifier;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
@@ -56,6 +57,7 @@ public class PlatformOrgService {
   private final CredentialTokenService credentialTokenService;
   private final AuthMailer authMailer;
   private final OrgMilestoneService milestoneService;
+  private final StorefrontCacheNotifier storefrontCache;
 
   public PlatformOrgService(
       DSLContext dsl,
@@ -67,6 +69,30 @@ public class PlatformOrgService {
       CredentialTokenService credentialTokenService,
       AuthMailer authMailer,
       OrgMilestoneService milestoneService) {
+    this(
+        dsl,
+        orgRepoFactory,
+        userRepoFactory,
+        orgHealthRepo,
+        audit,
+        orgStatus,
+        credentialTokenService,
+        authMailer,
+        milestoneService,
+        StorefrontCacheNotifier.NOOP);
+  }
+
+  public PlatformOrgService(
+      DSLContext dsl,
+      OrgRepositoryFactory orgRepoFactory,
+      UserRepositoryFactory userRepoFactory,
+      OrgHealthRepository orgHealthRepo,
+      PlatformAuditService audit,
+      OrgStatusService orgStatus,
+      CredentialTokenService credentialTokenService,
+      AuthMailer authMailer,
+      OrgMilestoneService milestoneService,
+      StorefrontCacheNotifier storefrontCache) {
     this.dsl = dsl;
     this.orgRepoFactory = orgRepoFactory;
     this.userRepoFactory = userRepoFactory;
@@ -76,6 +102,7 @@ public class PlatformOrgService {
     this.credentialTokenService = credentialTokenService;
     this.authMailer = authMailer;
     this.milestoneService = milestoneService;
+    this.storefrontCache = storefrontCache;
   }
 
   /** One org plus its distinct member count, for the list view. */
@@ -305,6 +332,31 @@ public class PlatformOrgService {
       OrgService.StorefrontBranding branding,
       OrgService.SeoMetadata seo,
       OrgService.StoreConfig storeConfig) {
+    Org saved =
+        updateOrgInTx(
+            actor,
+            env,
+            orgId,
+            name,
+            refundApprovalThreshold,
+            orderTtlMinutes,
+            branding,
+            seo,
+            storeConfig);
+    storefrontCache.profileChanged(saved.getSlug()); // committed
+    return saved;
+  }
+
+  private Org updateOrgInTx(
+      SecurityContext actor,
+      Environment env,
+      UUID orgId,
+      String name,
+      BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes,
+      OrgService.StorefrontBranding branding,
+      OrgService.SeoMetadata seo,
+      OrgService.StoreConfig storeConfig) {
     OrgService.validateName(name);
     OrgService.validatePolicy(refundApprovalThreshold, orderTtlMinutes);
     OrgService.validateBranding(branding);
@@ -376,6 +428,7 @@ public class PlatformOrgService {
   public Org suspend(SecurityContext actor, Environment env, UUID orgId, String reason) {
     Org updated = toggle(actor, env, orgId, true, reason);
     orgStatus.invalidate(orgId); // next hot-path read load-through's the committed suspension
+    storefrontCache.profileChanged(updated.getSlug()); // public profile: 200 → 404
     return updated;
   }
 
@@ -383,6 +436,7 @@ public class PlatformOrgService {
   public Org reactivate(SecurityContext actor, Environment env, UUID orgId) {
     Org updated = toggle(actor, env, orgId, false, null);
     orgStatus.invalidate(orgId);
+    storefrontCache.profileChanged(updated.getSlug()); // public profile: 404 → 200
     return updated;
   }
 

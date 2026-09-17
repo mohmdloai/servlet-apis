@@ -6,6 +6,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.domain.model.OrgPaymobConfig;
 import com.loai.inventory.domain.repository.OrgPaymobConfigRepositoryFactory;
 import com.loai.inventory.domain.repository.PaymentIntentRepositoryFactory;
+import com.loai.inventory.service.storefront.StorefrontCacheNotifier;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -43,16 +44,27 @@ public class OrgPaymobService {
   private final OrgPaymobConfigRepositoryFactory repoFactory;
   private final PaymentIntentRepositoryFactory intentRepoFactory;
   private final SecretBox secretBox;
+  private final StorefrontCacheNotifier storefrontCache;
 
   public OrgPaymobService(
       DSLContext rootDsl,
       OrgPaymobConfigRepositoryFactory repoFactory,
       PaymentIntentRepositoryFactory intentRepoFactory,
       SecretBox secretBox) {
+    this(rootDsl, repoFactory, intentRepoFactory, secretBox, StorefrontCacheNotifier.NOOP);
+  }
+
+  public OrgPaymobService(
+      DSLContext rootDsl,
+      OrgPaymobConfigRepositoryFactory repoFactory,
+      PaymentIntentRepositoryFactory intentRepoFactory,
+      SecretBox secretBox,
+      StorefrontCacheNotifier storefrontCache) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.intentRepoFactory = intentRepoFactory;
     this.secretBox = secretBox;
+    this.storefrontCache = storefrontCache;
   }
 
   /** What a settings screen may see: everything except the two secrets. */
@@ -165,6 +177,7 @@ public class OrgPaymobService {
         saved.config().cardIntegrationId(),
         saved.config().region(),
         saved.retiredIntents());
+    storefrontCache.profileChanged(orgId); // committed: payment_methods gained `card`
     return ConnectionStatus.of(saved.config());
   }
 
@@ -194,6 +207,7 @@ public class OrgPaymobService {
         orgId,
         removed.hadConfig(),
         removed.retiredIntents());
+    storefrontCache.profileChanged(orgId); // committed: payment_methods lost `card`
   }
 
   /** The config a checkout/webhook needs, or empty — used by slice 2, never by a handler. */

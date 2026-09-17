@@ -107,6 +107,11 @@ crontab -e     # add:  15 3 * * *  /opt/ststore/backup.sh >> /opt/ststore/backup
 - **Deploy:** merge to `master`. Manual re-run from the Actions tab (`workflow_dispatch`).
 - **Roll back a release:** set `BACKEND_IMAGE=…:<good-sha>` in `.env`, then `docker compose -f docker-compose.prod.yml up -d backend`.
 - **Migrations** run automatically on backend startup (Flyway, schema `inventorydb`).
+- **Storefront revalidate hook:** set `STOREFRONT_REVALIDATE_SECRET` (`openssl rand -hex 32`) in
+  `.env`, then `docker compose -f docker-compose.prod.yml up -d backend storefront` — compose hands
+  the one value to both. The backend then POSTs `http://storefront:3000/api/revalidate` after every
+  committed store-profile change (Paymob/WhatsApp connect, store settings, suspend), so it shows on
+  the storefront at once instead of after its 300 s cache. Unset = off; boot log says which.
 
 ## Local image smoke test (optional)
 

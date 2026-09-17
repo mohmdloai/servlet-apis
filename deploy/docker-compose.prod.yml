@@ -128,6 +128,10 @@ services:
       # Paymob card (V98/V99). Unset → connect refuses (409) and no merchant can take card; nothing
       # else changes. Never rotate casually: every stored merchant credential is sealed under it.
       PAYMOB_CREDENTIAL_KEY: ${PAYMOB_CREDENTIAL_KEY:-}
+      # Storefront revalidate hook (stories/storefront_revalidate_hook.md). Secret unset → the hook is
+      # off on both sides and a profile change shows when the storefront's 300 s TTL runs out.
+      STOREFRONT_REVALIDATE_URL: http://storefront:3000/api/revalidate
+      STOREFRONT_REVALIDATE_SECRET: ${STOREFRONT_REVALIDATE_SECRET:-}
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080' || exit 1"]
       interval: 15s
@@ -158,6 +162,8 @@ services:
       NODE_ENV: production
       PORT: "3000"
       BACKEND_API_URL: http://backend:8080
+      # The same value the backend sends as its bearer; unset → POST /api/revalidate answers 503.
+      STOREFRONT_REVALIDATE_SECRET: ${STOREFRONT_REVALIDATE_SECRET:-}
       # NEXT_PUBLIC_STOREFRONT_ORIGIN is baked at build time (frontst CI), not read here.
 
   # The marketing site (frontst story 54) — the platform's own front door at the apex yabta3.com.

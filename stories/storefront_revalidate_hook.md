@@ -132,3 +132,20 @@ rollback / validation failure ──▶ nothing fires
 storefront service (compose passes one `.env` variable to both). The URL is compose-wired to
 `http://storefront:3000/api/revalidate` on the internal network. Note `store.<domain>` proxies every
 path to the storefront, so the route is publicly reachable — the bearer secret is its only guard.
+
+---
+
+## Built (2026-09-17, branch `199_feat/storefront-revalidate-hook`, no migration)
+
+- `service/storefront/`: `StorefrontRevalidator` (port + `Scope` + `NOOP`),
+  `JdkStorefrontRevalidator` (`sendAsync`, 2 s connect + 2 s request, WARN on anything but 2xx),
+  `StorefrontRevalidatorFactory`, `StorefrontCacheNotifier`.
+- Wired after commit in `OrgPaymobService.connect/disconnect`, `OrgWhatsAppService.connect/
+  setEnabled/disconnect`, `OrgService.update/delete`, `PlatformOrgService.updateOrg/suspend/
+  reactivate`. The two `update` bodies are untouched — each public method became a thin wrapper over
+  a private `…InTx`, so the diff is the hook and nothing else.
+- `AppConfig` builds one notifier from `STOREFRONT_REVALIDATE_URL` + `STOREFRONT_REVALIDATE_SECRET`.
+- Tests: 11 unit (`service`), 6 IT (`StorefrontRevalidateHookIT`); the ITs of every wired service
+  re-run green on the old constructors (the no-op path).
+- The storefront side is frontend story 165; until it ships the hook answers 404 → one WARN per
+  change, nothing else.
