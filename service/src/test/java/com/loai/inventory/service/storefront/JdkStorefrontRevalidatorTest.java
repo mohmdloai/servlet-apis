@@ -32,7 +32,13 @@ class JdkStorefrontRevalidatorTest {
     if (server != null) server.stop(0);
   }
 
-  record Seen(String method, String path, String authorization, String contentType, String body) {}
+  record Seen(
+      String method,
+      String path,
+      String authorization,
+      String contentType,
+      String upgrade,
+      String body) {}
 
   private String stub(int status, AtomicReference<Seen> seen) throws IOException {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -46,6 +52,7 @@ class JdkStorefrontRevalidatorTest {
                   ex.getRequestURI().getPath(),
                   ex.getRequestHeaders().getFirst("Authorization"),
                   ex.getRequestHeaders().getFirst("Content-Type"),
+                  ex.getRequestHeaders().getFirst("Upgrade"),
                   body));
           ex.sendResponseHeaders(status, -1);
           ex.close();
@@ -69,6 +76,8 @@ class JdkStorefrontRevalidatorTest {
     assertEquals("Bearer s3cret", s.authorization());
     assertEquals("application/json", s.contentType());
     assertEquals("{\"org_slug\":\"mart-cairo\",\"scopes\":[\"profile\"]}", s.body());
+    // Plain HTTP/1.1 — an `Upgrade: h2c` offer makes the storefront's Node server drop the call.
+    assertNull(s.upgrade());
   }
 
   @Test

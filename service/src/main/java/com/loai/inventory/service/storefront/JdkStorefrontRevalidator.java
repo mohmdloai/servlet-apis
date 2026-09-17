@@ -48,7 +48,14 @@ public final class JdkStorefrontRevalidator implements StorefrontRevalidator {
     this.url = URI.create(url);
     this.secret = secret;
     this.timeout = timeout;
-    this.http = HttpClient.newBuilder().connectTimeout(timeout).build();
+    // HTTP/1.1, pinned: the JDK default (HTTP/2) sends `Upgrade: h2c` on cleartext, and the
+    // storefront's Node server drops that connection ("header parser received no bytes") — found by
+    // the live check against the built storefront; the JDK test server tolerates the upgrade.
+    this.http =
+        HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(timeout)
+            .build();
   }
 
   @Override

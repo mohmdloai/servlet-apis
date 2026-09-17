@@ -149,3 +149,10 @@ path to the storefront, so the route is publicly reachable — the bearer secret
   re-run green on the old constructors (the no-op path).
 - The storefront side is frontend story 165; until it ships the hook answers 404 → one WARN per
   change, nothing else.
+- **Found by the live check, fixed on this branch:** the JDK client's default (HTTP/2) offers
+  `Upgrade: h2c` on cleartext and the storefront's Node server drops that connection —
+  `IOException: HTTP/1.1 header parser received no bytes`, every call, while all 11 unit tests
+  passed (the JDK test server tolerates the offer). The client is pinned to `HTTP_1_1` and the
+  contract test asserts no `Upgrade` header. Verified end to end against the production-built
+  storefront on perfdb: `PUT /api/orgs/{id}` (name) → the cached store page shows it in **475 ms**;
+  before the pin the same write left the page stale past 20 s with the backend already changed.
