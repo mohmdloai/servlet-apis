@@ -27,8 +27,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.time.DayOfWeek;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -231,8 +233,11 @@ class PlatformGrowthIT {
   void pathFilterSeparatesTheSeries() {
     UUID selfServe = createSelfServeOrg("indie", daysAgo(50));
     UUID provisioned = createProvisionedOrg("enterprise", daysAgo(50));
-    stamp(selfServe, "FIRST_ORDER", utc(2026, 7, 8));
-    stamp(provisioned, "FIRST_ORDER", utc(2026, 7, 9)); // same UTC week, different day
+    // Wed + Thu of the ISO week 3 weeks back: same UTC week, always inside window=90d.
+    OffsetDateTime monday =
+        daysAgo(21).with(DayOfWeek.MONDAY).withHour(12).truncatedTo(ChronoUnit.HOURS);
+    stamp(selfServe, "FIRST_ORDER", monday.plusDays(2));
+    stamp(provisioned, "FIRST_ORDER", monday.plusDays(3)); // same UTC week, different day
 
     JsonNode self = seriesOf(growth("?window=90d&bucket=week&path=self_serve"), "FIRST_ORDER");
     JsonNode prov = seriesOf(growth("?window=90d&bucket=week&path=provisioned"), "FIRST_ORDER");
