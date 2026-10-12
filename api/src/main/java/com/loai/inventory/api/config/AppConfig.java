@@ -198,6 +198,8 @@ import com.loai.inventory.service.platform.UserAdminService;
 import com.loai.inventory.service.push.WebPushConfig;
 import com.loai.inventory.service.push.WebPushSender;
 import com.loai.inventory.service.push.WebPushSenderFactory;
+import com.loai.inventory.service.storefront.StorefrontCacheNotifier;
+import com.loai.inventory.service.storefront.StorefrontRevalidatorFactory;
 import com.loai.inventory.service.whatsapp.WhatsAppSender;
 import com.loai.inventory.service.whatsapp.WhatsAppSenderFactory;
 import com.zaxxer.hikari.HikariDataSource;
@@ -583,8 +585,18 @@ public class AppConfig {
             emailGate,
             orgStatusService,
             orgMilestoneService);
+    // stories/storefront_revalidate_hook.md: either var unset → NOOP, byte-identical to before.
+    StorefrontCacheNotifier storefrontCache =
+        new StorefrontCacheNotifier(
+            dsl,
+            orgRepositoryFactory,
+            StorefrontRevalidatorFactory.build(
+                objectMapper,
+                System.getenv("STOREFRONT_REVALIDATE_URL"),
+                System.getenv("STOREFRONT_REVALIDATE_SECRET")));
     this.orgService =
-        new OrgService(dsl, orgRepositoryFactory, userRepositoryFactory, objectStorage);
+        new OrgService(
+            dsl, orgRepositoryFactory, userRepositoryFactory, objectStorage, storefrontCache);
     this.orgHealthService = new OrgHealthService(orgHealthRepository);
     this.reportService = new ReportService(reportRepository);
     // stories/general_ledger.md: derived-then-posted; catches up on read, rebuilt on demand.
@@ -602,7 +614,8 @@ public class AppConfig {
             orgStatusService,
             credentialTokenService,
             authMailer,
-            orgMilestoneService);
+            orgMilestoneService,
+            storefrontCache);
     this.platformOrgTimelineService =
         new PlatformOrgTimelineService(dsl, orgTimelineRepositoryFactory, orgRepositoryFactory);
     this.userAdminService =
@@ -643,7 +656,8 @@ public class AppConfig {
     WhatsAppSender whatsAppSender = WhatsAppSenderFactory.build(whatsAppSecretBox);
     this.orgWhatsAppConfigRepositoryFactory = orgWhatsAppConfigRepositoryFactory;
     this.orgWhatsAppService =
-        new OrgWhatsAppService(dsl, orgWhatsAppConfigRepositoryFactory, whatsAppSecretBox);
+        new OrgWhatsAppService(
+            dsl, orgWhatsAppConfigRepositoryFactory, whatsAppSecretBox, storefrontCache);
     // Per-merchant Paymob card (epic slice 1, stories/paymob_connect.md). Own key: a WhatsApp
     // token and a card secret key are different blast radii and must not share a rotation.
     OrgPaymobConfigRepositoryFactory orgPaymobConfigRepositoryFactory =
@@ -654,7 +668,11 @@ public class AppConfig {
     this.paymentIntentRepositoryFactory = new PaymentIntentRepositoryFactoryImpl();
     this.orgPaymobService =
         new OrgPaymobService(
-            dsl, orgPaymobConfigRepositoryFactory, paymentIntentRepositoryFactory, paymobSecretBox);
+            dsl,
+            orgPaymobConfigRepositoryFactory,
+            paymentIntentRepositoryFactory,
+            paymobSecretBox,
+            storefrontCache);
     // Web Push (stories/web_push_channel.md). The SecretBox rule: both keys unset → disabled (the
     // logging sender, and GET /api/me/push/config says enabled:false); a key present but malformed
     // → startup failure. The push leg draws on the email attempt budget unless told otherwise.

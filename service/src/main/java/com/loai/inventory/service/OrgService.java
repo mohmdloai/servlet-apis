@@ -11,6 +11,7 @@ import com.loai.inventory.domain.repository.OrgRepository;
 import com.loai.inventory.domain.repository.OrgRepositoryFactory;
 import com.loai.inventory.domain.repository.UserRepository;
 import com.loai.inventory.domain.repository.UserRepositoryFactory;
+import com.loai.inventory.service.storefront.StorefrontCacheNotifier;
 import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -27,16 +28,27 @@ public class OrgService {
   private final OrgRepositoryFactory orgRepoFactory;
   private final UserRepositoryFactory userRepoFactory;
   private final ObjectStorage storage;
+  private final StorefrontCacheNotifier storefrontCache;
 
   public OrgService(
       DSLContext rootDsl,
       OrgRepositoryFactory orgRepoFactory,
       UserRepositoryFactory userRepoFactory,
       ObjectStorage storage) {
+    this(rootDsl, orgRepoFactory, userRepoFactory, storage, StorefrontCacheNotifier.NOOP);
+  }
+
+  public OrgService(
+      DSLContext rootDsl,
+      OrgRepositoryFactory orgRepoFactory,
+      UserRepositoryFactory userRepoFactory,
+      ObjectStorage storage,
+      StorefrontCacheNotifier storefrontCache) {
     this.rootDsl = rootDsl;
     this.orgRepoFactory = orgRepoFactory;
     this.userRepoFactory = userRepoFactory;
     this.storage = storage;
+    this.storefrontCache = storefrontCache;
   }
 
   /** A presigned logo upload: a PUT URL + the object key to attach afterwards. */
@@ -297,6 +309,31 @@ public class OrgService {
       StorefrontBranding branding,
       SeoMetadata seo,
       StoreConfig storeConfig) {
+    Org saved =
+        updateInTx(
+            id,
+            name,
+            refundApprovalThreshold,
+            orderTtlMinutes,
+            profile,
+            branding,
+            seo,
+            storeConfig);
+    // Committed. Every update fires: a wasted revalidation is one re-fetch, a missed one is the
+    // bug.
+    storefrontCache.profileChanged(saved.getSlug());
+    return saved;
+  }
+
+  private Org updateInTx(
+      UUID id,
+      String name,
+      java.math.BigDecimal refundApprovalThreshold,
+      Integer orderTtlMinutes,
+      BillingProfile profile,
+      StorefrontBranding branding,
+      SeoMetadata seo,
+      StoreConfig storeConfig) {
     validateName(name);
     validatePolicy(refundApprovalThreshold, orderTtlMinutes);
     validateBillingProfile(profile);
@@ -495,6 +532,8 @@ public class OrgService {
   }
 
   public void delete(UUID id) {
+    // The slug dies with the row, so read it first; the public profile goes 200 → 404.
+    String slug = orgRepoFactory.create(rootDsl).findById(id).map(Org::getSlug).orElse(null);
     rootDsl.transaction(
         cfg -> {
           DSLContext txDsl = DSL.using(cfg);
@@ -502,6 +541,7 @@ public class OrgService {
           orgRepo.deleteById(id);
           log.info("Deleted org id={}", id);
         });
+    storefrontCache.profileChanged(slug);
   }
 
   /**

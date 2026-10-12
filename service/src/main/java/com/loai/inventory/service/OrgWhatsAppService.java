@@ -7,6 +7,7 @@ import com.loai.inventory.common.exception.ValidationException;
 import com.loai.inventory.common.text.Phone;
 import com.loai.inventory.domain.model.OrgWhatsAppConfig;
 import com.loai.inventory.domain.repository.OrgWhatsAppConfigRepositoryFactory;
+import com.loai.inventory.service.storefront.StorefrontCacheNotifier;
 import java.util.Optional;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -38,12 +39,22 @@ public class OrgWhatsAppService {
   private final DSLContext rootDsl;
   private final OrgWhatsAppConfigRepositoryFactory repoFactory;
   private final SecretBox secretBox;
+  private final StorefrontCacheNotifier storefrontCache;
 
   public OrgWhatsAppService(
       DSLContext rootDsl, OrgWhatsAppConfigRepositoryFactory repoFactory, SecretBox secretBox) {
+    this(rootDsl, repoFactory, secretBox, StorefrontCacheNotifier.NOOP);
+  }
+
+  public OrgWhatsAppService(
+      DSLContext rootDsl,
+      OrgWhatsAppConfigRepositoryFactory repoFactory,
+      SecretBox secretBox,
+      StorefrontCacheNotifier storefrontCache) {
     this.rootDsl = rootDsl;
     this.repoFactory = repoFactory;
     this.secretBox = secretBox;
+    this.storefrontCache = storefrontCache;
   }
 
   /** What a settings screen may see: everything except the credential. */
@@ -110,6 +121,7 @@ public class OrgWhatsAppService {
         orgId,
         saved.wabaId(),
         saved.phoneNumberId());
+    storefrontCache.profileChanged(orgId); // committed: whatsapp_enabled
     return ConnectionStatus.of(saved);
   }
 
@@ -117,10 +129,13 @@ public class OrgWhatsAppService {
   public ConnectionStatus setEnabled(UUID orgId, boolean enabled) {
     OrgWhatsAppConfig.Status target =
         enabled ? OrgWhatsAppConfig.Status.ACTIVE : OrgWhatsAppConfig.Status.DISABLED;
-    return rootDsl
-        .transactionResult(cfg -> repoFactory.create(DSL.using(cfg)).setStatus(orgId, target))
-        .map(ConnectionStatus::of)
-        .orElseThrow(() -> new NotFoundException("WhatsApp configuration", orgId));
+    ConnectionStatus status =
+        rootDsl
+            .transactionResult(cfg -> repoFactory.create(DSL.using(cfg)).setStatus(orgId, target))
+            .map(ConnectionStatus::of)
+            .orElseThrow(() -> new NotFoundException("WhatsApp configuration", orgId));
+    storefrontCache.profileChanged(orgId); // committed: whatsapp_enabled
+    return status;
   }
 
   /**
@@ -132,6 +147,7 @@ public class OrgWhatsAppService {
     boolean removed =
         rootDsl.transactionResult(cfg -> repoFactory.create(DSL.using(cfg)).delete(orgId));
     log.info("WhatsApp disconnected for org {} (had a configuration: {})", orgId, removed);
+    storefrontCache.profileChanged(orgId); // committed: whatsapp_enabled
   }
 
   /**
